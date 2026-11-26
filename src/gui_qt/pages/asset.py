@@ -2430,7 +2430,7 @@ class AssetPage(BasePage):
             self._backfill_bili_covers()
 
     def _refresh_collected(self, keep_page=False, show_loading=True, refresh_disk=True):
-        """先用数据库清单显示，再后台核对；显式刷新/下载/删除直接核对磁盘。"""
+        """先用数据库清单显示，再后台核对；显式刷新时核对磁盘。"""
         scope = self._collected_scope()
         # 筛选只使用当前完整清单，后台核对结束也会读取最新筛选条件。
         if not refresh_disk and scope == self._loaded_view_scope:
@@ -2595,7 +2595,7 @@ class AssetPage(BasePage):
             if any(os.path.exists(stem + e) for e in (".jpg", ".jpeg", ".png", ".webp")):
                 continue
             cext = ".png" if cover.lower().split("?")[0].endswith(".png") else ".jpg"
-            todo.append((cover, stem + cext))
+            todo.append((self._dl_key(it), cover, stem + cext))
         if not todo:
             return
         self._cover_backfill_running = True
@@ -2605,19 +2605,23 @@ class AssetPage(BasePage):
             hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                   "AppleWebKit/537.36",
                     "Referer": "https://www.bilibili.com/"}
-            ok = 0
-            for cover, cpath in todo:
+            completed = []
+            for key, cover, cpath in todo:
                 try:
                     _path, success = _download_one(cover, cpath, hdrs)
-                    ok += 1 if success else 0
+                    if success:
+                        completed.append((key, _path or cpath))
                 except Exception:
                     pass
-            return ok
+            return completed
 
-        def done(ok, err):
+        def done(completed, err):
             self._cover_backfill_running = False
-            if ok:
-                QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
+            by_key = {self._dl_key(it): it for it in self._disk_items}
+            for key, path in completed or []:
+                target = by_key.get(key)
+                if target is not None:
+                    self._refresh_rows_for([target], new_paths=[(path, "封面")])
 
         run_bg(work, done)
 
@@ -3695,7 +3699,7 @@ class AssetPage(BasePage):
 
         条目 dict 已就地补全 media_files；按当前筛选判断它是否仍在列表：
         仍在 → 原位换行；被筛掉（如「未下载」下刚下完）→ 移出并保滚动位置重排。
-        返回 False 表示条目不在当前数据源，交由调用方整页刷新兜底。
+        返回 False 表示条目不在当前数据源，不改动当前页面。
         """
         if getattr(self, "_view_mode", "entries") != "entries":
             return False
@@ -3733,6 +3737,7 @@ class AssetPage(BasePage):
         lay = self.collected_layout
         total = len(self._collected_all_items)
         if not total:
+            self._collected_page = 1
             self._render_collected_batch()
             self.collected_scroll.verticalScrollBar().setValue(0)
             return

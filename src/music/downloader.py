@@ -102,7 +102,7 @@ def _audio_details(content: bytes, ext: str) -> tuple[str, str]:
         audio = mutagen.File(io.BytesIO(content))
         if audio is not None:
             kinds = {"FLAC": ".flac", "MonkeysAudio": ".ape", "MP3": ".mp3",
-                     "MP4": ".m4a", "ASF": ".wma", "WAVE": ".wav"}
+                     "MP4": ".m4a", "AAC": ".aac", "ASF": ".wma", "WAVE": ".wav"}
             ext = kinds.get(type(audio).__name__, ext)
             if ext in (".flac", ".ape"):
                 return ext, ext[1:].upper()
@@ -155,8 +155,11 @@ def _download_cover(cover_url: str, referer: str, audio_path: str) -> str:
 
 def _download_to(url: str, referer: str, base_name: str, ext: str, out_dir: str,
                  expected_seconds: int = 0, requested_quality: str = "highest") -> DownloadResult:
-    with get_client(timeout=60) as client:
-        resp = client.get(url, headers=make_headers(referer=referer))
+    try:
+        with get_client(timeout=60) as client:
+            resp = client.get(url, headers=make_headers(referer=referer))
+    except Exception:
+        return DownloadResult(error_message="音频下载失败：网络连接不可用，请稍后重试")
     if resp.status_code != 200 or len(resp.content) < 1024:
         return DownloadResult(error_message=f"直链获取失败(HTTP {resp.status_code})")
     if resp.content.lstrip()[:1] in (b"<", b"{", b"["):
@@ -197,10 +200,13 @@ def _url_kuwo_web(song: SongInfo) -> _UrlResult:
             params={"mid": song.song_id, "type": "music", "httpsStatus": "1",
                     "reqId": str(uuid.uuid4()), "plat": "web_www", "from": ""},
             headers=headers)
-    data = safe_json(resp.text) or {}
+    data = safe_json(resp.text)
+    if not isinstance(data, dict) or not isinstance(data.get("data"), dict):
+        return _UrlResult(error="酷我下载接口可能已变化，请稍后重试")
     if data.get("code") != 200:
         return _UrlResult(error="")
-    url = (data.get("data") or {}).get("url") or ""
+    from .kuwo_download import _safe_audio_url
+    url = _safe_audio_url(data["data"].get("url"))
     if not url:
         return _UrlResult(error="")
     return _UrlResult(url=url, ext=".mp3")
@@ -223,7 +229,9 @@ def _url_kuwo(song: SongInfo, quality: str) -> _UrlResult:
             "https://antiserver.kuwo.cn/anti.s",
             params={"type": "convert_url3", "rid": song.song_id, "format": "wma"},
             headers=make_headers(referer="https://kuwo.cn/"))
-    data = safe_json(resp.text) or {}
+    data = safe_json(resp.text)
+    if not isinstance(data, dict):
+        return _UrlResult(error="酷我下载接口可能已变化，请稍后重试")
     url = data.get("url") or ""
     if not url:
         return _UrlResult(error="酷我拒绝该歌曲的直链请求（VIP/版权限制）")
@@ -234,17 +242,23 @@ def _url_fivesing(song: SongInfo, quality: str) -> _UrlResult:
     song_id = song.song_id
     if "/" not in song_id:
         # 搜索结果带的是酷狗 hash（共享数据库）→ 走酷狗通道兜底
-        got = _url_kugou(song, quality)
+        quality = normalize_quality(quality)
+        got = _url_kugou(song, "320k" if quality == "192k" else quality)
         got.referer = _REFERERS["kugou"]
+        got.via_platform = "酷狗"
         return got
     mode, num = song_id.split("/", 1)
+    if mode not in {"yc", "fc", "bz"} or not num.isdigit():
+        return _UrlResult(error="5sing 歌曲标识无效，请重新解析歌曲")
     with get_client() as client:
         resp = client.get(
             "http://mobileapi.5sing.kugou.com/song/getSongUrl",
             params={"songtype": mode, "songid": num, "version": "6.6.72"},
             headers=make_headers(referer="https://5sing.kugou.com/"))
-    data = safe_json(resp.text) or {}
-    payload = data.get("data") or {}
+    data = safe_json(resp.text)
+    if not isinstance(data, dict) or not isinstance(data.get("data"), dict):
+        return _UrlResult(error="5sing 下载接口可能已变化，请稍后重试")
+    payload = data["data"]
     quality = normalize_quality(quality)
     levels = {"320k": ("sq", "320kbps"), "192k": ("hq", "192kbps"),
               "128k": ("lq", "128kbps")}
@@ -253,7 +267,8 @@ def _url_fivesing(song: SongInfo, quality: str) -> _UrlResult:
         if candidate is None:
             continue
         prefix, tag = candidate
-        url = payload.get(f"{prefix}url") or ""
+        from .kugou_download import safe_audio_url
+        url = safe_audio_url(payload.get(f"{prefix}url"))
         if url:
             ext = str(payload.get(f"{prefix}ext") or "mp3").lower().lstrip(".")
             return _UrlResult(url=url, ext=f".{ext}", quality=tag)
@@ -273,10 +288,8 @@ def _url_kugou_lite(song: SongInfo, quality: str) -> _UrlResult:
             song.song_id, quality, album_id=song.album_id,
             album_audio_id=song.extra.get("album_audio_id") or song.extra.get("AlbumAudioID") or 0,
             metadata=song.extra)
-    except RuntimeError as e:
-        return _UrlResult(error=f"酷狗概念版：{e}")
-    except Exception as e:
-        return _UrlResult(error=f"酷狗概念版请求异常：{e}")
+    except Exception:
+        return _UrlResult(error="酷狗概念版下载地址请求失败，请稍后重试")
 
 
 _RESOLVERS = {
@@ -326,6 +339,7 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
     result = _download_to(got.url, referer, base, got.ext, out_dir, song.duration, quality)
     result.quality = result.quality or got.quality
     result.is_preview = result.is_preview or got.is_preview
+    result.via_platform = getattr(got, "via_platform", "")
     if result.success and song.cover_url:
         _download_cover(song.cover_url, referer, result.file_path)
     return result

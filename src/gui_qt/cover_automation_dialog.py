@@ -154,6 +154,7 @@ class CoverAutomationDialog(QDialog):
         self.progress.hide()
         root.addWidget(self.progress)
         self.buttons = QDialogButtonBox(self)
+        self.buttons.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.close_button = self.buttons.addButton("关闭", QDialogButtonBox.ButtonRole.RejectRole)
         self.cancel_button = self.buttons.addButton("停止", QDialogButtonBox.ButtonRole.ActionRole)
         self.cancel_button.clicked.connect(self._request_cancel)
@@ -417,7 +418,8 @@ class CoverAutomationDialog(QDialog):
         confirm.setDefaultButton(cancel)
         confirm.setEscapeButton(cancel)
         confirm.exec()
-        if confirm.clickedButton() is not go:
+        clicked = confirm.clickedButton()
+        if clicked is None or confirm.buttonRole(clicked) != QMessageBox.ButtonRole.AcceptRole:
             return
         self._cancel.clear()
         self._busy = "generate"

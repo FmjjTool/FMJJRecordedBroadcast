@@ -280,6 +280,7 @@ class KuGouLiteClient:
             return KugouUrlDetails(error="酷狗概念版歌曲标识无效")
         hashes = quality_hashes(h, metadata or {})
         levels = ["flac", "320k", "128k"] if quality == "highest" else [quality]
+        preview = None
         for level in levels:
             file_hash = hashes.get(level, h).lower()
             extra = {
@@ -297,13 +298,18 @@ class KuGouLiteClient:
             if not isinstance(data, dict):
                 return KugouUrlDetails(error="酷狗概念版下载接口可能已变化")
             if data.get("status") != 1:
-                if data.get("error_code") in (152, 20020, 20021, 30004):
+                if data.get("error_code") == 152:
+                    return KugouUrlDetails(error="酷狗概念版当前登录不可用")
+                if data.get("error_code") in (20020, 20021, 30004) and quality != "highest":
                     return KugouUrlDetails(error="酷狗概念版当前账号没有该歌曲音质权限")
                 continue
             result = stream_details(data)
             if result.url and (level != "flac" or result.ext in {".flac", ".ape"}):
+                if quality == "highest" and result.is_preview:
+                    preview = preview or result
+                    continue
                 return result
-        return KugouUrlDetails(error="酷狗概念版未提供所选音质，请选择最高可用或其他档位")
+        return preview or KugouUrlDetails(error="酷狗概念版未提供所选音质，请选择最高可用或其他档位")
 
 
 # ---------------------------------------------------------------------------

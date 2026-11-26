@@ -374,40 +374,58 @@ class AssetQueryService:
                 "scanned_at": int(cached["scanned_at"]), "stale": bool(stale)}
 
     def _entry_rows(self) -> list[dict]:
-        root = get_export_dir() / EXPORT_CATEGORIES["video_data"]
-        try:
-            stamp = int(root.stat().st_mtime)
-        except OSError:
-            stamp = 0
-        cached = self._entries_cache
-        if cached and cached[0] == str(root) and cached[1] == stamp:
-            self._entries_truncated = cached[3]
-            return cached[2]
+        with self._entries_lock:
+            export_root = get_export_dir().resolve()
+            root = export_root / EXPORT_CATEGORIES["video_data"]
+            stamp = _entry_stamp(root)
+            cached = self._entries_cache
+            now = time.monotonic()
+            if (cached and cached[0] == str(root) and cached[1] == stamp
+                    and now - self._entries_loaded_at < _ENTRY_CACHE_TTL):
+                self._entries_truncated = cached[3]
+                return cached[2]
 
-        rows: list[dict] = []
-        self._entries_truncated = False
-        if asset_index.db_path().exists():
-            view = asset_index.fetch_view(str(root), "entries")
-            if view and isinstance(view.get("items"), list):
-                rows = [self._from_cached(root, item)
-                        for item in view["items"]]
-        if not rows:
-            rows = self._scan_json(root)
-        rows = [row for row in rows if row]
-        rows.sort(key=lambda item: item.get("publish_time") or "", reverse=True)
-        self._entries_cache = (str(root), stamp, rows, self._entries_truncated)
-        return rows
+            rows, view = [], None
+            self._entries_truncated = False
+            if asset_index.db_path().exists():
+                view = asset_index.fetch_view(
+                    str(export_root), f"entries:{asset_index.VER}")
+                if view is None:
+                    view = asset_index.fetch_view(str(root), "entries")
+            view_token = ((str(export_root), view.get("updated"))
+                          if view else None)
+            use_view = (view is not None and isinstance(view.get("items"), list)
+                        and (cached is None or view_token != self._entries_view_updated))
+            self._entry_media = {}
+            if use_view:
+                for item in view["items"]:
+                    row = self._from_cached(root, item)
+                    if row is not None:
+                        rows.append(row)
+                        self._entry_media[row["path"]] = [
+                            dict(media) for media in item.get("media_files") or []
+                            if isinstance(media, dict)]
+                self._entries_view_updated = view_token
+            else:
+                rows = self._scan_json(root)
+            rows.sort(key=lambda item: item.get("publish_time") or "", reverse=True)
+            self._entries_cache = (str(root), stamp, rows, self._entries_truncated)
+            self._entries_loaded_at = now
+            self._entries_revision += 1
+            return rows
 
     @staticmethod
     def _from_cached(root: Path, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
         file_path = str(item.get("file_path") or "")
-        rel = ""
         try:
-            rel = str(Path(file_path).relative_to(root)).replace("\\", "/")
-        except ValueError:
-            rel = os.path.basename(file_path)
+            target = Path(file_path).resolve()
+            target.relative_to(root.resolve())
+            rel = target.relative_to(root.resolve()).as_posix()
+            _entry_target(root, rel)
+        except (ValueError, OSError):
+            return None
         return {
             "title": item.get("title") or "-",
             "author": item.get("author") or "-",
@@ -459,24 +477,48 @@ class AssetQueryService:
                     payload = payload[0] if payload else {}
                 if not isinstance(payload, dict):
                     continue
-                folder = os.path.basename(dirpath)
-                platform = _platform_of(folder) or _platform_of(name)
-                rows.append({
-                    "title": payload.get("标题") or stem,
-                    "author": payload.get("作者") or "-",
-                    "platform": platform,
-                    "publish_time": payload.get("发布时间") or "",
-                    "play": _num(payload.get("播放量") if platform != "weibo"
-                                  else payload.get("阅览量")),
-                    "like": _num(payload.get("点赞数")),
-                    "url": payload.get("原始URL") or payload.get("链接") or "",
-                    "file": name,
-                    "path": os.path.relpath(path, root).replace("\\", "/"),
-                    "video_id": str(payload.get("视频ID") or ""),
-                    "cover": payload.get("封面") or "",
-                    "images": _num(payload.get("图片数")),
-                })
+                rows.append(_entry_payload(root, Path(path), payload))
         return rows
+
+
+def _entry_stamp(root: Path) -> int:
+    try:
+        return root.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _entry_target(root: Path, rel: str) -> Path:
+    rel = str(rel or "").replace("\\", "/")
+    if not rel or Path(rel).is_absolute() or ".." in rel.split("/"):
+        raise ValueError("条目路径不合法")
+    target = (root / rel).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError("条目不在已获取数据目录内") from exc
+    if target.suffix.lower() != ".json" or target.stem.endswith(("_raw", "_comments")):
+        raise ValueError("只支持已获取资源的 JSON 条目")
+    return target
+
+
+def _entry_payload(root: Path, path: Path, payload: dict) -> dict:
+    platform = (_platform_of(str(payload.get("平台") or payload.get("platform") or ""))
+                or _platform_of(str(path.relative_to(root))) or "")
+    return {
+        "title": payload.get("标题") or payload.get("title") or path.stem,
+        "author": payload.get("作者") or payload.get("author") or "-",
+        "platform": platform,
+        "publish_time": payload.get("发布时间") or payload.get("publish_time") or "",
+        "play": _num(payload.get("播放量") if platform != "weibo" else payload.get("阅览量"))
+                or _num(payload.get("play_count")),
+        "like": _num(payload.get("点赞数") or payload.get("like_count")),
+        "url": payload.get("原始URL") or payload.get("链接") or payload.get("video_url") or "",
+        "file": path.name, "path": path.relative_to(root).as_posix(),
+        "video_id": str(payload.get("视频ID") or payload.get("video_id") or ""),
+        "cover": payload.get("封面") or payload.get("cover_url") or "",
+        "images": _num(payload.get("图片数") or payload.get("expected_imgs")),
+    }
 
 
 def _local_group_payload(group: dict) -> dict:

@@ -288,6 +288,60 @@ def clear():
         return False
 
 
+def invalidate_paths(paths, *, root=None, db_path=None) -> int:
+    """使已改源 JSON 的派生缓存失效；不建库/表、不扫描或修改源文件。
+
+    root 为「已获取数据」根时，同时失效父导出根目录的展示清单；资产页
+    普通条目清单以该父目录为 root。显式 db_path 仅用于独立存储/隔离验证。
+    """
+    from pathlib import Path
+    keys = set()
+    scopes = set()
+    boundary = _key(os.path.abspath(root)) if root is not None else None
+    if boundary:
+        scopes.update((boundary, _key(os.path.dirname(boundary))))
+    for path in paths or []:
+        key = _key(os.path.abspath(path))
+        if boundary:
+            try:
+                if os.path.commonpath((boundary, key)) != boundary:
+                    continue
+            except ValueError:
+                continue
+        keys.add(key)
+        if not boundary:
+            parent = os.path.dirname(key)
+            scopes.update((_key(parent), _key(os.path.dirname(parent)),
+                           _key(os.path.dirname(os.path.dirname(parent)))))
+    if not keys:
+        return 0
+    path = Path(db_path) if db_path is not None else globals()["db_path"]()
+    if not path.is_file():
+        return 0
+    try:
+        with _lock:
+            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=15)
+            try:
+                conn.execute("PRAGMA busy_timeout=15000")
+                tables = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                with conn:
+                    before = conn.total_changes
+                    if "asset_json" in tables:
+                        conn.executemany("DELETE FROM asset_json WHERE path=?",
+                                         ((key,) for key in keys))
+                    for table in ("asset_view_row", "asset_view_state"):
+                        if table in tables:
+                            conn.executemany(f"DELETE FROM {table} WHERE root=?",
+                                             ((scope,) for scope in scopes))
+                    invalidated = conn.total_changes - before
+                return invalidated
+            finally:
+                conn.close()
+    except (OSError, sqlite3.Error):
+        return 0
+
+
 def stats():
     """缓存概览：(json 缓存行数, 媒体目录缓存行数, 数据库文件字节数)。"""
     try:
@@ -303,6 +357,6 @@ def stats():
         return 0, 0, 0
 
 
-__all__ = ["VER", "VIEW_VER", "db_path", "fetch_all", "upsert_many", "prune", "clear",
+__all__ = ["VER", "VIEW_VER", "db_path", "fetch_all", "upsert_many", "prune", "clear", "invalidate_paths",
            "fetch_view", "save_view",
            "stats", "fetch_media_dirs", "upsert_media_dirs", "prune_media_dirs"]

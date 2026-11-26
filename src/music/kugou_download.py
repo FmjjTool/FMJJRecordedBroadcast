@@ -59,6 +59,8 @@ def stream_details(data: dict) -> KugouUrlDetails:
     raw_url = data.get("url") or data.get("backupUrl") or ""
     urls = raw_url if isinstance(raw_url, list) else [raw_url]
     url = next((safe_audio_url(item) for item in urls if safe_audio_url(item)), "")
+    if not url:
+        return KugouUrlDetails(error="酷狗未授权所选音质（需要登录、会员权限或歌曲不可用）")
     ext = str(data.get("extName") or data.get("extname") or "").lower().lstrip(".")
     if not ext and url:
         ext = urlsplit(url).path.rsplit(".", 1)[-1].lower()
@@ -71,8 +73,6 @@ def stream_details(data: dict) -> KugouUrlDetails:
         rate = 0
     quality = ext.upper() if ext in {"flac", "ape"} else (f"{round(rate)}kbps" if rate else "")
     preview = data.get("is_free_part") in (1, "1", True) or data.get("isFreePart") in (1, "1", True)
-    if not url:
-        return KugouUrlDetails(error="酷狗未授权所选音质（需要登录、会员权限或歌曲不可用）")
     return KugouUrlDetails(url=url, ext="." + ext, quality=quality, is_preview=preview)
 
 
@@ -92,6 +92,7 @@ def resolve_kugou_url(song: SongInfo, quality: str = "highest") -> KugouUrlDetai
         headers["Cookie"] = account
     metadata = dict(song.extra or {})
     error = "酷狗未提供所选音质，请选择最高可用或其他档位"
+    preview = None
     try:
         with get_client(timeout=15) as client:
             hashes = quality_hashes(song.song_id, metadata)
@@ -101,8 +102,8 @@ def resolve_kugou_url(song: SongInfo, quality: str = "highest") -> KugouUrlDetai
                                       headers=headers, follow_redirects=False)
                 info = safe_json(response.text) if response.status_code == 200 and len(response.text) < 2_000_000 else {}
                 if isinstance(info, dict) and isinstance(info.get("data"), dict):
-                    metadata = {**info["data"], **metadata}
-                    hashes = quality_hashes(song.song_id, metadata)
+                    detailed = quality_hashes(song.song_id, info["data"])
+                    hashes.update({key: value for key, value in detailed.items() if key != "128k"})
             levels = ["flac", "320k", "128k"] if quality == "highest" else [quality]
             for level in levels:
                 file_hash = hashes.get(level)
@@ -122,8 +123,11 @@ def resolve_kugou_url(song: SongInfo, quality: str = "highest") -> KugouUrlDetai
                 if got.url:
                     if level == "flac" and got.ext not in {".flac", ".ape"}:
                         continue
+                    if quality == "highest" and got.is_preview:
+                        preview = preview or got
+                        continue
                     return got
                 error = got.error
     except Exception:
         return KugouUrlDetails(error="酷狗下载地址请求失败，请稍后重试")
-    return KugouUrlDetails(error=error)
+    return preview or KugouUrlDetails(error=error)

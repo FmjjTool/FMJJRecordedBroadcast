@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
-    QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QSpinBox, QSplitter,
+    QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QPushButton, QSpinBox, QSplitter,
     QStackedWidget, QStatusBar, QTableView,
     QVBoxLayout, QWidget,
 )
@@ -1111,7 +1111,15 @@ class PlatformPane(QWidget):
             self._log("推送设置已保存", "ok")
 
     def on_repair_flv(self):
-        FlvRepairDialog(self, self.manager).exec()
+        dialog = getattr(self, "_repair_dialog", None)
+        if dialog is None:
+            dialog = RecordingRepairDialog(self, self.manager)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dialog.destroyed.connect(lambda: setattr(self, "_repair_dialog", None))
+            self._repair_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def on_timecode(self):
         TimecodeDialog(self).exec()
@@ -1670,43 +1678,58 @@ class PushSettingsDialog(QDialog):
         return self.exec() == QDialog.DialogCode.Accepted
 
 
-class FlvRepairDialog(QDialog):
-    """FLV 修复（对应录播姬工具箱）。"""
+class RecordingRepairDialog(QDialog):
+    """已结束录制的 FLV / TS 修复；工作线程只发送信号更新界面。"""
+
+    job_progress = Signal(float)
+    job_done = Signal(object)
 
     def __init__(self, parent, manager):
         super().__init__(parent)
+        import threading
+
         self.manager = manager
-        self.setWindowTitle("FLV 修复")
-        self.resize(720, 480)
+        self._cancel = threading.Event()
+        self._working = False
+        self._close_when_done = False
+        self.job_progress.connect(self._on_progress, Qt.ConnectionType.QueuedConnection)
+        self.job_done.connect(self._on_done, Qt.ConnectionType.QueuedConnection)
+        self.setWindowTitle("FLV / TS 修复")
+        self.resize(720, 520)
+        self.setMinimumSize(420, 300)
         lay = QVBoxLayout(self)
 
         row = QHBoxLayout()
         self.ed_file = QLineEdit()
-        self.ed_file.setPlaceholderText("选择要修复的 .flv 文件")
+        self.ed_file.setReadOnly(True)
+        self.ed_file.setPlaceholderText("选择已停止录制的 .flv / .ts 文件")
         row.addWidget(self.ed_file, 1)
-        b = QPushButton("选择文件…")
-        b.clicked.connect(self._pick_file)
-        row.addWidget(b)
+        self.btn_file = QPushButton("选择文件…")
+        self.btn_file.clicked.connect(self._pick_file)
+        row.addWidget(self.btn_file)
         lay.addLayout(row)
 
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("输出目录"))
         self.ed_out = QLineEdit()
+        self.ed_out.setReadOnly(True)
         self.ed_out.setPlaceholderText("留空 = 与源文件同目录（文件名加 _修复）")
         row2.addWidget(self.ed_out, 1)
-        b2 = QPushButton("选择…")
-        b2.clicked.connect(self._pick_dir)
-        row2.addWidget(b2)
+        self.btn_out = QPushButton("选择…")
+        self.btn_out.clicked.connect(self._pick_dir)
+        row2.addWidget(self.btn_out)
         lay.addLayout(row2)
 
-        row3 = QHBoxLayout()
-        self.btn_run = QPushButton("开始修复")
-        self.btn_run.setStyleSheet("background:#2e7d32;color:white;padding:5px 16px;")
-        self.btn_run.clicked.connect(self._run)
-        row3.addWidget(self.btn_run)
-        row3.addWidget(QLabel("丢掉截断 tag、时间戳改单调递增、重算 PreviousTagSize"))
-        row3.addStretch(1)
-        lay.addLayout(row3)
+        tip = QLabel("FLV：修复截断标签与时间戳；TS：跳过损坏数据包并无损重封装。"
+                     "只处理已停止录制的文件，保留原文件且不覆盖已有结果；"
+                     "已丢失的画面或声音无法恢复。")
+        tip.setWordWrap(True)
+        tip.setProperty("role", "muted")
+        lay.addWidget(tip)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        lay.addWidget(self.progress)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -1714,48 +1737,114 @@ class FlvRepairDialog(QDialog):
         lay.addWidget(self.log, 1)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.btn_cancel = btns.addButton("取消修复", QDialogButtonBox.ButtonRole.ActionRole)
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self._request_cancel)
+        self.btn_run = btns.addButton("开始修复", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.btn_run.setProperty("variant", "primary")
+        self.btn_run.clicked.connect(self._run)
         btns.rejected.connect(self.reject)
-        btns.clicked.connect(lambda _b: self.reject())
         lay.addWidget(btns)
 
     def _pick_file(self):
-        p, _ = QFileDialog.getOpenFileName(self, "选择 FLV 文件", "", "FLV 视频 (*.flv)")
+        p, _ = QFileDialog.getOpenFileName(
+            self, "选择录制文件", "", "录制文件 (*.flv *.ts);;FLV 视频 (*.flv);;TS 视频 (*.ts)")
         if p:
             self.ed_file.setText(p)
+            self.ed_file.setToolTip(p)
 
     def _pick_dir(self):
         p = QFileDialog.getExistingDirectory(self, "选择输出目录")
         if p:
             self.ed_out.setText(p)
+            self.ed_out.setToolTip(p)
 
     def _log(self, text):
         self.log.appendPlainText(text)
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _run(self):
+        if self._working:
+            return
         src = self.ed_file.text().strip()
-        if not src or not os.path.isfile(src):
-            self._log("请先选择有效的 FLV 文件")
+        suffix = os.path.splitext(src)[1].lower()
+        if not src or not os.path.isfile(src) or suffix not in (".flv", ".ts"):
+            self._log("请选择有效的 FLV 或 TS 文件后重试")
+            return
+        managers = [self.manager]
+        win = getattr(self.parentWidget(), "win", None)
+        if win is not None:
+            managers = [pane.manager for pane in getattr(win, "panes", {}).values()] or managers
+        if any(os.path.abspath(info.get("out") or "") == os.path.abspath(src)
+               for manager in managers for info in manager._task_info.values()):
+            self._log("该文件仍在录制，请停止录制后重试")
             return
         outdir = self.ed_out.text().strip() or os.path.dirname(src)
-        os.makedirs(outdir, exist_ok=True)
-        dst = os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + "_修复.flv")
+        dst = os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + "_修复" + suffix)
+        self._working = True
+        self._cancel.clear()
         self.btn_run.setEnabled(False)
-        self._log(f"开始修复：{src}")
+        self.btn_cancel.setEnabled(True)
+        self.btn_file.setEnabled(False)
+        self.btn_out.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self._log("开始修复：" + os.path.basename(src))
 
         def work():
-            from toolbox.flv_repair import repair_flv
-            st = repair_flv(src, dst)
-            if st.get("ok"):
-                self._log(f"完成：{st['tags']} 个 tag，丢弃 {st['dropped']} 个，"
-                          f"时间戳修正 {st['ts_fixed']} 处，重新对齐 {st['resync']} 次")
-                self._log(f"   输出：{st['out']}")
-            else:
-                self._log(f"失败：{st.get('error') or '未知错误'}")
-            self.btn_run.setEnabled(True)
+            try:
+                from toolbox.recording_repair import repair_recording
+                result = repair_recording(src, dst, on_progress=self.job_progress.emit,
+                                          cancel=self._cancel)
+            except Exception:
+                result = {"ok": False, "error": "修复失败，请检查录制文件后重试"}
+            self.job_done.emit(result)
 
         import threading
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_progress(self, value):
+        if value > 0:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(round(value * 100))
+
+    def _on_done(self, result):
+        self._working = False
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100 if result.get("ok") else 0)
+        self.btn_run.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.btn_file.setEnabled(True)
+        self.btn_out.setEnabled(True)
+        if result.get("ok"):
+            if result.get("format") == "flv":
+                self._log("已完成：%d 个标签，丢弃 %d 个，时间戳修正 %d 处" % (
+                    result.get("tags", 0), result.get("dropped", 0), result.get("ts_fixed", 0)))
+            else:
+                self._log("已完成：TS 已重新封装，原文件保留")
+            self._log("输出：" + str(result["out"]))
+        else:
+            self._log("已取消" if result.get("cancelled") else "修复失败：" + result.get("error", "请重试"))
+        if self._close_when_done:
+            super().reject()
+
+    def _request_cancel(self):
+        self._cancel.set()
+        self.btn_cancel.setEnabled(False)
+        self._log("正在取消修复")
+
+    def reject(self):
+        if self._working:
+            self._close_when_done = True
+            self._request_cancel()
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if self._working:
+            self.reject()
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 class TimecodeDialog(QDialog):
@@ -2083,7 +2172,7 @@ class LiveRecordWindow(QMainWindow):
         m = mb.addMenu("工具(&T)")
         m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
         m.addAction(self._act("推送设置…", lambda: self.pane.on_push_settings()))
-        m.addAction(self._act("FLV 修复…", lambda: self.pane.on_repair_flv()))
+        m.addAction(self._act("FLV / TS 修复…", lambda: self.pane.on_repair_flv()))
         m.addAction(self._act("写时间码…", lambda: self.pane.on_timecode()))
         m.addSeparator()
         m.addAction(self._act("清除本页状态…", lambda: self.pane.on_clear_states(),

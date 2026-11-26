@@ -113,12 +113,17 @@ def resolve_url(song: SongInfo, quality: str = "highest") -> QQDownloadUrl:
     if response.status_code == 429:
         return QQDownloadUrl(error="QQ音乐请求过于频繁，请稍后再试")
     reply = payload.get("req_0") or {}
-    data = reply.get("data") or {}
-    if not isinstance(reply, dict) or not isinstance(data, dict):
+    if not isinstance(reply, dict):
         return QQDownloadUrl(error="QQ音乐下载接口可能已变化，请稍后重试")
+    data = reply.get("data") or {}
+    if not isinstance(data, dict):
+        return QQDownloadUrl(error="QQ音乐下载接口可能已变化，请稍后重试")
+    if payload.get("code", 0) not in (0, "0") or reply.get("code", 0) not in (0, "0"):
+        return QQDownloadUrl(error="QQ音乐未授权所选音质，请检查当前账号权限")
     entries = data.get("midurlinfo") or []
     entries = entries if isinstance(entries, list) else []
-    by_name = {entry.get("filename"): entry for entry in entries if isinstance(entry, dict)}
+    by_name = {entry["filename"]: entry for entry in entries
+               if isinstance(entry, dict) and isinstance(entry.get("filename"), str)}
     servers = data.get("sip") or ["https://dl.stream.qqmusic.qq.com/"]
     servers = servers if isinstance(servers, list) else []
     for level, filename in zip(levels, filenames):

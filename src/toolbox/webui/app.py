@@ -137,6 +137,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/assets/entries-status", lambda req: assets.entries_status(
         req.q_int("page", 1, 1), req.q_int("page_size", 20, 1, 100),
         req.q("q"), req.q("platform"), req.q("status")))
+    server.post("/api/assets/entries/refresh", lambda req: assets.refresh_entries(req.json))
 
     def start_assets_download(req):
         return assets.start_download(dict(req.json or {}))
