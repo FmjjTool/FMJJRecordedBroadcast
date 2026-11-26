@@ -7742,6 +7742,175 @@ function renderLivestreamSummary(root) {
     api('/api/weibo-chaohua').then(function (data) {
       root.replaceChildren();
       var topics = data.topics || [];
+
+      var topicInput = h('input', {
+        class: 'input grow',
+        placeholder: '超话链接或 100808 开头的超话 ID'
+      });
+      var parseBtn = h('button', { class: 'btn primary', type: 'button' },
+        '解析超话');
+      var collectBtn = h('button', {
+        class: 'btn primary', type: 'button', disabled: true
+      }, '开始采集');
+      var exportBtn = h('button', {
+        class: 'btn', type: 'button', disabled: true
+      }, '导出 Excel');
+      var parsedHost = h('div');
+      var jobHost = h('div');
+      var activeTopic = '';
+      var channels = [];
+      var busy = false;
+
+      function renderChannels() {
+        if (!channels.length) {
+          parsedHost.replaceChildren(empty('解析后在这里选择要采集的频道。'));
+          return;
+        }
+        var body = h('tbody');
+        channels.forEach(function (channel, index) {
+          var box = h('input', { type: 'checkbox', checked: true });
+          var pages = h('input', {
+            class: 'input', type: 'number', value: String(channel.max_pages || 10),
+            min: '1', max: '500', style: 'width:68px'
+          });
+          channels[index].checked = true;
+          box.addEventListener('change', function () {
+            channels[index].checked = box.checked;
+          });
+          pages.addEventListener('input', function () {
+            channels[index].max_pages = Number(pages.value) || 10;
+          });
+          body.appendChild(h('tr', null,
+            h('td', null, box),
+            h('td', { class: 'ellipsis' }, channel.name || '频道'),
+            h('td', { class: 'ellipsis', title: channel.flow_id,
+              style: 'max-width:110px' }, channel.flow_id || '-'),
+            h('td', null, pages)));
+        });
+        parsedHost.replaceChildren(
+          h('div', { class: 'muted small', style: 'margin:8px 0' },
+            '已解析「' + (data2.nick || activeTopic) + '」 · ' + channels.length
+            + ' 个频道 · 每页约 15 条，1 秒 / 页'),
+          h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, h('tr', null,
+                h('th', { style: 'width:36px' }, '采集'),
+                h('th', null, '频道'), h('th', null, 'flowId'),
+                h('th', null, '最大页数'))), body)));
+        collectBtn.disabled = false;
+      }
+
+      var data2 = {};
+
+      parseBtn.addEventListener('click', function () {
+        if (busy) return;
+        if (!topicInput.value.trim()) {
+          toast('请输入超话链接或 ID', 'warning');
+          return;
+        }
+        busy = true;
+        parseBtn.disabled = true;
+        parseBtn.textContent = '解析中…';
+        post('/api/tools/weibo-chaohua/parse', { text: topicInput.value })
+          .then(function (result) {
+            watchJob(jobHost, result.job, function (job) {
+              var outcome = job.result || {};
+              data2 = outcome;
+              activeTopic = outcome.topic_id || '';
+              channels = (outcome.channels || []).map(function (channel) {
+                return {
+                  name: channel.name, flow_id: channel.flow_id,
+                  max_pages: channel.max_pages || 10, checked: true
+                };
+              });
+              renderChannels();
+              toast(outcome.summary || '解析完成', 'success');
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                busy = false;
+                parseBtn.disabled = false;
+                parseBtn.textContent = '解析超话';
+                if (job.status === 'error') {
+                  toast('解析失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            busy = false;
+            parseBtn.disabled = false;
+            parseBtn.textContent = '解析超话';
+            toast('解析失败：' + error.message, 'error');
+          });
+      });
+
+      collectBtn.addEventListener('click', function () {
+        if (busy) return;
+        var selected = channels.filter(function (channel) {
+          return channel.checked;
+        }).map(function (channel) {
+          return { name: channel.name, flow_id: channel.flow_id,
+            max_pages: channel.max_pages };
+        });
+        if (!selected.length) {
+          toast('请至少勾选一个频道', 'warning');
+          return;
+        }
+        busy = true;
+        collectBtn.disabled = true;
+        collectBtn.textContent = '采集中…';
+        post('/api/tools/weibo-chaohua/collect', {
+          topic_id: activeTopic, channels: selected
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            toast(outcome.summary || '采集完成',
+              outcome.db_error ? 'warning' : 'success');
+            if (outcome.db_error) {
+              jobHost.appendChild(h('div', { class: 'muted small' },
+                '入库失败：' + outcome.db_error));
+            }
+            exportBtn.disabled = !(outcome.total > 0);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              busy = false;
+              collectBtn.disabled = false;
+              collectBtn.textContent = '开始采集';
+              if (job.status === 'error') {
+                toast('采集失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          busy = false;
+          collectBtn.disabled = false;
+          collectBtn.textContent = '开始采集';
+          toast('采集失败：' + error.message, 'error');
+        });
+      });
+
+      exportBtn.addEventListener('click', function () {
+        if (!activeTopic) return;
+        exportBtn.disabled = true;
+        downloadPost('/api/tools/weibo-chaohua/export',
+          { topic_id: activeTopic }, '超话数据.xlsx').then(function () {
+          toast('超话数据已导出', 'success');
+        }).catch(function (error) {
+          toast('导出失败：' + error.message, 'error');
+        }).then(function () { exportBtn.disabled = false; });
+      });
+
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '解析与采集'),
+        h('div', { class: 'toolbar' },
+          topicInput, parseBtn),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          collectBtn, exportBtn,
+          h('span', { style: 'flex:1' })),
+        parsedHost, jobHost));
+
       if (!topics.length) {
         root.appendChild(empty(data.note || '本地暂无超话数据。'));
         return;
@@ -7777,10 +7946,10 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '超话'), select,
           h('span', { class: 'muted small', style: 'margin-left:8px' },
-            '解析与采集仍在桌面端'),
+            '查看本地累计'),
           h('span', { style: 'flex:1' }), refreshBtn),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '输入超话链接或 ID 解析、频道采集与导出 Excel 仍在桌面端。')));
+          '本地累计数据来自超话数据库；采集结果入库后可导出与桌面同格式的 Excel。')));
       root.appendChild(summary);
       root.appendChild(contentHost);
 

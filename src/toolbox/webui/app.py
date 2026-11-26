@@ -46,7 +46,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     trackers = TrackerService(jobs)
     fangroups = FanGroupService(jobs)
     douyin_index = DouyinIndexService(jobs)
-    chaohua = WeiboChaohuaService()
+    chaohua = WeiboChaohuaService(jobs)
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService(jobs)
     netdisk = NetdiskService(jobs)
@@ -253,6 +253,21 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/weibo-chaohua", lambda req: chaohua.overview())
     server.get("/api/weibo-chaohua/analysis", lambda req: chaohua.analysis(
         req.q("topic_id")))
+
+    def start_chaohua_parse(req):
+        return chaohua.start_parse(dict(req.json or {}))
+    server.post("/api/tools/weibo-chaohua/parse", start_chaohua_parse)
+
+    def start_chaohua_collect(req):
+        return chaohua.start_collect(dict(req.json or {}))
+    server.post("/api/tools/weibo-chaohua/collect", start_chaohua_collect)
+
+    def export_chaohua(req):
+        data = chaohua.export(dict(req.json or {}))
+        return AttachmentResponse(data["data"], data["filename"],
+                                  "application/vnd.openxmlformats-officedocument"
+                                  ".spreadsheetml.sheet")
+    server.post("/api/tools/weibo-chaohua/export", export_chaohua)
 
     server.get("/api/info-accounts", lambda req: info_accounts.overview())
 
