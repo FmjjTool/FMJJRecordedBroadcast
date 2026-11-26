@@ -2038,6 +2038,23 @@ class TcDocBridgePanel(QWidget):
         overwrite_box = QCheckBox("覆盖该列已有的其它链接")
         overwrite_box.setToolTip("默认不覆盖人工登记的链接；勾选后填写的平台会直接替换")
         form.addRow("", overwrite_box)
+        paste_btn = QPushButton("从剪贴板填入酷狗链接")
+        paste_btn.setToolTip("先在酷狗客户端点「分享 → 复制链接」，再点这里自动填进酷狗列")
+
+        def fill_from_clipboard():
+            text = QApplication.clipboard().text().strip()
+            if not text:
+                QMessageBox.information(dlg, "歌单录入", "剪贴板是空的。")
+                return
+            if "kugou.com" not in text.lower():
+                QMessageBox.warning(
+                    dlg, "歌单录入",
+                    f"剪贴板里不是酷狗分享链接：{text[:60]}")
+                return
+            edits["kugou"].setText(text)
+
+        paste_btn.clicked.connect(fill_from_clipboard)
+        form.addRow("", paste_btn)
         root.addLayout(form)
         root.addStretch(1)
 
