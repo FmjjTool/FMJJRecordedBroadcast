@@ -53,7 +53,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     publish = PublishService(jobs)
     shopping = ShoppingService(jobs)
     localwiki = LocalWikiService()
-    livestream_summary = LivestreamSummaryService()
+    livestream_summary = LivestreamSummaryService(jobs)
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
     tickets = TicketsService(jobs)
@@ -328,6 +328,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: livestream_summary.overview())
     server.get("/api/livestream-summary/saved",
                lambda req: livestream_summary.saved_text(req.q("name")))
+
+    def save_livestream_settings(req):
+        return livestream_summary.save_settings(dict(req.json or {}))
+    server.post("/api/tools/livestream-summary/settings", save_livestream_settings)
+
+    def test_livestream_connection(req):
+        return livestream_summary.test_connection()
+    server.post("/api/tools/livestream-summary/test", test_livestream_connection)
+
+    def start_livestream_summary(req):
+        return livestream_summary.start_summary(dict(req.json or {}))
+    server.post("/api/tools/livestream-summary/run", start_livestream_summary)
 
     server.get("/api/image-sorter", lambda req: image_sorter.overview())
     server.get("/api/image-sorter/scan", lambda req: image_sorter.scan(

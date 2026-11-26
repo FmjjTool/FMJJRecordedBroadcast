@@ -2669,7 +2669,7 @@
     });
   }
 
-  function renderLivestreamSummary(root) {
+function renderLivestreamSummary(root) {
     setLoading(root, '正在读取转录文件与总结设置…');
     api('/api/livestream-summary').then(function (data) {
       root.replaceChildren();
@@ -2689,47 +2689,148 @@
             item.name + '（' + item.mtime + '）'));
         });
       }
+      var modeSel = h('select', { class: 'select' },
+        h('option', { value: 'ai' }, '大模型总结'),
+        h('option', { value: 'rule' }, '本地规则保底'));
+      modeSel.value = settings.mode === 'rule' ? 'rule' : 'ai';
+      var startBtn = h('button', { class: 'btn primary', type: 'button' },
+        '开始总结');
+      var statusText = h('span', { class: 'muted small' }, '空闲');
+      var jobHost = h('div');
+      var resultHost = h('div');
+      var running = false;
+
+      startBtn.addEventListener('click', function () {
+        if (running) return;
+        if (!fileSelect.value) {
+          toast('请先选择转录文件', 'warning');
+          return;
+        }
+        running = true;
+        startBtn.disabled = true;
+        startBtn.textContent = '总结中…';
+        statusText.textContent = modeSel.value === 'rule'
+          ? '本地规则总结中…' : '调用模型总结中…';
+        resultHost.replaceChildren();
+        post('/api/tools/livestream-summary/run', {
+          rel: fileSelect.value, mode: modeSel.value
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            statusText.textContent = outcome.summary || '已完成';
+            toast(outcome.summary || '总结完成',
+              outcome.problems && outcome.problems.length ? 'warning' : 'success');
+            var stats = outcome.stats || {};
+            var info = h('div', { class: 'muted small', style: 'margin:8px 0' });
+            info.textContent = [
+              outcome.name,
+              stats.chunks ? stats.chunks + ' 块' : '',
+              stats.requests ? stats.requests + ' 次请求' : '',
+              stats.chars ? stats.chars + ' 字' : '',
+              stats.date ? '日期 ' + stats.date : ''
+            ].filter(Boolean).join(' · ');
+            resultHost.replaceChildren(
+              h('div', { class: 'card' },
+                h('div', { class: 'row-title', style: 'margin-bottom:6px' },
+                  '总结结果'),
+                info,
+                h('pre', {
+                  class: 'log-box', style: 'max-height:420px'
+                }, outcome.text || ''),
+                (outcome.problems && outcome.problems.length)
+                  ? h('div', { class: 'muted small',
+                    style: 'margin-top:6px;color:var(--danger,#c62828)' },
+                    '格式校验：' + outcome.problems.join('；'))
+                  : null));
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              startBtn.disabled = false;
+              startBtn.textContent = '开始总结';
+              if (job.status === 'error') {
+                statusText.textContent = '失败';
+                toast('总结失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          startBtn.disabled = false;
+          startBtn.textContent = '开始总结';
+          statusText.textContent = '失败';
+          toast('总结失败：' + error.message, 'error');
+        });
+      });
 
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '转录文件'), fileSelect,
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '开始总结'),
-          h('span', { class: 'spacer' }),
-          h('span', { class: 'muted small' }, '空闲（AI 总结在桌面端）')),
+          h('span', { class: 'muted small' }, '模式'), modeSel,
+          startBtn, statusText),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '工作目录：' + (data.work_dir || '未设置')
-          + ' · 输出：' + (data.output_dir || '-'))));
+          + ' · 输出：' + (data.output_dir || '-')
+          + ' · 结果会自动保存到输出目录。'),
+        jobHost, resultHost));
+
+      var baseInput = h('input', {
+        class: 'input', type: 'text', value: settings.base_url || '',
+        placeholder: 'https://api.openai.com/v1'
+      });
+      var modelInput = h('input', {
+        class: 'input', type: 'text', value: settings.model || '',
+        placeholder: '模型名称'
+      });
+      var chunkInput = h('input', {
+        class: 'input', type: 'number', value: String(settings.chunk_chars || 6000),
+        min: '2000', max: '20000', step: '500'
+      });
+      var keyInput = h('input', {
+        class: 'input', type: 'password',
+        placeholder: settings.has_key ? '已保存（留空不修改）' : 'API Key'
+      });
+      var saveBtn = h('button', { class: 'btn', type: 'button' }, '保存设置');
+      var testBtn = h('button', { class: 'btn', type: 'button' }, '测试连接');
+      var settingsHost = h('div', { class: 'muted small',
+        style: 'margin-top:8px' }, settings.has_key
+        ? 'API Key 已保存（本机加密，不回显）。' : '尚未保存 API Key。');
+
+      saveBtn.addEventListener('click', function () {
+        saveBtn.disabled = true;
+        post('/api/tools/livestream-summary/settings', {
+          base_url: baseInput.value, model: modelInput.value,
+          chunk_chars: Number(chunkInput.value) || 6000,
+          mode: modeSel.value, api_key: keyInput.value
+        }).then(function (result) {
+          keyInput.value = '';
+          settingsHost.textContent = result.summary;
+          toast(result.summary, 'success');
+        }).catch(function (error) {
+          toast('保存失败：' + error.message, 'error');
+        }).then(function () { saveBtn.disabled = false; });
+      });
+
+      testBtn.addEventListener('click', function () {
+        testBtn.disabled = true;
+        testBtn.textContent = '测试中…';
+        post('/api/tools/livestream-summary/test', {}).then(function (result) {
+          toast(result.summary || result.message, 'success');
+          settingsHost.textContent = result.message;
+        }).catch(function (error) {
+          settingsHost.textContent = '连接失败：' + error.message;
+          toast('连接失败：' + error.message, 'error');
+        }).then(function () {
+          testBtn.disabled = false;
+          testBtn.textContent = '测试连接';
+        });
+      });
 
       function kv(label, value) {
         return h('div', { class: 'kv' },
           h('span', { class: 'muted' }, label),
           h('span', { class: 'ellipsis', title: String(value) }, value));
       }
-      var baseUrl = String(settings.base_url || '');
-      var keyText = settings.has_key ? '已保存（加密）'
-        : ((baseUrl.indexOf('127.0.0.1') >= 0
-          || baseUrl.indexOf('localhost') >= 0)
-          ? '本机模型可不填' : '未保存');
-      var grid = h('div', { class: 'grid cols-2' });
-      grid.appendChild(h('div', { class: 'card' },
-        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
-          '模型设置'),
-        kv('模式', settings.mode === 'rule' ? '本地规则（不调用模型）' : 'AI 模型'),
-        kv('接口地址', settings.base_url || '-'),
-        kv('模型名称', settings.model || '-'),
-        kv('每块字数', settings.chunk_chars || '-'),
-        kv('API Key', keyText),
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '保存设置'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '测试连接'),
-          h('span', { class: 'muted small' },
-            '模型检测 / 下载与保存在桌面端'))));
 
       var savedHost = h('div');
       var savedSelect = h('select', { class: 'select grow' });
@@ -2742,6 +2843,24 @@
             item.name + '（' + item.mtime + '）'));
         });
       }
+
+      var grid = h('div', { class: 'grid cols-2' });
+      grid.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+          '模型设置'),
+        h('div', { class: 'form-grid' },
+          h('label', null, h('span', { class: 'muted small' }, '接口地址'),
+            baseInput),
+          h('label', null, h('span', { class: 'muted small' }, '模型名称'),
+            modelInput),
+          h('label', null, h('span', { class: 'muted small' }, '每块字数'),
+            chunkInput),
+          h('label', null, h('span', { class: 'muted small' }, 'API Key'),
+            keyInput)),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          saveBtn, testBtn),
+        kv('当前模式', settings.mode === 'rule' ? '本地规则（不调用模型）' : 'AI 模型'),
+        settingsHost));
       grid.appendChild(h('div', { class: 'card' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '已保存总结'),
@@ -2768,13 +2887,6 @@
         loadSaved(savedSelect.value);
       });
       root.appendChild(grid);
-      root.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
-        h('div', { class: 'card-title' }, '运行日志'),
-        h('div', { class: 'muted small' },
-          '分块提取 / 合并 / 终稿过程日志由桌面端输出；Web 端暂不提供。')));
-      if (saved.length) loadSaved(saved[0].name);
-      else savedHost.appendChild(empty(
-        '桌面端完成总结后会保存到「直播总结」目录。'));
     }).catch(function (error) {
       setError(root, error, function () { renderLivestreamSummary(root); });
     });
