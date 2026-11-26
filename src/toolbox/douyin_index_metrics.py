@@ -48,7 +48,8 @@ def _valid_count(value):
 
 def _valid_index(value):
     return (isinstance(value, (str, int, float)) and not isinstance(value, bool)
-            and str(value).strip() not in ("", "-", "—", "None", "nan", "inf", "-inf"))
+            and str(value).strip().lower() not in
+            ("", "-", "—", "none", "nan", "inf", "-inf", "infinity", "-infinity"))
 
 
 def metric_patch_status(record, patch, *, localized=False):
@@ -98,6 +99,12 @@ def merge_existing_metrics(record, patch, *, localized=False):
     raw_key = "原始数据" if localized else "raw_data"
     raw = dict(record.get(raw_key) or {})
     source = dict(raw.get("douyin_index") or {})
+    # 指数属于特定统计窗口；本次没拿到时保留旧值及其原窗口，不能把旧指数
+    # 误标成本次窗口。旧格式首次补丁时从已有元数据补全这段来源。
+    index_meta = source.get("video_index_meta")
+    if not isinstance(index_meta, dict) and _valid_index(source.get("video_index")):
+        index_meta = {name: source[name] for name in
+                      ("fetched_at", "days", "start_date", "end_date") if name in source}
     for name in _SOURCE_FIELDS:
         if name not in patch["source"]:
             continue
@@ -105,6 +112,11 @@ def merge_existing_metrics(record, patch, *, localized=False):
         if name == "video_index" and not _valid_index(value):
             continue
         source[name] = value
+    if _valid_index(patch["source"].get("video_index")):
+        index_meta = {name: patch["source"][name] for name in
+                      ("fetched_at", "days", "start_date", "end_date") if name in patch["source"]}
+    if index_meta is not None:
+        source["video_index_meta"] = index_meta
     raw["douyin_index"] = source
     merged[raw_key] = raw
     return merged, merged != record
