@@ -214,6 +214,20 @@ description: "腾讯文档同步编辑范围强制约束（强制阅读）。仅
 6. 触发入口只有歌单页（桌面 `gui_qt/pages/music_playlist.py`、WebUI `webui_music_playlist.py`）在来源为「线下活动曲目」时执行；不使用独立脚本批量刷表。
 7. 实现：`src/toolbox/tcdoc/event_playlist.py`（回写编排）、`src/toolbox/tcdoc/import_local.py::update_playlist_link`（白名单校验）、`src/music/playlist_link.py`（列名与链接模板）。
 8. 手工入口（2026-11-26）：桌面中间层「歌单录入」与 WebUI 中间层「歌单录入」允许用户为某场线下活动手工填三列链接；同样只走单行单字段 `updateRecords`，不覆盖已有链接、不改其它列、不探测用户自贴的链接（只做 http(s) / ID 格式校验）。
+
+### 2026-11-26 用户授权：WebUI 中间层「修改 / 删除」页签
+
+用户要求把腾讯文档的修改 / 删除接到 WebUI。据此在既有白名单内开放**行级修改与删除**，范围不扩大：
+
+1. 目标仍只有「官方动态」（`ss_h2uh2s`）与「直播记录」（`ss_1xgstm`）；WebUI 侧 `webui_tcdoc_edit.TARGETS` 直接写死这两个 key，传其他表（含 `ss_ktwk0t` 等「仅新增」表）在 L3 就被拒绝，不依赖上层界面过滤。
+2. 只按 `recordID` 逐条操作：修改走 `updateRecords`（单条、只含被改字段），删除走 `deleteRecords`（单次 ≤20 条）。不整表覆盖、不改表结构、不改选项值、不新增字段。
+3. 修改仅限文本列（fieldType 1 / 7 / 16），其它类型（数字、日期、链接、多选、图片等）在预览阶段即拒绝，避免把复杂类型写坏。
+4. 先预览再执行：预览实时读取云端记录并展示当前值；修改需在浮层里再「预览改动」列出字段级 old → new 后才可提交；删除需按标题 + recordID 列出待删清单后确认。两者都是二次确认。
+5. 写后必须读回核对：修改逐字段比对读回值，删除确认 recordID 已消失；结果不明（`UnknownWriteResult`）时不重试，直接提示到表格人工核对。
+6. 「同步前刷新」门禁同样适用（与上传同一条 `sync_refresh.upload_allowed()`，桌面端免校对模式同样放行）；不因为「只改一行」而绕过。
+7. 与桌面上传共用 `import_pending` 写入锁，避免桌面批量上传与 Web 编辑并发。
+8. 实现：`src/toolbox/webui_tcdoc_edit.py`（L3 用例）、`import_local.LocalImportClient.update_record / delete_record`（仍每次 `validate_target`）、`src/toolbox/webui/services/tcdoc.py`、路由 `/api/tcdoc/edit/{status,preview,update,delete}`。
+9. 不在本次授权内：批量修改、按条件批量删除、清空整表、改字段结构、新建 / 删除下拉选项、向已有行追加图片。
 9. 链接口径（2026-11-26）：QQ 必须把建单的 `dirId` 换成 `GetPlaylistByUin` 返回的 `tid` 再写，禁止把 `dirId` 直接拼成网页链接；酷狗云歌单只有分配 `specialid` 时才写 `special/single/{specialid}.html`，否则回执「平台无网页链接」不得写死链。已有链接经探测确认「已失效」时才允许自动替换；网络异常不视为失效。
 10. 手工覆盖：`write_manual` / WebUI 的「覆盖该列已有的其它链接」是用户当次显式选择，仅对本次填写的平台生效；不改变自动回写「不覆盖」的默认。
 

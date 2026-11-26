@@ -288,6 +288,42 @@ class LocalImportClient:
             raise UnknownWriteResult("新增结果缺少唯一 recordID，请先按原帖链接查回")
         return str(rows[0]["recordID"])
 
+    def update_record(self, record_id: str, values: dict) -> dict:
+        """按 recordID 更新白名单表的指定字段（行级，不碰表结构）。"""
+        validate_target(self.doc_key, self.tab_id, self.allow_test)
+        rid = str(record_id or "").strip()
+        if not rid:
+            raise ImportErrorDetail("修改必须明确指定 recordID")
+        if not isinstance(values, dict) or not values:
+            raise ImportErrorDetail("修改必须明确指定要写的字段")
+        if not self.file_id:
+            raise ImportErrorDetail("尚未核对文档身份")
+        path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
+                f"/sheets/{quote(self.tab_id, safe='')}")
+        data = self._request("POST", path, {"updateRecords": {"records": [
+            {"recordID": rid, "values": values}]}}, record_write=True)
+        result = data.get("updateRecords")
+        if not isinstance(result, dict):
+            raise UnknownWriteResult("官方接口未返回修改结果；未自动重试")
+        return result
+
+    def delete_record(self, record_id: str) -> dict:
+        """按 recordID 删除白名单表的单行（行级，不碰表结构）。"""
+        validate_target(self.doc_key, self.tab_id, self.allow_test)
+        rid = str(record_id or "").strip()
+        if not rid:
+            raise ImportErrorDetail("删除必须明确指定 recordID")
+        if not self.file_id:
+            raise ImportErrorDetail("尚未核对文档身份")
+        path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
+                f"/sheets/{quote(self.tab_id, safe='')}")
+        data = self._request("POST", path, {"deleteRecords": {
+            "recordIDs": [rid]}}, record_write=True)
+        result = data.get("deleteRecords")
+        if not isinstance(result, dict):
+            raise UnknownWriteResult("官方接口未返回删除结果；未自动重试")
+        return result
+
     def update_image_field(self, record_id: str, field_title: str,
                            entries: list[dict]) -> None:
         """线下活动「宣传图」追加：只更新指定行的单个图片字段。"""

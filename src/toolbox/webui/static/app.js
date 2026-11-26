@@ -10514,7 +10514,8 @@ function renderMusicTag(root) {
           ['bridge', '中间层同步'], ['sync', '表格同步'],
           ['daily', '历史记录'], ['snapshot', '采集明细'],
           ['revision', '修订记录'], ['members', '成员名单'],
-          ['docs', '文档管理'], ['writeback', '映射回写']
+          ['docs', '文档管理'], ['writeback', '映射回写'],
+          ['edit', '修改 / 删除']
         ];
         TABS.forEach(function (item) {
           tabs.appendChild(h('button', {
@@ -10556,6 +10557,7 @@ function renderMusicTag(root) {
           else if (state.tcdoc.tab === 'members') renderMembersTab();
           else if (state.tcdoc.tab === 'docs') renderDocsTab();
           else if (state.tcdoc.tab === 'writeback') renderWritebackTab();
+          else if (state.tcdoc.tab === 'edit') renderTcdocEdit(tabHost);
           else renderBridgeTab();
         }
 
@@ -11347,6 +11349,246 @@ function renderMusicTag(root) {
         h('th', null, '状态'), h('th', { class: 'num' }, '新增'),
         h('th', { class: 'num' }, '图片'),
         h('th', { class: 'num' }, '失败'))), body)));
+  }
+
+  function renderTcdocEdit(host) {
+    var rows = [];
+    var selected = new Set();
+    var tabSel = h('select', { class: 'select' },
+      h('option', { value: 'official' }, '官方动态'),
+      h('option', { value: 'live' }, '直播记录'));
+    var query = h('input', {
+      class: 'input', placeholder: '按标题 / 时间 / 账号筛选',
+      style: 'min-width:200px'
+    });
+    var loadBtn = h('button', { class: 'btn', type: 'button' }, '读取云端记录');
+    var delBtn = h('button', {
+      class: 'btn', type: 'button', disabled: true
+    }, '删除选中');
+    var selInfo = h('span', { class: 'muted small' }, '未选择');
+    var note = h('div', { class: 'muted small', style: 'margin:8px 0' },
+      '正在读取腾讯文档…');
+    var tableHost = h('div');
+    var gateOk = true;
+    var gateText = '';
+
+    function updateSel() {
+      selInfo.textContent = selected.size ? '已选 ' + selected.size + ' 条' : '未选择';
+      delBtn.disabled = !selected.size || !gateOk;
+    }
+
+    function render() {
+      if (!rows.length) {
+        tableHost.replaceChildren(empty('没有符合条件的记录。'));
+        return;
+      }
+      var keys = Object.keys(rows[0].summary || {});
+      var head = h('tr');
+      head.appendChild(h('th', null, '选择'));
+      head.appendChild(h('th', null, '记录 ID'));
+      keys.forEach(function (key) { head.appendChild(h('th', null, key)); });
+      head.appendChild(h('th', null, '操作'));
+      function mark() {
+        tableHost.querySelectorAll('tbody tr').forEach(function (tr) {
+          var rid = tr.getAttribute('data-rid');
+          tr.classList.toggle('selected', selected.has(rid));
+        });
+      }
+      var body = h('tbody');
+      rows.forEach(function (row) {
+        var box = h('input', {
+          type: 'checkbox', checked: selected.has(row.record_id)
+        });
+        box.addEventListener('change', function () {
+          if (box.checked) selected.add(row.record_id);
+          else selected.delete(row.record_id);
+          updateSel();
+          mark();
+        });
+        var editBtn = h('button', {
+          class: 'btn mini', type: 'button'
+        }, '修改');
+        editBtn.addEventListener('click', function () {
+          if (!gateOk) {
+            toast('需要先完成「同步前刷新」或在桌面端开启免校对模式', 'warning');
+            return;
+          }
+          openEditor(row);
+        });
+        var cells = [h('td', null, box),
+          h('td', { class: 'ellipsis' }, row.record_id.slice(0, 12))];
+        keys.forEach(function (key) {
+          cells.push(h('td', { class: 'ellipsis' },
+            (row.summary || {})[key] || ''));
+        });
+        cells.push(h('td', null, editBtn));
+        var tr = h('tr', { 'data-rid': row.record_id }, cells);
+        if (selected.has(row.record_id)) tr.classList.add('selected');
+        body.appendChild(tr);
+      });
+      tableHost.replaceChildren(h('div', { class: 'table-wrap' },
+        h('table', { class: 'db-table' },
+          h('thead', null, head), body)));
+    }
+
+    function openEditor(row) {
+      var overlay = h('div', { class: 'preview-overlay' });
+      overlay.addEventListener('click', function (event) {
+        if (event.target === overlay) overlay.remove();
+      });
+      var inputs = {};
+      var form = h('div');
+      Object.keys(row.values || {}).forEach(function (title) {
+        var input = h('textarea', { class: 'textarea', rows: 2 });
+        input.value = row.values[title] || '';
+        inputs[title] = input;
+        form.appendChild(h('div', {
+          class: 'muted small', style: 'margin-top:8px'
+        }, title));
+        form.appendChild(input);
+      });
+      var diffBox = h('div');
+      var submit = h('button', {
+        class: 'btn primary', type: 'button'
+      }, '预览改动');
+      var stage = 'preview';
+      var diffRows = [];
+      submit.addEventListener('click', function () {
+        if (stage === 'preview') {
+          diffRows = Object.keys(inputs).filter(function (title) {
+            return inputs[title].value.trim() !== (row.values[title] || '').trim();
+          }).map(function (title) {
+            return { title: title, old: row.values[title] || '',
+                     value: inputs[title].value.trim() };
+          });
+          if (!diffRows.length) {
+            toast('没有改动', 'warning');
+            return;
+          }
+          var tbody = h('tbody');
+          diffRows.forEach(function (item) {
+            tbody.appendChild(h('tr', null,
+              h('td', null, item.title),
+              h('td', { class: 'ellipsis' }, item.old),
+              h('td', {
+                class: 'ellipsis', style: 'color: var(--link)'
+              }, item.value)));
+          });
+          diffBox.replaceChildren(h('div', {
+            class: 'table-wrap', style: 'margin-top:10px'
+          }, h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+            h('th', null, '字段'), h('th', null, '当前'),
+            h('th', null, '改为'))), tbody)));
+          stage = 'confirm';
+          submit.textContent = '确认提交（' + diffRows.length + ' 项）';
+          return;
+        }
+        if (!window.confirm('将修改记录 ' + row.record_id + ' 的 '
+          + diffRows.length + ' 个字段。\n\n只改这一行、只改这些列，'
+          + '不改表结构、不改其它行。\n\n确定提交？')) {
+          return;
+        }
+        var values = {};
+        diffRows.forEach(function (item) { values[item.title] = item.value; });
+        submit.disabled = true;
+        post('/api/tcdoc/edit/update', {
+          tab: tabSel.value, record_id: row.record_id,
+          values: values, confirmed: true
+        }).then(function (result) {
+          overlay.remove();
+          toast(result.summary, result.verified ? 'success' : 'warning');
+          load();
+        }).catch(function (error) {
+          submit.disabled = false;
+          toast('修改失败：' + error.message, 'error');
+        });
+      });
+      overlay.appendChild(h('div', { class: 'preview-box' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'row-title' }, '修改记录'),
+          h('span', { style: 'flex:1' }),
+          submit,
+          h('button', {
+            class: 'btn', type: 'button',
+            onclick: function () { overlay.remove(); }
+          }, '关闭')),
+        h('div', { class: 'muted small', style: 'margin-top:4px' },
+          '记录 ' + row.record_id + ' · ' + (tabSel.value === 'live'
+            ? '直播记录' : '官方动态') + ' · 只列出文本列'),
+        form, diffBox));
+      document.body.appendChild(overlay);
+    }
+
+    function load() {
+      selected.clear();
+      updateSel();
+      setLoading(tableHost, '正在读取腾讯文档…');
+      post('/api/tcdoc/edit/preview', {
+        tab: tabSel.value, query: query.value.trim(), limit: 200
+      }).then(function (data) {
+        rows = data.rows || [];
+        var refresh = data.refresh || {};
+        gateOk = !!refresh.allowed;
+        gateText = gateOk ? '' : ('当前不可写：' + (refresh.message || '需要先同步前刷新'));
+        note.textContent = '「' + data.name + '」共 ' + fmtNumber(data.total)
+          + ' 条，显示 ' + fmtNumber(data.shown) + ' 条（' + data.doc_name
+          + ' · ' + data.tab_id + '）· ' + data.note
+          + (gateText ? ' · ' + gateText : '');
+        updateSel();
+        render();
+      }).catch(function (error) {
+        setError(tableHost, error, load);
+      });
+    }
+
+    loadBtn.addEventListener('click', load);
+    query.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') load();
+    });
+    delBtn.addEventListener('click', function () {
+      var ids = Array.from(selected);
+      if (!ids.length) return;
+      if (!gateOk) {
+        toast('需要先完成「同步前刷新」或在桌面端开启免校对模式', 'warning');
+        return;
+      }
+      var titles = ids.map(function (rid) {
+        var row = rows.filter(function (item) {
+          return item.record_id === rid;
+        })[0];
+        var names = row ? Object.keys(row.summary || {}).map(function (key) {
+          return row.summary[key];
+        }) : [];
+        return (names[0] || rid) + '（' + rid.slice(0, 12) + '）';
+      });
+      if (!window.confirm('将删除「' + (tabSel.value === 'live'
+        ? '直播记录' : '官方动态') + '」的 ' + ids.length + ' 条记录：\n\n'
+        + titles.slice(0, 10).join('\n')
+        + (ids.length > 10 ? '\n…' : '')
+        + '\n\n删除后本页无法撤销，请确认。')) {
+        return;
+      }
+      delBtn.disabled = true;
+      post('/api/tcdoc/edit/delete', {
+        tab: tabSel.value, record_ids: ids, confirmed: true
+      }).then(function (result) {
+        toast(result.summary, result.verified ? 'success' : 'warning');
+        load();
+      }).catch(function (error) {
+        delBtn.disabled = false;
+        toast('删除失败：' + error.message, 'error');
+      });
+    });
+
+    host.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' }, '表'), tabSel,
+        h('span', { class: 'muted small' }, '筛选'), query,
+        loadBtn, h('span', { style: 'flex:1' }), selInfo, delBtn),
+      h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '只允许「官方动态」「直播记录」的行级修改 / 删除，按记录 ID 操作；'
+        + '修改仅限文本列，删除与修改都要先预览再确认，写后读回核对。'),
+      note, tableHost));
   }
 
   function renderTcdocWriteback(host) {

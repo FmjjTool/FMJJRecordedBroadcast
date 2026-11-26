@@ -721,6 +721,20 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.start_writeback_upload(dict(req.json or {}))
     server.post("/api/tcdoc/writeback/upload", start_tcdoc_writeback)
 
+    server.get("/api/tcdoc/edit/status", lambda req: tcdoc.edit_status())
+
+    def tcdoc_edit_preview(req):
+        return tcdoc.edit_preview(dict(req.json or {}))
+    server.post("/api/tcdoc/edit/preview", tcdoc_edit_preview)
+
+    def tcdoc_edit_update(req):
+        return tcdoc.edit_update(dict(req.json or {}))
+    server.post("/api/tcdoc/edit/update", tcdoc_edit_update)
+
+    def tcdoc_edit_delete(req):
+        return tcdoc.edit_delete(dict(req.json or {}))
+    server.post("/api/tcdoc/edit/delete", tcdoc_edit_delete)
+
     server.get("/api/tcdoc/bridge", lambda req: tcdoc.bridge_overview())
 
     def tcdoc_bridge_preview(req):

@@ -168,9 +168,40 @@ class TCDocService:
         except module.TcdocWriteCancelled as exc:
             raise JobCancelled(str(exc)) from exc
 
+    def edit_status(self) -> dict:
+        return _edit_module().status()
+
+    def edit_preview(self, payload: dict) -> dict:
+        payload = payload or {}
+        try:
+            limit = int(payload.get("limit") or 200)
+        except (TypeError, ValueError):
+            limit = 200
+        return _edit_module().preview(
+            str(payload.get("tab") or ""),
+            str(payload.get("query") or ""), limit)
+
+    def edit_update(self, payload: dict) -> dict:
+        payload = payload or {}
+        values = payload.get("values")
+        if not isinstance(values, dict):
+            raise ValueError("修改内容格式错误")
+        return _edit_module().update(
+            str(payload.get("tab") or ""),
+            str(payload.get("record_id") or ""),
+            values, bool(payload.get("confirmed")))
+
+    def edit_delete(self, payload: dict) -> dict:
+        payload = payload or {}
+        ids = payload.get("record_ids")
+        if not isinstance(ids, list):
+            raise ValueError("记录清单格式错误")
+        return _edit_module().delete(
+            str(payload.get("tab") or ""), ids,
+            bool(payload.get("confirmed")))
+
     def bridge_overview(self) -> dict:
         return _bridge_module().overview()
-
     def bridge_preview(self, payload: dict) -> dict:
         return _bridge_module().preview(payload)
 
@@ -275,6 +306,11 @@ def _write_module():
 def _bridge_module():
     from toolbox import webui_tcdoc_bridge
     return webui_tcdoc_bridge
+
+
+def _edit_module():
+    from toolbox import webui_tcdoc_edit
+    return webui_tcdoc_edit
 
 
 def _row_dict(row) -> dict:
