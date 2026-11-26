@@ -95,6 +95,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         req.q("platform"), req.q_int("page", 1, 1),
         req.q_int("page_size", 50, 1, 200), req.q("q"), req.q("author"),
         req.q("order_by"), _truthy(req.q("ascending"))))
+    server.post("/api/assets/db/delete", lambda req: assets.db_delete(req.json))
     server.get("/api/assets/local/groups",
                lambda req: assets.local_groups(
                    req.q("cat"), req.q_int("page", 1, 1),

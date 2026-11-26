@@ -71,7 +71,7 @@ class BiliUploadDialog(QDialog):
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
         layout = QVBoxLayout(content)
-        hint = QLabel("视频须先在命名投稿页完成命名，再开始上传投稿。分区、简介和来源可自行填写。")
+        hint = QLabel("没有视频时也可先配置并保存投稿模板；视频完成命名后再选择上传。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         templates = QHBoxLayout()
@@ -194,6 +194,7 @@ class BiliUploadDialog(QDialog):
         self.save_btn.clicked.connect(self.save_config)
         actions.addWidget(self.save_btn)
         self.start_btn = QPushButton("开始上传")
+        self.start_btn.setToolTip("选择已重命名视频并完成账号验证后开始上传；没有视频时可先保存模板")
         self.start_btn.clicked.connect(self.start_upload)
         actions.addWidget(self.start_btn)
         self.cancel_btn = QPushButton("关闭")
@@ -405,6 +406,8 @@ class BiliUploadDialog(QDialog):
 
     def refresh_preview(self):
         paths = self.selected_paths()
+        self.start_btn.setEnabled(bool(paths) and bool(self._verified_identity)
+                                  and not self.busy and not self._checking_account)
         self._sync_source_platform(paths)
         parts = BU.multipart_count(paths, self.date.text().strip())
         self.setWindowTitle("B站视频上传 · 文案" + ("与分P预览" if parts else "预览"))
@@ -413,6 +416,9 @@ class BiliUploadDialog(QDialog):
         self.multipart_hint.setText(f"今天的 {parts} 个录播可组成同一条视频的 {parts} P；拖动列表调整顺序。")
         self.multipart_hint.setVisible(bool(parts))
         self.files.setDragDropMode(QListWidget.InternalMove if parts else QListWidget.NoDragDrop)
+        if not paths:
+            self.preview.setPlainText("尚未选择视频，可先配置并保存投稿模板；选择已重命名视频后再预览和上传。")
+            return
         try:
             metadata = BU.build_metadata(paths, self.current_config())
             self.preview.setPlainText(f"标题：{metadata['title']}\n简介：{metadata['desc']}\n"
@@ -546,7 +552,7 @@ class BiliUploadDialog(QDialog):
                 QTimer.singleShot(0, self.check_account)
                 return
             self._verified_identity = identity
-            self.start_btn.setEnabled(True)
+            self.start_btn.setEnabled(bool(self.selected_paths()))
             self._fill_seasons(seasons)
             self.account_label.setText(f"当前投稿账号：{account['name']}（UID {account['mid']}）" +
                                       ("；分区读取失败，可手工填写分区 ID" if category_error else ""))
@@ -657,7 +663,7 @@ class BiliUploadDialog(QDialog):
                 self.uploader.close()
         def done(result, error):
             self.busy = False
-            self.start_btn.setEnabled(True)
+            self.start_btn.setEnabled(bool(self.selected_paths()) and bool(self._verified_identity))
             self.save_btn.setEnabled(True)
             self.templates.setEnabled(True)
             self.save_as_btn.setEnabled(True)

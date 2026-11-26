@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 
-from toolbox import webui_assets_dl
+from toolbox import webui_assets_db, webui_assets_dl
 from toolbox.asset_query import AssetQueryService
 from toolbox.webui.jobs import JobCancelled
 
@@ -33,6 +33,9 @@ class AssetService:
                 ascending: bool = False) -> dict:
         return self._query.db_rows(platform, page, page_size, keyword, author,
                                    order_by, ascending)
+
+    def db_delete(self, payload: dict) -> dict:
+        return webui_assets_db.delete_rows(payload)
 
     def entries(self, page: int, page_size: int, keyword: str = "",
                 platform: str = "") -> dict:

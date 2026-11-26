@@ -2100,21 +2100,21 @@ class TcDocBridgePanel(QWidget):
     def _run_playlist_write(self, event, entries, overwrite: bool = False) -> None:
         from toolbox.tcdoc import event_playlist
 
-        self.status.setText(f"正在写入「{event.get('name') or ''}」的活动歌单…")
+        self.status.setText(f"正在补充「{event.get('name') or ''}」的活动歌单…")
 
         def work():
             return event_playlist.write_manual(event, entries, overwrite=overwrite)
 
         def done(receipt, err):
             if err:
-                self.status.setText(f"歌单录入失败：{err}")
-                QMessageBox.warning(self, "歌单录入", f"写入失败：{err}")
+                self.status.setText(f"活动歌单补录失败：{err}")
+                QMessageBox.warning(self, "活动歌单补录", f"写入失败：{err}")
                 return
             text = event_playlist.summary_text(receipt)
             self.status.setText(text)
             tip = "\n\n已写入腾讯文档；本地快照未更新，需要查看请点「同步前刷新」。" \
                 if receipt.get("ok") else ""
-            QMessageBox.information(self, "歌单录入", text + tip)
+            QMessageBox.information(self, "活动歌单补录", text + tip)
 
         run_bg(work, done, owner=self)
 

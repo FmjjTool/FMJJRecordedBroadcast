@@ -21,6 +21,7 @@ def _qq_public_row(row) -> dict:
         "name": row.name,
         "members": row.member_count,
         "change": row.delta_text,
+        "delta": row.change,
         "status": row.status,
         "source": {"share": "分享链接", "login": "群号"}.get(row.source, "-"),
         "updated": row.fetched_at,

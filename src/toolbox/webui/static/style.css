@@ -429,6 +429,20 @@ code {
 
 .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); }
 table { width: 100%; border-collapse: collapse; min-width: 680px; }
+table.fg-table { min-width: 0; table-layout: fixed; }
+table.fg-table th, table.fg-table td { overflow: hidden; text-overflow: ellipsis; }
+.fg-table-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.fg-table-controls { justify-content: flex-end; margin-top: 8px; }
+.fg-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.fg-column-menu { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--input); border-radius: var(--radius-sm); background: var(--panel); box-shadow: var(--shadow); }
+.fg-column-menu .btn { text-align: left; }
+.fg-qq-card .table-wrap { overflow-x: hidden; }
+.fg-qq-card table.fg-table th, .fg-qq-card table.fg-table td { padding: 7px 6px; }
+table.fg-query-table th, table.fg-query-table td,
+table.fg-refresh-errors-table th, table.fg-refresh-errors-table td { padding: 7px 6px; }
+table.fg-refresh-errors-table th, table.fg-refresh-errors-table td { white-space: normal; overflow-wrap: anywhere; }
+table.fg-table th.sortable { cursor: pointer; user-select: none; }
+table.fg-table th.sortable:hover, table.fg-table th.sortable:focus-visible { color: var(--link); }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 th { background: var(--panel-2); color: var(--muted); font-size: 11px; font-weight: normal; white-space: nowrap; }
 tbody tr:hover { background: var(--panel-2); }
@@ -577,6 +591,16 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   .pager { flex-wrap: wrap; justify-content: flex-start; }
   .pager button, .toolbar button { min-height: 32px; }
   .table-wrap { margin: 0 -2px; }
+  .fg-qq-card .table-wrap { margin: 0; }
+  .fg-qq-card .fg-extra { display: none; }
+  .fg-qq-card .fg-table th:nth-child(1), .fg-qq-card .fg-table td:nth-child(1) { width: 12% !important; }
+  .fg-qq-card .fg-table th:nth-child(2), .fg-qq-card .fg-table td:nth-child(2) { width: 30% !important; }
+  .fg-qq-card .fg-table th:nth-child(4), .fg-qq-card .fg-table td:nth-child(4) { width: 20% !important; }
+  .fg-qq-card .fg-table th:nth-child(8), .fg-qq-card .fg-table td:nth-child(8) { width: 38% !important; }
+  .fg-qq-card table.fg-table th, .fg-qq-card table.fg-table td { padding: 6px 4px; }
+  .fg-row-actions { flex-direction: column; align-items: stretch; }
+  .fg-row-actions .btn { white-space: nowrap; }
+  .fg-table-heading { align-items: flex-start; flex-direction: column; }
   .row-meta { flex-wrap: wrap; }
   .job-head { flex-wrap: wrap; }
   .col-list { max-height: 360px; min-height: 160px; }

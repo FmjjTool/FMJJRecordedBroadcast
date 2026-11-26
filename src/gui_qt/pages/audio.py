@@ -19,7 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QListWidgetItem,
-    QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
+    QProgressBar, QPushButton, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox.asr_engine import (
@@ -35,7 +35,7 @@ from toolbox.config_manager import load_convert_config, save_convert_config
 from toolbox.utils import format_size, is_audio_file, is_media_file
 
 from gui_qt.asr_settings_dialog import AsrSettingsDialog
-from gui_qt.common import post_to_main, run_bg, start_page_thread
+from gui_qt.common import FlowLayout, post_to_main, run_bg, start_page_thread
 from gui_qt.pages.base import BasePage
 from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import ToolSectionCard
@@ -93,30 +93,38 @@ class AudioPage(BasePage):
 
         # 字幕：提取后直接联网/本地识别
         cfg = load_convert_config()
-        asr_row = QHBoxLayout()
+        asr_options = FlowLayout(spacing=8, center_items=True)
+
+        def option_group(label, combo):
+            # 标签与下拉作为一组换行，控件保持内容宽度，不吸收横向留白。
+            group = QWidget()
+            row = QHBoxLayout(group)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addWidget(QLabel(label))
+            row.addWidget(combo)
+            group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            asr_options.addWidget(group)
+
         self.asr_check = QCheckBox("提取后自动转字幕")
         self.asr_check.setChecked(bool(cfg.get("asr_enabled", False)))
         self.asr_check.toggled.connect(self._on_asr_changed)
-        asr_row.addWidget(self.asr_check)
-        asr_row.addWidget(QLabel("引擎:"))
+        asr_options.addWidget(self.asr_check)
         self.engine_combo = QComboBox()
         for key, label in ASR_ENGINES:
             self.engine_combo.addItem(label, key)
         idx = self.engine_combo.findData(cfg.get("asr_engine", "bijian"))
         self.engine_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.engine_combo.currentIndexChanged.connect(self._on_asr_changed)
-        asr_row.addWidget(self.engine_combo)
+        option_group("引擎:", self.engine_combo)
         settings_btn = QPushButton("语音设置")
         settings_btn.setStyleSheet("padding: 2px 8px;")
         settings_btn.clicked.connect(self._open_asr_settings)
-        asr_row.addWidget(settings_btn)
-        asr_row.addStretch(1)
+        asr_options.addWidget(settings_btn)
         self.asr_status = QLabel("")
         self.asr_status.setStyleSheet("font-size: 11px;")
-        asr_row.addWidget(self.asr_status)
+        asr_options.addWidget(self.asr_status)
 
-        asr_row2 = QHBoxLayout()
-        asr_row2.addWidget(QLabel("提取内容:"))
         self.audio_mode_combo = QComboBox()
         self.audio_mode_combo.addItem("第一条音轨", "first")
         self.audio_mode_combo.addItem("全部音轨", "all")
@@ -124,36 +132,33 @@ class AudioPage(BasePage):
         self.audio_mode_combo.setCurrentIndex(max(0, idx))
         self.audio_mode_combo.setToolTip("多音轨录制（如游戏+麦克风）可选「全部音轨」分别提取")
         self.audio_mode_combo.currentIndexChanged.connect(self._on_asr_changed)
-        asr_row2.addWidget(self.audio_mode_combo)
-        asr_row2.addWidget(QLabel("本地模型:"))
+        option_group("提取内容:", self.audio_mode_combo)
         self.local_model_combo = QComboBox()
         for key, label, _size in LOCAL_MODELS:
             self.local_model_combo.addItem(label.split("（")[0], key)
         idx = self.local_model_combo.findData(cfg.get("asr_local_model", "base"))
         self.local_model_combo.setCurrentIndex(idx if idx >= 0 else 1)
         self.local_model_combo.currentIndexChanged.connect(self._on_asr_changed)
-        asr_row2.addWidget(self.local_model_combo)
+        option_group("本地模型:", self.local_model_combo)
         self.skip_sub_check = QCheckBox("跳过已有字幕")
         self.skip_sub_check.setChecked(bool(cfg.get("asr_skip_existing", True)))
         self.skip_sub_check.toggled.connect(self._on_asr_changed)
-        asr_row2.addWidget(self.skip_sub_check)
+        asr_options.addWidget(self.skip_sub_check)
         self.output_txt_check = QCheckBox("同时输出 TXT")
         self.output_txt_check.setChecked(bool(cfg.get("asr_output_txt", True)))
         self.output_txt_check.toggled.connect(self._on_asr_changed)
-        asr_row2.addWidget(self.output_txt_check)
+        asr_options.addWidget(self.output_txt_check)
         self.delete_audio_check = QCheckBox("转录后删除音频")
         self.delete_audio_check.setToolTip("字幕生成成功后，把提取出的 m4a 音频移入回收站")
         self.delete_audio_check.setChecked(bool(cfg.get("asr_delete_audio", False)))
         self.delete_audio_check.toggled.connect(self._on_asr_changed)
-        asr_row2.addWidget(self.delete_audio_check)
-        asr_row2.addStretch(1)
+        asr_options.addWidget(self.delete_audio_check)
 
         run_card = self._section("提取与字幕", "music")
         run_card.content_layout.addLayout(ctrl_row)
         run_card.content_layout.addWidget(self.progress)
         run_card.content_layout.addLayout(btn_row)
-        run_card.content_layout.addLayout(asr_row)
-        run_card.content_layout.addLayout(asr_row2)
+        run_card.content_layout.addLayout(asr_options)
         layout.addWidget(run_card)
         self._refresh_asr_state()
 

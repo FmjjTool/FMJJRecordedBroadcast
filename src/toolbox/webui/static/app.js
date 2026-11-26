@@ -3836,73 +3836,170 @@ function renderLivestreamSummary(root) {
   function renderDb(host) {
     host.replaceChildren();
     var controls = h('div', { class: 'toolbar' });
+    var actions = h('div', { class: 'toolbar' });
     var tableHost = h('div');
     var pagerHost = h('div', { class: 'pager' });
     var platform = h('select', { class: 'select' });
     var search = h('input', { class: 'input grow', placeholder: '搜索标题、作者、正文或作品 ID', value: state.assets.dbQ });
     var columns = null;
+    var selected = new Set();
+    var rows = [];
+    var busy = false;
+    var loading = false;
+    var queryPending = false;
+    var requestSeq = 0;
+    var selectAll = h('button', { class: 'btn', type: 'button', onclick: function () {
+      rows.forEach(function (row) { selected.add(row.dedup_key); });
+      syncChecks();
+    } }, '全选');
+    var clear = h('button', { class: 'btn', type: 'button', onclick: function () {
+      selected.clear();
+      syncChecks();
+    } }, '清除');
+    var remove = h('button', { class: 'btn danger', type: 'button', onclick: function () {
+      deleteRows(Array.from(selected));
+    } }, '删除所选');
+    var count = h('span', { class: 'muted small' }, '已勾选 0 条');
+    var refresh = h('button', { class: 'btn', type: 'button', onclick: function () {
+      api('/api/assets/db/tables').then(function (data) {
+        updateTables(data.tables);
+        return load(true);
+      }).catch(function (error) { toast(error.message, 'error'); });
+    } }, '刷新');
+    actions.append(selectAll, clear, remove, count);
+    controls.append(platform, search, refresh);
+    host.append(controls, actions, tableHost, pagerHost);
+
+    function syncChecks() {
+      tableHost.querySelectorAll('input[data-db-key]').forEach(function (box) {
+        box.checked = selected.has(box.dataset.dbKey);
+      });
+      syncControls();
+    }
+
+    function syncControls() {
+      var disabled = busy || loading;
+      platform.disabled = search.disabled = refresh.disabled = disabled;
+      selectAll.disabled = disabled || queryPending || !rows.length;
+      clear.disabled = remove.disabled = disabled || queryPending || !selected.size;
+      count.textContent = '已勾选 ' + selected.size + ' 条';
+      tableHost.querySelectorAll('input, button').forEach(function (control) {
+        control.disabled = disabled || queryPending;
+      });
+      pagerHost.querySelectorAll('button').forEach(function (button) {
+        button.disabled = disabled || queryPending || button.dataset.boundaryDisabled === '1';
+      });
+    }
+
+    function updateTables(tables) {
+      platform.replaceChildren();
+      tables.forEach(function (table) {
+        platform.appendChild(h('option', { value: table.name }, table.name + '（' + fmtNumber(table.rows) + ' 行）'));
+      });
+      var names = tables.map(function (table) { return table.name; });
+      if (names.indexOf(state.assets.dbPlatform) < 0) {
+        state.assets.dbPlatform = names.indexOf('douyin') >= 0 ? 'douyin' : (names[0] || '');
+        state.assets.dbPage = 1;
+      }
+      platform.value = state.assets.dbPlatform;
+    }
+
+    function deleteRows(keys) {
+      if (busy || loading || queryPending || !keys.length) return;
+      if (!window.confirm('删除「' + state.assets.dbPlatform + '」中的 ' + keys.length
+        + ' 条记录？\n\n仅删除数据库记录，不删除已导出的文件。此操作不可恢复。')) return;
+      busy = true;
+      syncControls();
+      post('/api/assets/db/delete', {
+        platform: state.assets.dbPlatform, keys: keys, confirmed: true
+      }).then(function (data) {
+        keys.forEach(function (key) { selected.delete(key); });
+        updateTables(data.tables);
+        toast('已删除 ' + data.deleted + ' 条', 'success');
+        return load(true);
+      }).catch(function (error) {
+        toast('删除失败：' + error.message, 'error');
+      }).finally(function () {
+        busy = false;
+        syncControls();
+      });
+    }
 
     setLoading(tableHost, '正在读取数据库表…');
     api('/api/assets/db/tables').then(function (data) {
+      updateTables(data.tables);
       if (!data.tables.length) {
         tableHost.replaceChildren(empty('暂无增量采集数据库。先在桌面端完成一次账号增量采集。'));
+        syncControls();
         return;
       }
-      data.tables.forEach(function (table) {
-        platform.appendChild(h('option', { value: table.name }, table.name + '（' + fmtNumber(table.rows) + ' 行）'));
-      });
-      var names = data.tables.map(function (table) { return table.name; });
-      if (!state.assets.dbPlatform || names.indexOf(state.assets.dbPlatform) < 0) {
-        state.assets.dbPlatform = names.indexOf('douyin') >= 0 ? 'douyin' : names[0];
-      }
-      platform.value = state.assets.dbPlatform;
       platform.addEventListener('change', function () {
         state.assets.dbPlatform = platform.value;
         state.assets.dbPage = 1;
+        selected.clear();
         load();
       });
       search.addEventListener('input', function () {
         clearTimeout(searchTimer);
+        queryPending = true;
+        syncControls();
         searchTimer = setTimeout(function () {
+          queryPending = false;
           state.assets.dbQ = search.value.trim();
           state.assets.dbPage = 1;
+          selected.clear();
           load();
         }, 320);
       });
-      controls.appendChild(platform);
-      controls.appendChild(search);
-      host.appendChild(controls);
-      host.appendChild(tableHost);
-      host.appendChild(pagerHost);
       load();
     }).catch(function (error) { setError(tableHost, error); });
 
-    function load() {
-      setLoading(tableHost, '正在查询…');
-      api('/api/assets/db/rows?platform=' + encodeURIComponent(state.assets.dbPlatform) +
+    function load(preserveScroll) {
+      var seq = ++requestSeq;
+      var scrollX = window.scrollX, scrollY = window.scrollY;
+      loading = true;
+      syncControls();
+      if (!preserveScroll) setLoading(tableHost, '正在查询…');
+      return api('/api/assets/db/rows?platform=' + encodeURIComponent(state.assets.dbPlatform) +
         '&page=' + state.assets.dbPage + '&page_size=50&q=' + encodeURIComponent(state.assets.dbQ) +
         '&order_by=' + encodeURIComponent(state.assets.dbOrder) + '&ascending=' + (state.assets.dbAsc ? '1' : '0'))
         .then(function (data) {
+          if (seq !== requestSeq || !host.isConnected) return;
+          state.assets.dbPage = data.page;
           columns = data.columns;
+          rows = data.rows;
+          var visible = new Set(rows.map(function (row) { return row.dedup_key; }));
+          selected.forEach(function (key) { if (!visible.has(key)) selected.delete(key); });
           if (!data.rows.length) {
             tableHost.replaceChildren(empty('没有匹配的数据。可清空搜索词或切换平台。'));
             pagerHost.replaceChildren();
             return;
           }
-          var head = h('tr');
+          var head = h('tr', null, h('th', null, ''));
           columns.forEach(function (column) {
             head.appendChild(h('th', {
               class: 'sortable', dataset: { order: column },
               onclick: function () {
+                if (busy || loading) return;
                 if (state.assets.dbOrder === column) state.assets.dbAsc = !state.assets.dbAsc;
                 else { state.assets.dbOrder = column; state.assets.dbAsc = false; }
+                state.assets.dbPage = 1;
+                selected.clear();
                 load();
               }
             }, dbColumnLabel(column), state.assets.dbOrder === column ? (state.assets.dbAsc ? ' ↑' : ' ↓') : ''));
           });
+          head.appendChild(h('th', null, '操作'));
           var body = h('tbody');
           data.rows.forEach(function (row) {
-            var tr = h('tr');
+            var box = h('input', { type: 'checkbox', checked: selected.has(row.dedup_key),
+              dataset: { dbKey: row.dedup_key }, 'aria-label': '勾选记录',
+              onchange: function () {
+                if (box.checked) selected.add(row.dedup_key);
+                else selected.delete(row.dedup_key);
+                syncControls();
+              } });
+            var tr = h('tr', null, h('td', null, box));
             columns.forEach(function (column) {
               var value = row[column];
               if (value === null || value === undefined) value = '';
@@ -3910,15 +4007,32 @@ function renderLivestreamSummary(root) {
               if (text.length > 300) text = text.slice(0, 300) + '…';
               tr.appendChild(h('td', { class: column === 'description' ? 'ellipsis' : '' }, text));
             });
+            tr.appendChild(h('td', null, h('button', {
+              class: 'btn danger', type: 'button',
+              onclick: function () { deleteRows([row.dedup_key]); }
+            }, '删除')));
             body.appendChild(tr);
           });
           tableHost.replaceChildren(h('div', { class: 'table-wrap' },
             h('table', { class: 'db-table' }, h('thead', null, head), body)));
           pager(pagerHost, data.page, data.pages, data.total, function (page) {
+            if (busy || loading) return;
             state.assets.dbPage = page;
+            selected.clear();
             load();
           });
-        }).catch(function (error) { setError(tableHost, error, load); });
+          pagerHost.querySelectorAll('button').forEach(function (button) {
+            button.dataset.boundaryDisabled = button.disabled ? '1' : '0';
+          });
+          if (preserveScroll) window.scrollTo(scrollX, scrollY);
+        }).catch(function (error) {
+          if (seq === requestSeq) setError(tableHost, error, function () { load(); });
+        }).finally(function () {
+          if (seq === requestSeq) {
+            loading = false;
+            syncControls();
+          }
+        });
     }
   }
 
@@ -4434,8 +4548,7 @@ function renderLivestreamSummary(root) {
       var categoryInfo = results[5] || null;
       host.replaceChildren();
       if (!overview.has_work_dir) {
-        host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
-        return;
+        host.appendChild(empty('尚未设置工作目录，仍可先配置并保存投稿模板；视频准备好后再设置工作目录。'));
       }
       var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
       stats.appendChild(statCard('视频', fmtNumber(overview.files), '工作目录内'));
@@ -4446,9 +4559,8 @@ function renderLivestreamSummary(root) {
       host.appendChild(stats);
       host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'muted small' }, overview.note || '')));
-      if (!preview.items.length) {
-        host.appendChild(empty('工作目录下没有可预览的视频。'));
-        return;
+      if (overview.has_work_dir && !preview.items.length) {
+        host.appendChild(empty('工作目录下没有可预览的视频，仍可先配置并保存投稿模板。'));
       }
 
       var jobHost = h('div');
@@ -4761,7 +4873,7 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
           '先在下方表格勾选已标准命名的视频（可多选成分 P），填好投稿信息后「预检」，'
           + '通过后「确认投稿」才会真实上传。'
-          + (publishInfo.logged_in ? '' : ' 当前未检测到 B站登录 Cookie。')),
+          + (publishInfo.logged_in ? '' : ' 当前未登录 B站。')),
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '标题模板'), titleInput),
         h('div', { style: 'margin-top:6px' }, descInput),
@@ -5041,10 +5153,12 @@ function renderLivestreamSummary(root) {
           h('td', null, item.standard ? '是' : '否'),
           actionCell));
       });
-      host.appendChild(h('div', { class: 'table-wrap' },
-        h('table', { class: 'db-table' }, h('thead', null, head), body)));
-      host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
-        preview.note || '点击「命名」生成标准文件名。'));
+      if (preview.items.length) {
+        host.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' }, h('thead', null, head), body)));
+        host.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
+          preview.note || '点击「命名」生成标准文件名。'));
+      }
       syncPublish();
     }).catch(function (error) {
       setError(host, error, function () { renderRename(host); });
@@ -7546,7 +7660,7 @@ function renderLivestreamSummary(root) {
                 { key: 'group_no', label: '群号', extra: true },
                 { key: 'members', label: '人数', numeric: true, width: 70,
                   render: function (row) { return row.member_text || row.members || '-'; } },
-                { key: 'change', label: '变化', numeric: true, width: 65,
+                { key: 'delta', label: '变化', numeric: true, width: 65,
                   render: function (row) { return row.change_text; } },
                 { key: 'tags', label: '标签', extra: true },
                 { key: 'url', label: '链接', width: 70,
@@ -7593,7 +7707,7 @@ function renderLivestreamSummary(root) {
       var qqRefreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新全部');
       var qqRefreshJobHost = h('div');
       var qqRefreshing = false;
-      var qqRefreshErrorsHost = h('div');
+      var qqRefreshErrorsHost = h('div', { class: 'fg-qq-result' });
 
       function updateQqGroup(row) {
         var index = groups.findIndex(function (item) { return item.no === row.no; });
@@ -7655,6 +7769,12 @@ function renderLivestreamSummary(root) {
 
       function draw() {
         var subscribedGroups = groups.filter(function (row) { return row.subscribed; });
+        qqRefreshBtn.disabled = qqRefreshing || subscribedGroups.length === 0;
+        if (!subscribedGroups.length) {
+          qqRefreshBtn.title = '请先查询并订阅 QQ 群';
+        } else {
+          qqRefreshBtn.removeAttribute('title');
+        }
         if (!groups.length) {
           tableHost.replaceChildren(empty(
             '暂无已订阅 QQ 群。桌面端「订阅列表」添加群号或分享链接后刷新。'));
@@ -7662,17 +7782,17 @@ function renderLivestreamSummary(root) {
         }
         var tableRows = groups.map(function (row) {
           var item = Object.assign({}, row);
-          item.change_value = row.change;
+          item.change_value = row.delta;
           item.source = row.subscribed ? row.source : '未订阅';
           return item;
         });
-        tableHost.replaceChildren(
+        var card = h('div', { class: 'card fg-qq-card' },
           h('div', { class: 'fg-table-heading' },
             h('div', { class: 'row-title' }, 'QQ群订阅列表'),
             h('span', { class: 'muted small' },
               '共 ' + fmtNumber(groups.length) + ' 个群 · 已订阅 '
-              + fmtNumber(data.subscribed_count || 0) + ' 个')),
-          groupTable('qq', tableRows, [
+              + fmtNumber(data.subscribed_count || 0) + ' 个')));
+        card.appendChild(groupTable('qq', tableRows, [
             { key: '', label: '', width: 48,
               render: function (row) {
                 var fallback = h('span', {
@@ -7691,41 +7811,68 @@ function renderLivestreamSummary(root) {
             { key: 'no', label: '群号', extra: true, width: 90 },
             { key: 'members', label: '人数', numeric: true, width: 80,
               render: function (row) { return row.members == null ? '-' : fmtNumber(row.members); } },
-            { key: 'change_value', label: '变化', numeric: true, extra: true, width: 70 },
+            { key: 'change_value', label: '变化', numeric: true, extra: true, width: 70,
+              render: function (row) {
+                var change = row.change || '-';
+                var kind = typeof row.change_value === 'number'
+                  ? (row.change_value > 0 ? 'delta-up'
+                    : (row.change_value < 0 ? 'delta-down' : '')) : '';
+                return h('span', { class: kind }, change);
+              } },
             { key: 'status', label: '状态', extra: true, width: 150 },
             { key: 'source', label: '来源', extra: true, width: 90 },
             { key: '', label: '操作', width: 88,
               render: function (row) {
-                if (!row.subscribed) return h('span', { class: 'muted small' }, '未订阅');
+                var actions = h('div', { class: 'fg-row-actions' });
+                var active = state.fangroups.open === row.no;
+                actions.appendChild(h('button', {
+                  class: 'btn mini', type: 'button',
+                  onclick: function () {
+                    if (active) {
+                      state.fangroups.open = '';
+                      historyHost.replaceChildren();
+                    } else {
+                      state.fangroups.open = row.no;
+                      loadHistory(row);
+                    }
+                    draw();
+                  }
+                }, active ? '收起' : '历史'));
+                if (!row.subscribed) {
+                  actions.appendChild(h('span', { class: 'muted small' }, '未订阅'));
+                  return actions;
+                }
                 var button = h('button', {
                   class: 'btn mini danger', type: 'button',
-                  'aria-label': '取消订阅 ' + (row.name || row.no),
-                  title: '取消后保留人数历史和头像',
-                  onclick: function () {
-                    if (!window.confirm('取消订阅「' + (row.name || row.no)
-                      + '」？\n\n将停止后续刷新人数，已有历史和头像保留。')) return;
-                    button.disabled = true;
-                    post('/api/tools/fangroups/qq/remove', {
-                      no: row.no, confirmed: true
-                    }).then(function (result) {
-                      row.subscribed = false;
-                      row.source = '未订阅';
-                      qqRefreshErrorsHost.replaceChildren();
-                      draw();
-                      toast(result.summary || '已取消订阅，历史和头像保留', 'success');
-                    }).catch(function (error) {
-                      button.disabled = false;
-                      toast('取消订阅失败：' + error.message, 'error');
-                    });
-                  }
+                  'aria-label': '取消订阅',
+                  title: '取消「' + (row.name || row.no) + '」订阅；保留人数历史和头像'
                 }, '取消订阅');
-                return button;
+                button.addEventListener('click', function () {
+                  if (!window.confirm('取消订阅「' + (row.name || row.no)
+                    + '」？\n\n将停止后续刷新人数，已有历史和头像保留。')) return;
+                  button.disabled = true;
+                  post('/api/tools/fangroups/qq/remove', {
+                    no: row.no, confirmed: true
+                  }).then(function (result) {
+                    row.subscribed = false;
+                    row.source = '未订阅';
+                    data.subscribed_count = Math.max(0, Number(data.subscribed_count || 0) - 1);
+                    qqRefreshErrorsHost.replaceChildren();
+                    draw();
+                    toast(result.summary || '已取消订阅，历史和头像保留', 'success');
+                  }).catch(function (error) {
+                    button.disabled = false;
+                    toast('取消订阅失败：' + error.message, 'error');
+                  });
+                });
+                actions.appendChild(button);
+                return actions;
               } }
           ], 'fg-qq-table'));
-        tableHost.firstChild.classList.add('fg-qq-card');
+        tableHost.replaceChildren(card);
         if (!subscribedGroups.length) {
-          tableHost.insertBefore(h('div', { class: 'muted small fg-no-subscriptions' },
-            '当前没有已订阅的群。查询并订阅后可刷新人数。'), tableHost.children[1]);
+          card.insertBefore(h('div', { class: 'muted small fg-no-subscriptions' },
+            '当前没有已订阅的群。查询并订阅后可刷新人数。'), card.children[1]);
         }
         if (state.fangroups.open && !groups.some(function (row) { return row.no === state.fangroups.open; })) {
           state.fangroups.open = '';
@@ -11118,6 +11265,7 @@ function renderMusicTag(root) {
             var isSnapshot = !!target && target.profile === 'fragments';
             accSel.style.display = (isLives || isSnapshot) ? 'none' : '';
             daysSel.disabled = isSnapshot;
+            manualBtn.style.display = isSnapshot ? 'none' : '';
             optAllow.checked = false;
             optLabel.style.display = 'none';
             optPanel.replaceChildren();
@@ -11471,97 +11619,103 @@ function renderMusicTag(root) {
             });
           });
 
-          playlistBtn.addEventListener('click', function () {
-            api('/api/tcdoc/bridge/events').then(function (data) {
-              var events = data.events || [];
-              if (!events.length) {
-                toast('本地没有线下活动快照，请先同步表格', 'warning');
-                return;
+          manualBtn.addEventListener('click', function () {
+            var target = targetNow();
+            if (!target || busy) return;
+            var identity = { doc_key: target.doc_key, tab_id: target.tab_id };
+            manualBtn.disabled = true;
+            post('/api/tcdoc/bridge/manual/schema', identity).then(function (schema) {
+              var overlay = h('div', { class: 'preview-overlay', tabindex: '-1' });
+              var mode = h('select', { class: 'select', style: 'flex:1' },
+                h('option', { value: 'new' }, '新增待复制行'));
+              if (schema.playlist_allowed) {
+                mode.appendChild(h('option', { value: 'playlist' }, '补充已有活动歌单'));
               }
+              var fields = {};
+              var panel = h('div');
+              var message = h('div', { class: 'muted small', style: 'margin-top:8px;white-space:pre-wrap' });
+              var tsv = h('textarea', { class: 'textarea', rows: 5, readonly: true,
+                style: 'font-family:monospace;font-size:12px;display:none' });
+              var copy = h('button', { class: 'btn', type: 'button' }, '复制 TSV');
+              var submit = h('button', { class: 'btn primary', type: 'button' }, '生成 TSV');
+              var playlistPanel = h('div', { style: 'display:none' });
+              var playlistInputs = {};
               var evSel = h('select', { class: 'select', style: 'width:100%' });
-              events.forEach(function (ev) {
-                evSel.appendChild(h('option', { value: String(ev.row_no) },
-                  [ev.name, ev.date, ev.city, (ev.song_count || 0) + ' 首']
-                    .filter(Boolean).join(' · ')));
+              var overwrite = h('input', { type: 'checkbox' });
+              var events = [];
+              var dirty = false;
+              function labelRow(text, input) {
+                return h('label', { style: 'display:grid;grid-template-columns:30% minmax(0,1fr);gap:8px;align-items:center;margin-top:8px' },
+                  h('span', { class: 'small', style: 'text-align:right;overflow-wrap:anywhere' }, text), input);
+              }
+              (schema.fields || []).forEach(function (field) {
+                var input = h('input', { class: 'input', type: 'text', placeholder: field.name,
+                  name: field.internal, style: 'width:100%;min-width:0' });
+                input.addEventListener('input', function () { dirty = true; });
+                fields[field.internal] = input;
+                panel.appendChild(labelRow(field.name, input));
               });
-              var inputs = {};
-              var rows = [['netease', '活动歌单_网易云'],
-                ['kugou', '活动歌单_酷狗'], ['qq', '活动歌单_QQ']]
-                .map(function (pair) {
-                  var input = h('input', {
-                    class: 'input', type: 'text',
-                    placeholder: '歌单链接，或歌单 ID（可留空）',
-                    style: 'flex:1;min-width:200px'
-                  });
-                  inputs[pair[0]] = input;
-                  return h('div', { class: 'toolbar', style: 'margin-top:6px' },
-                    h('span', { class: 'muted small' }, pair[1]), input);
-                });
-              var pushBtn = h('button', {
-                class: 'btn primary', type: 'button'
-              }, '推送到腾讯文档');
-              var overwriteBox = h('input', { type: 'checkbox' });
-              var overlay = h('div', { class: 'preview-overlay' });
-              overlay.addEventListener('click', function (event) {
-                if (event.target === overlay) overlay.remove();
+              var eventNote = h('div', { class: 'muted small', style: 'margin-top:8px' });
+              playlistPanel.appendChild(labelRow('活动 *', evSel));
+              [['netease', '活动歌单_网易云'], ['kugou', '活动歌单_酷狗'], ['qq', '活动歌单_QQ']].forEach(function (pair) {
+                var input = h('input', { class: 'input', type: 'text', placeholder: pair[0] === 'kugou' ? '完整链接或 collection_3_<uid>_<listid>_0' : '歌单链接或歌单 ID（可留空）', style: 'width:100%;min-width:0' });
+                input.addEventListener('input', function () { dirty = true; });
+                playlistInputs[pair[0]] = input;
+                playlistPanel.appendChild(labelRow(pair[1], input));
               });
-              pushBtn.addEventListener('click', function () {
-                var payload = { row_no: Number(evSel.value),
-                  overwrite: overwriteBox.checked };
-                var any = false;
-                Object.keys(inputs).forEach(function (key) {
-                  payload[key] = inputs[key].value.trim();
-                  if (payload[key]) any = true;
-                });
-                if (!any) {
-                  toast('至少填写一个平台的歌单链接', 'warning');
+              playlistPanel.appendChild(h('label', { class: 'check small', style: 'display:block;margin-top:12px' }, overwrite, ' 覆盖该列已有的其它链接'));
+              function loadEvents() {
+                eventNote.textContent = '正在读取活动快照…';
+                api('/api/tcdoc/bridge/events?doc_key=' + encodeURIComponent(identity.doc_key) + '&tab_id=' + encodeURIComponent(identity.tab_id)).then(function (data) {
+                  events = data.events || [];
+                  evSel.replaceChildren(h('option', { value: '' }, '选择一场活动'));
+                  events.forEach(function (event) { evSel.appendChild(h('option', { value: String(event.row_no) }, [event.name, event.date, event.city].filter(Boolean).join(' · '))); });
+                  eventNote.textContent = events.length ? '只更新已选活动的歌单列；已有其它链接默认保留。' : '本地没有线下活动快照，请先同步表格。';
+                  submit.disabled = !events.length;
+                }).catch(function (error) { eventNote.textContent = '读取活动失败：' + error.message; });
+              }
+              function updateMode() {
+                var playlist = mode.value === 'playlist';
+                panel.style.display = playlist ? 'none' : '';
+                playlistPanel.style.display = playlist ? '' : 'none';
+                submit.textContent = playlist ? '推送到腾讯文档' : '生成 TSV';
+                if (playlist && !events.length) loadEvents();
+              }
+              mode.addEventListener('change', updateMode);
+              copy.addEventListener('click', function () { tsv.focus(); tsv.select(); toast('已选中 TSV，请按 Ctrl+C 复制', 'info'); });
+              submit.addEventListener('click', function () {
+                if (mode.value === 'new') {
+                  var values = {};
+                  Object.keys(fields).forEach(function (key) { values[key] = fields[key].value.trim(); });
+                  post('/api/tcdoc/bridge/manual/tsv', { doc_key: identity.doc_key, tab_id: identity.tab_id, values: values }).then(function (result) {
+                    tsv.value = result.tsv || ''; tsv.style.display = ''; copy.style.display = ''; message.textContent = '已生成 1 行，请复制后到对应表末尾粘贴。'; dirty = false;
+                  }).catch(function (error) { message.textContent = '生成 TSV 失败：' + error.message; });
                   return;
                 }
-                pushBtn.disabled = true;
-                pushBtn.textContent = '写入中…';
+                var selected = events.filter(function (event) { return String(event.row_no) === evSel.value; })[0];
+                if (!selected) { message.textContent = '请先选择一场线下活动'; return; }
+                var payload = { doc_key: identity.doc_key, tab_id: identity.tab_id, row_no: Number(evSel.value), overwrite: overwrite.checked };
+                var filled = [];
+                Object.keys(playlistInputs).forEach(function (key) { payload[key] = playlistInputs[key].value.trim(); if (payload[key]) filled.push(key); });
+                if (!filled.length) { message.textContent = '至少填写一个平台的歌单链接'; return; }
+                if (!window.confirm('补充「' + selected.name + '」的活动歌单？\n\n只更新该活动填写的平台歌单列，写入后读回核对。')) return;
+                submit.disabled = true;
                 post('/api/tcdoc/bridge/playlist', payload).then(function (res) {
-                  watchJob(jobHost2, res.job, function (job) {
-                    var receipt = job.result || {};
-                    toast(receipt.summary || '已处理',
-                      receipt.ok ? 'success' : 'warning');
-                    overlay.remove();
-                  }, {
-                    onSettled: function (job) {
-                      pushBtn.disabled = false;
-                      pushBtn.textContent = '推送到腾讯文档';
-                      if (job.status !== 'done') {
-                        toast('写入失败：' + (job.error || '未知错误'), 'error');
-                      }
-                    }
-                  });
-                }).catch(function (error) {
-                  pushBtn.disabled = false;
-                  pushBtn.textContent = '推送到腾讯文档';
-                  toast('写入失败：' + error.message, 'error');
-                });
+                  watchJob(jobHost2, res.job, function (job) { var receipt = job.result || {}; if (receipt.ok) { overlay.remove(); toast(receipt.summary || '已完成歌单补录', 'success'); } else message.textContent = receipt.summary || '没有写入，请检查回执。'; }, { onSettled: function () { submit.disabled = false; } });
+                }).catch(function (error) { submit.disabled = false; message.textContent = '写入失败：' + error.message; });
               });
-              overlay.appendChild(h('div', { class: 'preview-box' },
-                h('div', { class: 'preview-caption' },
-                  h('span', null, '歌单录入 · 线下活动'),
-                  h('button', {
-                    class: 'btn mini', type: 'button',
-                    onclick: function () { overlay.remove(); }
-                  }, '关闭')),
-                h('div', { class: 'preview-body' },
-                  h('div', { class: 'toolbar' },
-                    h('span', { class: 'muted small' }, '活动'), evSel),
-                  rows,
-                  h('label', { class: 'check muted small', style: 'margin-top:6px' },
-                    overwriteBox, ' 覆盖该列已有的其它链接'),
-                  h('div', { class: 'muted small', style: 'margin-top:8px' },
-                    '只写「活动歌单_*」三列，已有其它链接不会覆盖；'
-                    + '可填完整链接，也可只填歌单 ID（酷狗填 collection_3_<uid>_<listid>_0）。'),
-                  h('div', { class: 'toolbar', style: 'margin-top:10px' },
-                    h('span', { style: 'flex:1' }), pushBtn))));
-              document.body.appendChild(overlay);
-            }).catch(function (error) {
-              toast('读取线下活动失败：' + error.message, 'error');
-            });
+              function close() {
+                if (dirty && !window.confirm('放弃本次已填写的内容？')) return;
+                overlay.remove();
+                manualBtn.disabled = false;
+              }
+              overlay.addEventListener('click', function (event) { if (event.target === overlay) close(); });
+              overlay.appendChild(h('div', { class: 'preview-box', style: 'width:900px;max-width:96vw;max-height:90vh' },
+                h('div', { class: 'preview-caption' }, h('span', null, '手动录入 · ' + schema.tab_name), h('button', { class: 'btn mini', type: 'button', onclick: close }, '关闭')),
+                h('div', { class: 'preview-body', style: 'padding:12px;max-height:68vh' }, schema.playlist_allowed ? h('div', { class: 'toolbar' }, h('span', { class: 'small' }, '录入方式'), mode) : null, h('div', { class: 'muted small', style: 'margin-bottom:8px' }, '新增待复制行只生成 TSV，不写入腾讯文档。'), panel, playlistPanel, eventNote, message, tsv, copy),
+                h('div', { class: 'toolbar', style: 'padding:12px;margin:0' }, h('span', { style: 'flex:1' }), h('button', { class: 'btn', type: 'button', onclick: close }, '取消'), submit)));
+              copy.style.display = 'none'; updateMode(); document.body.appendChild(overlay); overlay.focus();
+            }).catch(function (error) { manualBtn.disabled = false; toast('读取录入字段失败：' + error.message, 'error'); });
           });
 
           tsvBtn.addEventListener('click', function () {

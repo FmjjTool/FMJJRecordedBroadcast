@@ -1561,7 +1561,9 @@ def build_fragment_snapshot(doc_key: str, tab_id: str, columns) -> dict:
     if (doc_key, tab_id) != (SONG_DOC_KEY, FRAGMENT_TAB_ID):
         raise ValueError("该表不支持歌曲片段快照预览")
     names = [str(name) for name in columns if str(name)]
-    rows = [dict(item.get("values") or {}) for item in load_remote(doc_key, tab_id)]
+    rows = [{name: "" if value is None else str(value)
+             for name, value in (item.get("values") or {}).items()}
+            for item in load_remote(doc_key, tab_id)]
     return {"profile": "fragments", "columns": names, "rows": rows,
             "stats": {"remote_rows": len(rows), "pending": 0},
             "note": "歌曲片段仅展示本地已同步快照；不生成待上传记录、不写入腾讯文档。"}

@@ -21,7 +21,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QObject, QPoint, QPointF, QRect, QSize,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QObject, QPoint, QPointF,
                             Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPalette, QPen, QPixmap, QPolygonF, QTextCursor, QTextFormat)
@@ -32,10 +32,9 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTabWidget,
     QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
-from PySide6.QtWidgets import QLayout
 
 from gui_qt import common, table_sort, theme
-from gui_qt.common import _fmt, icon_button, run_bg
+from gui_qt.common import FlowLayout as _FlowLayout, _fmt, icon_button, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from toolbox import asset_index, offline_events
@@ -278,75 +277,6 @@ def _fit_preview_size(width: int, height: int,
     height = max(1, int(height))
     scale = min(max_w / width, max_h / height, 1.0)
     return max(1, int(width * scale)), max(1, int(height * scale))
-
-
-class _FlowLayout(QLayout):
-    """流式布局（Qt 官方 FlowLayout 模式）：子项按宽度自动换行成多行。
-
-    详情窗媒体缩略图用固定 5 列网格时，窗口缩窄会被网格最小尺寸顶出
-    横向滚动条；流式布局按实际宽度增减每行列数，窄窗自动多行换行。
-    """
-
-    def __init__(self, parent=None, spacing=4):
-        super().__init__(parent)
-        self._items: list = []
-        self._spacing = spacing
-        self.setContentsMargins(0, 0, 0, 0)
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self):
-        return len(self._items)
-
-    def itemAt(self, i):
-        return self._items[i] if 0 <= i < len(self._items) else None
-
-    def takeAt(self, i):
-        return self._items.pop(i) if 0 <= i < len(self._items) else None
-
-    def expandingDirections(self):
-        return Qt.Orientations(Qt.Orientation(0))
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self._do_layout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for it in self._items:
-            size = size.expandedTo(it.minimumSize())
-        m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
-
-    def _do_layout(self, rect, test_only):
-        m = self.contentsMargins()
-        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
-        x, y = eff.x(), eff.y()
-        line_h = 0
-        for it in self._items:
-            hint = it.sizeHint()
-            nxt = x + hint.width() + self._spacing
-            if nxt - self._spacing > eff.right() + 1 and line_h > 0:
-                x = eff.x()
-                y = y + line_h + self._spacing
-                nxt = x + hint.width() + self._spacing
-                line_h = 0
-            if not test_only:
-                it.setGeometry(QRect(QPoint(x, y), hint))
-            x = nxt
-            line_h = max(line_h, hint.height())
-        return y + line_h - rect.y() + m.bottom()
 
 
 class _ContentBrowser(QTextBrowser):
@@ -4646,6 +4576,9 @@ class AssetPage(BasePage):
     def _db_reload_tables(self, *, preserve_page: bool = False):
         """刷新平台表下拉（含行数），保持当前选择。"""
         if getattr(self, "_db_loading", False):
+            self._db_refresh_pending = True
+            self._db_preserve_pending = (preserve_page or
+                                         getattr(self, "_db_preserve_pending", False))
             return
         self._db_loading = True
         def work():
@@ -4654,6 +4587,11 @@ class AssetPage(BasePage):
 
         def done(tables, err):
             self._db_loading = False
+            if getattr(self, "_db_refresh_pending", False):
+                preserve = self._db_preserve_pending
+                self._db_refresh_pending = self._db_preserve_pending = False
+                self._db_reload_tables(preserve_page=preserve)
+                return
             if err:
                 return
             self._db_refreshed_at = time.monotonic()
@@ -4724,7 +4662,9 @@ class AssetPage(BasePage):
             return rows, total, valid_page
 
         def done(result, err):
-            if query_seq != self._db_query_seq:
+            if (query_seq != self._db_query_seq or plat != self._db_platform()
+                    or author != self._db_author_filter()
+                    or kw != self.db_search.text().strip()):
                 return
             if err:
                 self.db_page_lbl.setText("加载失败")
@@ -4794,7 +4734,7 @@ class AssetPage(BasePage):
             return increment_db.list_authors(plat)
 
         def done(authors, err):
-            if err:
+            if err or plat != self._db_platform():
                 return
             prev = self.db_author_sel.currentText()
             prev_author = "" if prev.startswith("全部") else prev.split("（")[0].strip()

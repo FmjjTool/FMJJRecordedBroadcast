@@ -95,6 +95,14 @@ class AssetQueryService:
             platform, keyword=keyword, author=author,
             limit=page_size, offset=(page - 1) * page_size,
             order_by=order, ascending=bool(ascending))
+        pages = max(1, (int(total) + page_size - 1) // page_size)
+        if page > pages:
+            page = pages
+            if total:
+                rows, total = increment_db.query_rows(
+                    platform, keyword=keyword, author=author,
+                    limit=page_size, offset=(page - 1) * page_size,
+                    order_by=order, ascending=bool(ascending))
         columns = [name for name, _kind in increment_db.COLUMNS
                    if name in _DB_COLUMNS]
         indexes = [i for i, (name, _kind) in enumerate(increment_db.COLUMNS)
@@ -108,7 +116,6 @@ class AssetQueryService:
                     value = value[:2000]
                 item[column] = value
             data.append(item)
-        pages = max(1, (int(total) + page_size - 1) // page_size)
         return {"platform": platform, "columns": columns, "rows": data,
                 "total": int(total), "page": page, "page_size": page_size,
                 "pages": pages}

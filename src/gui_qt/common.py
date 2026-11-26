@@ -10,9 +10,87 @@ import time
 from collections import Counter
 from toolbox.collected_library import CollectedLibrary
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import QTabWidget, QTextBrowser
+from PySide6.QtWidgets import QLayout, QTabWidget, QTextBrowser
+
+
+class FlowLayout(QLayout):
+    """按内容宽度换行；默认沿用资产缩略图的顶对齐，可选行内居中。"""
+
+    def __init__(self, parent=None, spacing=4, *, center_items=False):
+        super().__init__(parent)
+        self._items: list = []
+        self._spacing = spacing
+        self._center_items = center_items
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y = eff.x(), eff.y()
+        line_h = 0
+        line_items = []
+
+        def place_line():
+            for item, pos_x, hint in line_items:
+                offset = (line_h - hint.height()) // 2 if self._center_items else 0
+                item.setGeometry(QRect(QPoint(pos_x, y + offset), hint))
+
+        for it in self._items:
+            hint = it.sizeHint()
+            nxt = x + hint.width() + self._spacing
+            if nxt - self._spacing > eff.right() + 1 and line_h > 0:
+                if not test_only:
+                    place_line()
+                line_items = []
+                x = eff.x()
+                y = y + line_h + self._spacing
+                nxt = x + hint.width() + self._spacing
+                line_h = 0
+            if not test_only:
+                line_items.append((it, x, hint))
+            x = nxt
+            line_h = max(line_h, hint.height())
+        if not test_only:
+            place_line()
+        return y + line_h - rect.y() + m.bottom()
 
 
 def refresh_browser_colors(browser: QTextBrowser, muted_colors=()):

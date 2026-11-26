@@ -160,10 +160,8 @@ class RenamePage(BasePage):
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color: palette(link);")
         top.addWidget(self.progress_label)
-        self.post_settings_btn = QPushButton("投稿设置")
-        self.post_settings_btn.clicked.connect(self._open_post_settings)
-        top.addWidget(self.post_settings_btn)
         self.post_btn = QPushButton("投稿已重命名视频")
+        self.post_btn.setToolTip("打开投稿窗口；没有视频时也可配置并保存投稿模板")
         self.post_btn.clicked.connect(self._open_upload)
         top.addWidget(self.post_btn)
         v.addLayout(top)
@@ -893,7 +891,7 @@ class RenamePage(BasePage):
     def _set_busy(self, busy):
         self._busy = busy
         for widget in (self.folder_list, self.file_list, self.account_list, self.type_box,
-                       self.auto_upload, self.post_settings_btn, self.post_btn, self.sub_tabs,
+                       self.auto_upload, self.post_btn, self.sub_tabs,
                        self.rename_extra_check):
             widget.setEnabled(not busy)
         self.confirm_btn.setEnabled(not busy and self.current_video_idx < len(self.current_videos))
@@ -997,11 +995,6 @@ class RenamePage(BasePage):
         except OSError:
             self._log("投稿开关保存失败，请检查目录权限")
 
-    def _open_post_settings(self):
-        if not self._busy:
-            from gui_qt.bili_upload_dialog import open_upload_window
-            open_upload_window(self, blocked_paths=self._metadata_failed)
-
     def _open_upload(self):
         if self._busy:
             return
@@ -1047,7 +1040,7 @@ class RenamePage(BasePage):
         def done(result, error):
             self._set_busy(False)
             if error:
-                self._log(f"上传停止：{error}；本地视频保留，可在投稿设置的历史里核对")
+                self._log(f"上传停止：{error}；本地视频保留，可在投稿窗口的历史里核对")
             else:
                 state = "已投稿，等待审核" if result["state"] == "published" else "已上传未投稿"
                 self._log(f"{state}：{result.get('bvid') or result.get('aid') or result['task']}")
