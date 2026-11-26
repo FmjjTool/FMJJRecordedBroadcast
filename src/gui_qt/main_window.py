@@ -37,6 +37,7 @@ from gui_qt.row_widgets import ToggleSwitch
 from gui_qt.window_chrome import (
     TitleBar, WindowControlBar, apply_round_corners, install_resize_handles,
 )
+from gui_qt.window_transitions import WindowTransitions
 
 
 def _brand_icon_pixmap():
@@ -155,6 +156,9 @@ class MainWindow(QMainWindow):
         self.pages = {}
         self._closed = False
         self._quitting = False
+        self._close_animation_done = False
+        self._window_transitions = WindowTransitions(
+            self, enabled=bool(cfg.get("window_animations_enabled", True)))
         self._tray = None
         self._tray_menu = None
         self._tray_hint_shown = False
@@ -317,6 +321,7 @@ class MainWindow(QMainWindow):
         self._theme_timer.timeout.connect(self._check_theme_schedule)
         self._theme_timer.start(10_000)
         self._build_tray()
+        self._window_transitions.prepare_show()
 
     def _build_tray(self):
         """系统托盘：关闭窗口时隐藏到这里，后台任务与录制继续运行。"""
@@ -357,11 +362,17 @@ class MainWindow(QMainWindow):
         else:
             self._tray.hide()
 
+    def set_window_animations_enabled(self, enabled):
+        self._window_transitions.set_enabled(enabled)
+
     def _on_tray_activated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self._restore_from_tray()
 
     def _restore_from_tray(self, *_args):
+        if self._quitting:
+            return
+        self._window_transitions.cancel()
         if self.isMinimized():
             self.showNormal()
         else:
@@ -1068,6 +1079,9 @@ class MainWindow(QMainWindow):
         return self.pages[key]
 
     def closeEvent(self, event):
+        if self._window_transitions.dismissing:
+            event.ignore()
+            return
         cfg = load_convert_config()
         lrw = getattr(self, "live_record_win", None)
         act = self._live_activity()
@@ -1087,13 +1101,11 @@ class MainWindow(QMainWindow):
                     self._quitting = True
                 else:
                     event.ignore()
-                    self.hide()
-                    self._notify_background()
+                    self._hide_to_tray()
                     return
             else:
                 event.ignore()
-                self.hide()
-                self._notify_background()
+                self._hide_to_tray()
                 return
         elif has_activity and not self._quitting:
             # 没有后台模式：关闭即退出，先确认再停止录制并打包
@@ -1124,6 +1136,10 @@ class MainWindow(QMainWindow):
             if lrw is not None:
                 lrw.stop_and_package(self)
         self._quitting = True
+        if (not self._close_animation_done
+                and self._window_transitions.dismiss(self._finish_animated_close)):
+            event.ignore()
+            return
         self._closed = True
         self.page_preloader.stop()
         if self.performance_monitor is not None:
@@ -1142,6 +1158,18 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
+
+    def _hide_to_tray(self):
+        def hide():
+            self.hide()
+            self._notify_background()
+
+        if not self._window_transitions.dismiss(hide):
+            hide()
+
+    def _finish_animated_close(self):
+        self._close_animation_done = True
+        self.close()
 
     def _live_activity(self):
         """直播录制的录制 / 监控状态；窗口没打开时返回 None。"""
@@ -1292,13 +1320,13 @@ class MainWindow(QMainWindow):
         handles = getattr(self, "_resize_handles", None)
         if handles is not None:
             handles.raise_all()
+        transitions = getattr(self, "_window_transitions", None)
+        if transitions is not None and not event.spontaneous():
+            transitions.appear()
 
     def toggle_max_restore(self):
         """最大化 / 还原（顶部栏标题按钮与双击顶栏共用）。"""
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
+        self._window_transitions.toggle_max_restore()
         self._sync_window_shell()
 
     def _sync_window_shell(self):
