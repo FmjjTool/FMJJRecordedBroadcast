@@ -15,13 +15,13 @@ from toolbox import content_collect_store as store
 
 FIELDS = {
     "chaohua": [
-        {"name": "targets", "label": "采集超话", "type": "multiselect", "default": [],
+        {"name": "targets", "label": "采集超话", "type": "multiselect", "default": [], "required": True,
          "empty_hint": "尚无可选超话，请先在微博超话完成一次采集后重新打开设置"},
         {"name": "max_pages", "label": "每频道页数", "type": "int", "default": 3,
          "min": 1, "max": 20},
     ],
     "douyin_index": [
-        {"name": "targets", "label": "采集达人", "type": "multiselect", "default": [],
+        {"name": "targets", "label": "采集达人", "type": "multiselect", "default": [], "required": True,
          "empty_hint": "尚无可选达人，请先在抖音指数完成一次抓取后重新打开设置"},
         {"name": "days", "label": "统计范围", "type": "select", "default": 30,
          "choices": [{"value": days, "label": f"近 {days} 天"}

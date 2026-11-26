@@ -17,7 +17,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QLinearGradient,
                            QPainter, QPalette, QPen)
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QFrame, QGridLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy,
+    QHeaderView, QLabel, QLayout, QLineEdit, QPushButton, QScrollArea, QSizePolicy,
     QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -440,6 +440,7 @@ class HomePage(BasePage):
         body.setObjectName("workbenchHomeBody")
         scroll.setWidget(body)
         v = QVBoxLayout(body)
+        v.setSizeConstraint(QLayout.SetMinimumSize)
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(12)
 

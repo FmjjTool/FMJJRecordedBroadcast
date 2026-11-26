@@ -22,7 +22,7 @@ import time
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+    QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QRadioButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
@@ -41,7 +41,7 @@ from toolbox.utils import (
     extract_start_datetime, get_video_info, is_video_file, video_end_date,
 )
 
-from gui_qt.common import run_bg
+from gui_qt.common import FlowLayout, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import bili_upload as BU
 
@@ -210,11 +210,8 @@ class RenamePage(BasePage):
         self.type_box.setStyleSheet(
             "QFrame#renameTypeBox { background: palette(base);"
             " border: 1px solid palette(mid); border-radius: 6px; }")
-        self.type_grid = QGridLayout(self.type_box)
+        self.type_grid = FlowLayout(self.type_box, spacing=8, center_items=True)
         self.type_grid.setContentsMargins(10, 8, 10, 8)
-        self.type_grid.setHorizontalSpacing(16)
-        self.type_grid.setVerticalSpacing(6)
-        self.type_grid.setAlignment(Qt.AlignTop)
         c2.addWidget(self.type_box, 1)
         self.type_checks = {}
         clear_btn = QPushButton("清除所有选择")
@@ -379,18 +376,20 @@ class RenamePage(BasePage):
             self.account_list.setCurrentRow(0)
 
     def _rebuild_type_checkboxes(self):
-        """直播类型用真实复选框（两列），勾选顺序仍决定命名顺序。"""
+        """直播类型按可用宽度换行，勾选顺序仍决定命名顺序。"""
         self.type_order.clear()
         while self.type_grid.count():
             item = self.type_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         self.type_checks = {}
-        for index, t in enumerate(get_rename_config().live_types):
+        for t in get_rename_config().live_types:
             box = QCheckBox(t)
             box.toggled.connect(lambda checked, name=t: self._on_type_toggled(name, checked))
-            self.type_grid.addWidget(box, index // 2, index % 2)
+            self.type_grid.addWidget(box)
             self.type_checks[t] = box
+        self.type_grid.invalidate()
+        self.type_box.updateGeometry()
 
     def _rebuild_platform_radios(self):
         cfg = get_rename_config()

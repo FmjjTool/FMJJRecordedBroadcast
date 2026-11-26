@@ -1,4 +1,4 @@
-"""购物解析 WebUI 适配（L2）：淘宝 / 抖音 / B站小店解析任务。"""
+"""购物解析 WebUI 适配（L2）：链接解析、闲鱼搜索与入库下载任务。"""
 
 from __future__ import annotations
 
@@ -20,5 +20,27 @@ class ShoppingService:
             "shopping_parse",
             lambda task: webui_shopping.parse(
                 dict(payload), on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
+    def start_xianyu_search(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        payload = webui_shopping.prepare_xianyu_search(payload)
+        job = self.jobs.submit(
+            "shopping_xianyu_search",
+            lambda task: webui_shopping.search_xianyu(
+                payload, on_log=task.log,
+                is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
+
+    def start_xianyu_save(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        payload = webui_shopping.prepare_xianyu_save(payload)
+        job = self.jobs.submit(
+            "shopping_xianyu_save",
+            lambda task: webui_shopping.save_xianyu(
+                payload, on_log=task.log,
                 is_cancelled=lambda: bool(task.cancel_requested)))
         return {"job": job.id}

@@ -32,7 +32,7 @@ from toolbox.utils import (find_ffmpeg_exe, find_ffprobe_exe, format_size,
 from toolbox import edition, updater
 from version import APP_VERSION
 
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import FlowLayout, post_to_main, run_bg
 from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.quark_backup import QuarkBackupPage
@@ -189,33 +189,35 @@ class GlobalSettingsPage(BasePage):
 
         # ---- 主题自动切换（跟随系统 / 定时黑白） ----
         card = self._section_card("主题自动切换（跟随系统 / 定时黑白）", "palette")
-        fs_row = QHBoxLayout()
+        theme_options = FlowLayout(spacing=8, center_items=True)
         self.follow_sys_cb = QCheckBox("跟随系统深浅色")
         self.follow_sys_cb.setToolTip(
             "系统在 浅色/深色 模式之间切换时，应用主题自动跟随同步；\n"
             "与定时切换互斥（同时只能开一个）；手动点击侧栏主题方块会关闭本功能")
-        fs_row.addWidget(self.follow_sys_cb)
-        fs_row.addStretch(1)
-        card.content_layout.addLayout(fs_row)
-        ts_row = QHBoxLayout()
+        theme_options.addWidget(self.follow_sys_cb)
         self.sched_enable = QCheckBox("启用定时切换")
         self.sched_enable.setToolTip(
             "到达设定时间自动切换主题，改动即时生效；\n"
             "启用期间手动切换会在数秒内被拉回目标主题，关闭后手动切换不受影响")
-        ts_row.addWidget(self.sched_enable)
-        ts_row.addStretch(1)
-        ts_row.addWidget(QLabel("浅色时间:"))
+        theme_options.addWidget(self.sched_enable)
         self.sched_light = QTimeEdit()
         self.sched_light.setDisplayFormat("HH:mm")
         self.sched_light.setFixedWidth(96)
-        ts_row.addWidget(self.sched_light)
-        ts_row.addWidget(QLabel("深色时间:"))
         self.sched_dark = QTimeEdit()
         self.sched_dark.setDisplayFormat("HH:mm")
         self.sched_dark.setFixedWidth(96)
-        ts_row.addWidget(self.sched_dark)
-        ts_row.addWidget(self._btn("保存", self._save_theme_schedule_clicked))
-        card.content_layout.addLayout(ts_row)
+        for label, editor in (("浅色时间:", self.sched_light),
+                              ("深色时间:", self.sched_dark)):
+            # 标签与时间输入作为一组换行，宽窗时紧邻开关排列。
+            group = QWidget()
+            row = QHBoxLayout(group)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addWidget(QLabel(label))
+            row.addWidget(editor)
+            theme_options.addWidget(group)
+        theme_options.addWidget(self._btn("保存", self._save_theme_schedule_clicked))
+        card.content_layout.addLayout(theme_options)
         self.sched_status = QLabel("")
         self.sched_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         card.content_layout.addWidget(self.sched_status)

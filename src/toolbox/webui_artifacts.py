@@ -17,6 +17,7 @@ _KINDS = {
     "taobao": ("淘宝商品", "淘宝商品"),
     "douyin_shop": ("抖音商城", "抖音商品"),
     "bili_shop": ("B站小店", "B站小店"),
+    "xianyu": ("闲鱼商品", "闲鱼商品"),
 }
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _MAX_PREVIEW = 20 * 1024 * 1024
@@ -42,6 +43,8 @@ def _root(kind: str) -> Path:
         return Path(get_export_subdir("douyin_shop"))
     if kind == "bili_shop":
         return Path(get_export_subdir("bili_shop"))
+    if kind == "xianyu":
+        return Path(get_export_dir()) / "闲鱼商品"
     raise ValueError("未知产物类型")
 
 
@@ -83,7 +86,9 @@ def list_artifacts(kind: str, group_limit: int = 200,
     label = _KINDS[kind][1]
     if not root.is_dir():
         return {"kind": kind, "label": label, "groups": [], "total": 0,
-                "note": f"暂无产物目录（{root.name}）。桌面端导出后刷新。"}
+                "note": ("尚未保存闲鱼商品；搜索或解析后勾选商品，再点「入库并下载」。"
+                         if kind == "xianyu" else
+                         f"暂无产物目录（{root.name}）。桌面端导出后刷新。")}
     group_limit = max(1, min(500, int(group_limit)))
     file_limit = max(1, min(1000, int(file_limit)))
     groups = []
@@ -132,7 +137,8 @@ def list_artifacts(kind: str, group_limit: int = 200,
     return {
         "kind": kind, "label": label, "groups": groups,
         "total": sum(group["total"] for group in groups),
-        "note": "只读浏览；抓取与导出仍在桌面端。",
+        "note": ("本地闲鱼商品资料与图片。" if kind == "xianyu"
+                 else "只读浏览；抓取与导出仍在桌面端。"),
     }
 
 

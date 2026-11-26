@@ -1,7 +1,7 @@
-"""WebUI 购物解析：淘宝店铺 / 淘宝商品 / 抖音商品 / B站小店。
+"""WebUI 购物解析：淘宝 / 抖音 / B站小店 / 闲鱼搜索与入库下载。
 
 复用桌面 L4：`shopping`（淘宝）、`platforms.douyin_shop`、`platforms.bili_shop`；
-输出沿用桌面目录（`淘宝商品` / `抖音商品` / `B站小店`）。本模块 Qt-free，
+输出沿用桌面目录（`淘宝商品` / `抖音商品` / `B站小店` / `闲鱼商品`）。本模块 Qt-free，
 真实解析需要网络与对应平台登录态。
 """
 
@@ -53,11 +53,70 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
         result = _parse_taobao(text, say, is_cancelled)
     elif platform == "douyin":
         result = _parse_douyin(text, say, is_cancelled)
+    elif platform == "xianyu":
+        from toolbox import xianyu_shopping
+        result = xianyu_shopping.parse(text, on_log=say,
+                                       is_cancelled=is_cancelled)
     else:
         result = _parse_bili(text, say, is_cancelled)
     result["platforms"] = payload["platforms"]
     result["selection_note"] = plan["summary"]
     return result
+
+
+def _require_xianyu(payload: dict) -> None:
+    """显式取消闲鱼勾选时，在任务提交前拒绝相关请求。"""
+    if "platforms" in payload:
+        selected = normalize_shopping_platforms(payload["platforms"])
+        if "xianyu" not in selected:
+            raise ValueError("请先勾选闲鱼")
+
+
+def prepare_xianyu_search(payload: dict) -> dict:
+    _require_xianyu(payload)
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("请先输入闲鱼搜索关键词")
+    if len(text.strip()) > 200:
+        raise ValueError("搜索关键词不能超过 200 字")
+    limit = payload.get("limit", 30)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 60:
+        raise ValueError("搜索数量须为 1 至 60 件")
+    return {"text": text.strip(), "limit": limit}
+
+
+def search_xianyu(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    from toolbox import xianyu_shopping
+    prepared = prepare_xianyu_search(payload)
+    return xianyu_shopping.search(**prepared, on_log=on_log,
+                                  is_cancelled=is_cancelled)
+
+
+def prepare_xianyu_save(payload: dict) -> dict:
+    _require_xianyu(payload)
+    items = payload.get("items")
+    if not isinstance(items, list) or not 1 <= len(items) <= 60:
+        raise ValueError("请勾选 1 至 60 件闲鱼商品")
+    selected = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("商品数据无效，请重新搜索后勾选")
+        item_id, url = item.get("item_id", ""), item.get("url", "")
+        if not isinstance(item_id, str) or not isinstance(url, str):
+            raise ValueError("商品数据无效，请重新搜索后勾选")
+        if not item_id.strip() and not url.strip():
+            raise ValueError("商品缺少编号或链接，请重新搜索后勾选")
+        if len(item_id) > 32 or len(url) > 2048:
+            raise ValueError("商品数据无效，请重新搜索后勾选")
+        selected.append({"item_id": item_id.strip(), "url": url.strip()})
+    return {"items": selected}
+
+
+def save_xianyu(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    from toolbox import xianyu_shopping
+    prepared = prepare_xianyu_save(payload)
+    return xianyu_shopping.save_items(prepared["items"], on_log=on_log,
+                                      is_cancelled=is_cancelled)
 
 
 def _rows_from_products(products) -> list[dict]:

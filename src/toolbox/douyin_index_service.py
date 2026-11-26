@@ -85,7 +85,7 @@ def build_metric_patches(snapshot: dict) -> tuple[dict, int]:
         index = video.get("video_index")
         if isinstance(index, (str, int, float)) and not isinstance(index, bool):
             text = str(index).strip()
-            if text and text not in ("-", "—", "None", "nan", "inf"):
+            if text.lower() not in ("", "-", "—", "none", "nan", "inf", "-inf", "infinity", "-infinity"):
                 item_source["video_index"] = text
         if not patch and "video_index" not in item_source:
             invalid += 1
@@ -106,7 +106,7 @@ def writeback_snapshot(snapshot: dict, *, collected_path=None, increment_path=No
     result = {"total": len(patches), "matched": 0, "updated": 0, "unmatched": 0,
               "unchanged": 0, "stale": 0, "invalid": invalid, "errors": [],
               "cancelled": False, "stores": {}}
-    matched, updated, stale, changed_paths = set(), set(), set(), []
+    matched, updated, stale, invalid_ids, changed_paths = set(), set(), set(), set(), []
     if not patches:
         result["summary"] = writeback_summary(result)
         return result
@@ -133,6 +133,7 @@ def writeback_snapshot(snapshot: dict, *, collected_path=None, increment_path=No
             matched.update(outcome.get("matched_ids") or [])
             updated.update(outcome.get("updated_ids") or [])
             stale.update(outcome.get("stale_ids") or [])
+            invalid_ids.update(outcome.get("invalid_ids") or [])
             changed_paths.extend(outcome.get("changed_paths") or [])
             for _error in outcome.get("errors") or []:
                 result["errors"].append(f"{label}存在未成功写入的记录，请检查写入权限后重试")
@@ -146,7 +147,9 @@ def writeback_snapshot(snapshot: dict, *, collected_path=None, increment_path=No
             result["errors"].append("资产缓存未能刷新，请在资产库重建索引")
     result.update(matched=len(matched), updated=len(updated),
                   unmatched=len(set(patches) - matched),
-                  stale=len(stale - updated), unchanged=len(matched - updated - stale))
+                  stale=len(stale - updated),
+                  invalid=invalid + len(invalid_ids - updated),
+                  unchanged=len(matched - updated - stale - invalid_ids))
     result["summary"] = writeback_summary(result)
     return result
 

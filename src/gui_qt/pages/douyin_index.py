@@ -505,7 +505,7 @@ class DouyinIndexPage(BasePage):
         def done(result, err):
             self._set_busy(False)
             if err:
-                self.status_label.setText(f"抓取失败：{err}")
+                self.status_label.setText(str(err))
                 return
             if result.get("cancelled"):
                 self.status_label.setText("已取消，未回写资产")

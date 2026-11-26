@@ -7254,25 +7254,49 @@ function renderLivestreamSummary(root) {
         + '计划设置与桌面端「任务」页共用。'));
 
       function openTaskForm(item) {
-        var overlay = h('div', { class: 'preview-overlay' });
-        var box = h('div', { class: 'preview-box', style: 'max-width:460px' });
+        var overlay = h('div', {
+          class: 'preview-overlay', role: 'dialog', 'aria-modal': 'true',
+          'aria-label': item.label || '定时任务'
+        });
+        var box = h('div', {
+          class: 'preview-box', style: 'width:560px;max-width:100%;min-width:0'
+        });
         var caption = h('div', { class: 'preview-caption' },
           h('span', { class: 'ellipsis' }, item.label || '定时任务'),
           h('button', { class: 'btn', type: 'button' }, '关闭'));
         var closeBtn = caption.lastChild;
-        var form = h('div', { style: 'padding:14px; overflow:auto' },
+        var form = h('div', { style: 'padding:12px;overflow:auto;min-height:0' },
           h('div', { class: 'loading', text: '正在读取计划设置…' }));
+        var footer = h('div', {
+          style: 'padding:12px;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;flex-wrap:wrap'
+        });
+        var busy = false;
+        var dirty = false;
+        var originalFocus = document.activeElement;
+        function close(force) {
+          if (busy && !force) return;
+          if (!force && dirty && !window.confirm('放弃尚未保存的计划设置？')) return;
+          document.removeEventListener('keydown', onKey);
+          overlay.remove();
+          if (originalFocus && originalFocus.isConnected) originalFocus.focus();
+        }
+        function onKey(event) {
+          if (event.key === 'Escape') { event.preventDefault(); close(false); }
+        }
         box.appendChild(caption);
         box.appendChild(form);
+        box.appendChild(footer);
         overlay.appendChild(box);
         document.body.appendChild(overlay);
-        closeBtn.addEventListener('click', function () { overlay.remove(); });
+        closeBtn.addEventListener('click', function () { close(false); });
         overlay.addEventListener('click', function (event) {
-          if (event.target === overlay) overlay.remove();
+          if (event.target === overlay) close(false);
         });
+        document.addEventListener('keydown', onKey);
 
         api('/api/tasks/schedule?id=' + encodeURIComponent(item.id))
           .then(function (schedule) {
+            if (!overlay.isConnected) return;
             var modeSel = h('select', { class: 'select', style: 'width:100%' },
               h('option', { value: 'daily', selected: schedule.mode === 'daily' }, '每天'),
               h('option', {
@@ -7293,6 +7317,116 @@ function renderLivestreamSummary(root) {
             var intervalRow = h('div', null,
               h('div', { class: 'muted small', style: 'margin-top:10px' }, '间隔（分钟，1–1439）'),
               intervalInput);
+            var collection = schedule.collection;
+            var collectionRows = h('div', { style: 'min-width:0' });
+            var collectionInputs = [];
+            var collectionStatus = h('div', {
+              class: 'muted small', role: 'status', style: 'margin-top:8px'
+            });
+            if (collection) {
+              (collection.fields || []).forEach(function (field) {
+                var current = Object.prototype.hasOwnProperty.call(collection.values || {}, field.name)
+                  ? collection.values[field.name] : field.default;
+                var row = h('div', { style: 'margin-top:12px;min-width:0' });
+                var label = h('div', { class: 'small', style: 'margin-bottom:4px' },
+                  (field.label || field.name) + (field.name === 'targets' ? ' *' : ''));
+                row.appendChild(label);
+                if (field.type === 'multiselect') {
+                  var selected = new Set((Array.isArray(current) ? current : []).map(String));
+                  var choices = h('div', {
+                    style: 'max-height:192px;overflow:auto;display:grid;gap:6px;min-width:0',
+                    role: 'group', 'aria-label': field.label || field.name
+                  });
+                  var inputs = (field.choices || []).map(function (choice) {
+                    var input = h('input', {
+                      type: 'checkbox', value: String(choice.value),
+                      checked: selected.has(String(choice.value)), name: field.name
+                    });
+                    choices.appendChild(h('label', {
+                      style: 'display:flex;align-items:flex-start;gap:8px;min-width:0'
+                    }, input, h('span', { style: 'overflow-wrap:anywhere;min-width:0' },
+                      choice.label || String(choice.value))));
+                    return input;
+                  });
+                  row.appendChild(choices);
+                  if (!inputs.length) row.appendChild(h('div', { class: 'muted small' },
+                    field.empty_hint || '尚无可选对象，请先在对应采集页保存一次结果。'));
+                  collectionInputs.push({ field: field, inputs: inputs });
+                } else if (field.type === 'int' || field.type === 'select') {
+                  var control = field.type === 'int'
+                    ? h('input', {
+                      class: 'input', type: 'number', step: '1', min: field.min,
+                      max: field.max, value: current == null ? '' : String(current)
+                    })
+                    : h('select', { class: 'select' });
+                  if (field.type === 'select') {
+                    (field.choices || []).forEach(function (choice) {
+                      control.appendChild(h('option', {
+                        value: String(choice.value),
+                        selected: String(choice.value) === String(current)
+                      }, choice.label || String(choice.value)));
+                    });
+                  }
+                  control.name = field.name;
+                  control.setAttribute('aria-label', field.label || field.name);
+                  control.style.width = '100%';
+                  row.appendChild(control);
+                  collectionInputs.push({ field: field, control: control });
+                } else {
+                  collectionInputs.push({ field: field, unsupported: true });
+                }
+                collectionRows.appendChild(row);
+              });
+              collectionRows.appendChild(collectionStatus);
+            }
+            function readCollection() {
+              var result = {};
+              var error = '';
+              collectionInputs.forEach(function (entry) {
+                var field = entry.field;
+                var value;
+                if (entry.unsupported) {
+                  error = '采集设置无法显示，请刷新页面后重试';
+                  return;
+                }
+                if (entry.inputs) {
+                  value = entry.inputs.filter(function (input) { return input.checked; })
+                    .map(function (input) { return input.value; });
+                  if (field.name === 'targets' && !value.length) {
+                    error = '请至少勾选一个采集对象';
+                  }
+                } else if (field.type === 'int') {
+                  value = Number(entry.control.value);
+                  if (!entry.control.value || !Number.isInteger(value) ||
+                      value < field.min || value > field.max) {
+                    error = (field.label || field.name) + '需在 ' + field.min + '–' + field.max + ' 之间';
+                  }
+                } else {
+                  var choice = (field.choices || []).find(function (option) {
+                    return String(option.value) === entry.control.value;
+                  });
+                  if (!choice) error = '请选择' + (field.label || field.name);
+                  value = choice ? choice.value : null;
+                }
+                result[field.name] = value;
+              });
+              return { values: result, error: error };
+            }
+            var extraInputs = [];
+            var extraRows = h('div');
+            (schedule.extra_times || []).forEach(function (value, index) {
+              var enabled = h('input', { type: 'checkbox', checked: !!value });
+              var input = h('input', {
+                class: 'input', type: 'time', value: value || '', disabled: !value,
+                'aria-label': '补采 ' + (index + 1) + ' 时间',
+                style: 'flex:1;min-width:0'
+              });
+              enabled.addEventListener('change', function () { input.disabled = !enabled.checked; });
+              extraRows.appendChild(h('div', {
+                style: 'display:flex;align-items:center;gap:8px;margin-top:8px;min-width:0'
+              }, h('label', null, enabled, '补采 ' + (index + 1)), input));
+              extraInputs.push({ enabled: enabled, input: input });
+            });
             function syncMode() {
               timeRow.style.display = modeSel.value === 'daily' ? '' : 'none';
               intervalRow.style.display = modeSel.value === 'interval' ? '' : 'none';
@@ -12409,9 +12543,11 @@ function renderMusicTag(root) {
               if (pages.length > 1) section.appendChild(h('div', {
                 class: 'row-title', style: 'margin-bottom:8px'
               }, page.title || '未命名页面'));
-              section.appendChild(h('div', {
-                style: 'white-space:pre-wrap;overflow-wrap:anywhere'
-              }, page.text || '（空白页）'));
+              if (page.text || !(page.images || []).length) {
+                section.appendChild(h('div', {
+                  style: 'white-space:pre-wrap;overflow-wrap:anywhere'
+                }, page.text || '（空白页）'));
+              }
               if (!page.images_captured) section.appendChild(h('div', {
                 class: 'muted small', style: 'margin-top:8px'
               }, '旧存档仅含文字，点「重新抓取」补齐正文图片。'));

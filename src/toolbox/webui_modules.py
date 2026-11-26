@@ -131,7 +131,7 @@ def task_schedule(task_id: str) -> dict:
 
 
 def install_task(task_id: str, mode: str, time_text: str, interval,
-                 confirmed: bool = False, extra_times=None) -> dict:
+                 confirmed: bool = False, extra_times=None, collection=None) -> dict:
     """安装 / 更新 Windows 计划任务（保存计划设置并注册）。"""
     if not confirmed:
         raise ValueError("缺少操作确认")
@@ -157,7 +157,11 @@ def install_task(task_id: str, mode: str, time_text: str, interval,
                      task_center.get_schedule(task_id).get("extra_times") or [])
     else:
         extra = None
-    ok, message = task_center.install(task_id, mode, time_text, interval, extra)
+    if collection is not None and not isinstance(collection, dict):
+        raise ValueError("采集设置格式不正确，请重新打开设置后重试")
+    options = {"collection": collection} if collection is not None else {}
+    ok, message = task_center.install(
+        task_id, mode, time_text, interval, extra, **options)
     if not ok:
         raise ValueError(str(message or "安装失败"))
     return {"ok": True, "message": str(message or "已安装 / 更新")}

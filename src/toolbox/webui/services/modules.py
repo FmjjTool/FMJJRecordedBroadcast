@@ -22,7 +22,7 @@ class ModuleService:
         return webui_modules.install_task(
             payload.get("id"), payload.get("mode"), payload.get("time"),
             payload.get("interval"), bool(payload.get("confirmed")),
-            payload.get("extra_times"))
+            payload.get("extra_times"), payload.get("collection"))
 
     def uninstall_task(self, payload: dict) -> dict:
         return webui_modules.uninstall_task(
