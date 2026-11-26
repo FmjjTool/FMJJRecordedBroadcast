@@ -188,27 +188,45 @@ class KugouPlaylistWriter(BasePlaylistWriter):
     def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
                      name: str = "",
                      transport: Optional[httpx.BaseTransport] = None) -> str:
-        """酷狗云歌单的公开页：只有分配了 specialid 的歌单才有网页地址。
+        """酷狗云歌单的公开页。
 
-        自建云歌单（listid）没有 specialid 时没有可公开访问的网页链接，
-        返回空串，由调用方提示到客户端复制分享链接手动登记。
+        2026-11-26 实测：`/yy/special/single/` 除了数字 specialid，也接受
+        `collection_3_<userid>_<listid>_0`（global_collection_id）。自建云歌单
+        即使没发布到歌单广场（specialid 为空），用这个地址也能直接打开，
+        页面标题就是歌单名，因此不再依赖 specialid。
+
+        歌单不存在 / 已下架 / 名字对不上时返回空串，由调用方提示手工登记。
         """
+        ident = str(playlist_id or "").strip()
+        if not ident:
+            return ""
         try:
             userid, token, mid, dfid = self._identity(cookie)
-            global_id = f"collection_3_{userid}_{str(playlist_id).strip()}_0"
+        except Exception:  # noqa: BLE001 - 拿不到身份时不硬拼链接
+            return ""
+        if ident.startswith("collection_"):
+            global_id = ident
+        else:
+            global_id = f"collection_3_{userid}_{ident}_0"
+        try:
             body = self._signed_request(
                 "https://gateway.kugou.com/pubsongs/v3/get_list_info",
                 {"data": [{"global_collection_id": global_id, "userid": 0,
                            "specialid": 0}], "userid": 0, "token": ""},
                 {}, cookie, userid, token, mid, dfid, transport)
-        except Exception:  # noqa: BLE001 - 拿不到链接不影响歌单已创建
-            return ""
+        except Exception:  # noqa: BLE001 - 核对失败仍给链接，写入前还有网页探测
+            return f"https://www.kugou.com/yy/special/single/{global_id}.html"
         items = body.get("data") or []
         info = items[0] if items and isinstance(items[0], dict) else {}
-        specialid = info.get("specialid")
-        if specialid:
-            return f"https://www.kugou.com/yy/special/single/{specialid}.html"
-        return ""
+        if info:
+            if info.get("is_drop"):
+                return ""
+            got_name = str(info.get("name") or "").strip()
+            if name and got_name and got_name != str(name).strip():
+                # 拼出来的歌单不是这一场，宁可不写
+                return ""
+            global_id = str(info.get("global_collection_id") or global_id)
+        return f"https://www.kugou.com/yy/special/single/{global_id}.html"
 
     def add_songs(self, playlist_id: str, songs: list[SongInfo],
                   cookie: dict[str, str], *,

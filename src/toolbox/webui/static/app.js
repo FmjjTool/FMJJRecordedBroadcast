@@ -11203,7 +11203,7 @@ function renderMusicTag(root) {
                     overwriteBox, ' 覆盖该列已有的其它链接'),
                   h('div', { class: 'muted small', style: 'margin-top:8px' },
                     '只写「活动歌单_*」三列，已有其它链接不会覆盖；'
-                    + '可填完整链接，也可只填歌单 ID。'),
+                    + '可填完整链接，也可只填歌单 ID（酷狗填 collection_3_<uid>_<listid>_0）。'),
                   h('div', { class: 'toolbar', style: 'margin-top:10px' },
                     h('span', { style: 'flex:1' }), pushBtn))));
               document.body.appendChild(overlay);

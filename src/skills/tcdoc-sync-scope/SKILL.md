@@ -228,7 +228,7 @@ description: "腾讯文档同步编辑范围强制约束（强制阅读）。仅
 7. 与桌面上传共用 `import_pending` 写入锁，避免桌面批量上传与 Web 编辑并发。
 8. 实现：`src/toolbox/webui_tcdoc_edit.py`（L3 用例）、`import_local.LocalImportClient.update_record / delete_record`（仍每次 `validate_target`）、`src/toolbox/webui/services/tcdoc.py`、路由 `/api/tcdoc/edit/{status,preview,update,delete}`。
 9. 不在本次授权内：批量修改、按条件批量删除、清空整表、改字段结构、新建 / 删除下拉选项、向已有行追加图片。
-9. 链接口径（2026-11-26）：QQ 必须把建单的 `dirId` 换成 `GetPlaylistByUin` 返回的 `tid` 再写，禁止把 `dirId` 直接拼成网页链接；酷狗云歌单只有分配 `specialid` 时才写 `special/single/{specialid}.html`，否则回执「平台无网页链接」不得写死链。已有链接经探测确认「已失效」时才允许自动替换；网络异常不视为失效。
+9. 链接口径（2026-11-26）：QQ 必须把建单的 `dirId` 换成 `GetPlaylistByUin` 返回的 `tid` 再写，禁止把 `dirId` 直接拼成网页链接；酷狗用 `global_collection_id` 写 `yy/special/single/collection_3_<uid>_<listid>_0.html`（2026-11-26 实测自建云歌单可直接打开，不必等 `specialid`）；解析不出、歌单名不一致或已下架时回执「平台无网页链接」，不得写死链。已有链接经探测确认「已失效」时才允许自动替换；网络异常不视为失效。
 10. 手工覆盖：`write_manual` / WebUI 的「覆盖该列已有的其它链接」是用户当次显式选择，仅对本次填写的平台生效；不改变自动回写「不覆盖」的默认。
 
 ### 2026-11-26 用户授权：WebUI 上传时的「新建下拉选项」（当次同意）

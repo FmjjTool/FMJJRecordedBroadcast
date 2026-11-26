@@ -2032,7 +2032,9 @@ class TcDocBridgePanel(QWidget):
         for platform, label in (("netease", "网易云"), ("kugou", "酷狗"),
                                 ("qq", "QQ音乐")):
             edit = QLineEdit()
-            edit.setPlaceholderText("歌单链接，或歌单 ID（可留空）")
+            edit.setPlaceholderText(
+                "歌单链接，或 collection_3_<uid>_<listid>_0 形式的酷狗歌单 ID（可留空）"
+                if platform == "kugou" else "歌单链接，或歌单 ID（可留空）")
             edits[platform] = edit
             form.addRow(f"活动歌单_{label}", edit)
         overwrite_box = QCheckBox("覆盖该列已有的其它链接")

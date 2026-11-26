@@ -183,7 +183,11 @@ def parse_input(platform: str, text: str) -> str:
     if not re.match(r"^[A-Za-z0-9_-]{2,64}$", raw):
         raise ValueError(f"歌单 ID 无法识别：{raw}")
     if platform == "kugou":
-        raise ValueError("酷狗请粘贴客户端「复制链接」得到的歌单链接（云歌单 ID 没有网页页）")
+        # 酷狗只认歌单全局 ID（collection_3_<uid>_<listid>_0）或完整链接：
+        # 光有 listid 拼不出公开页，数字 specialid 又和 listid 不是一回事。
+        if re.match(r"^collection_\d+_\d+_\d+_\d+$", raw):
+            return playlist_link.url_of(platform, raw)
+        raise ValueError("酷狗请粘贴歌单链接，或填 collection_3_<uid>_<listid>_0 形式的歌单全局 ID")
     url = playlist_link.url_of(platform, raw)
     if not url:
         raise ValueError(f"{platform} 暂不支持生成歌单链接")

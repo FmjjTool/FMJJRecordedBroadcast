@@ -8,9 +8,10 @@
 链接按各平台公开的歌单页格式构造，与仓库里读取歌单时使用的格式一致
 （见 `music/scrapers/*.py`、`gui_qt/pages/netease.py` 的示例）。
 
-酷狗自建云歌单的 listid 与网页 specialid 不保证一一对应（2026-11-24 实测
-`/yy/special/single/456.html` 返回 404），所以酷狗链接在写入前必须做一次
-只读网页探测；探测不通过就不写，避免把打不开的链接写进真实表格。
+酷狗自建云歌单的公开页是 `/yy/special/single/collection_3_<userid>_<listid>_0.html`
+（2026-11-26 实测可直接打开，不再需要 specialid），链接由 `KugouPlaylistWriter.
+playlist_url()` 生成；写入前仍做一次只读网页探测，探测不通过就不写，避免把
+打不开的链接写进真实表格。
 """
 
 from __future__ import annotations
@@ -57,8 +58,8 @@ def url_of(platform: str, playlist_id: str) -> str:
 def build_links(results) -> list[dict]:
     """写入结果 → 待回写清单。
 
-    优先用平台自己解析出的公开链接（QQ 的 tid、酷狗 published specialid）；
-    酷狗云歌单没有公开页时保留一条空链接记录，供回执说明原因。
+    优先用平台自己解析出的公开链接（QQ 的 tid、酷狗 global_collection_id）；
+    酷狗解析不出链接（歌单被删/账号身份异常）时保留一条空链接记录，供回执说明原因。
     返回 [{platform, column, playlist_id, url, playlist_name, verify}, …]
     """
     links = []
@@ -73,7 +74,7 @@ def build_links(results) -> list[dict]:
         url = str(item.get("playlist_url") or "").strip()
         if not url:
             if platform == "kugou":
-                # 云歌单没分配 specialid 时没有网页页，不能拿 listid 硬拼
+                # 解析不出 global_collection_id（歌单被删/身份异常）时不拿 listid 硬拼
                 url = ""
             else:
                 url = url_of(platform, playlist_id)
