@@ -217,7 +217,7 @@ class TextPasteDialog(QDialog):
 class EvidenceExportDialog(QDialog):
     """一次性证据导出口令与补充材料，不保存口令或更改历史。"""
 
-    def __init__(self, record: dict, parent=None):
+    def __init__(self, record: dict | list[dict], parent=None):
         super().__init__(parent)
         self.setWindowTitle("加密导出证据")
         self.resize(720, 520)
@@ -225,12 +225,26 @@ class EvidenceExportDialog(QDialog):
         self.extra_files: list[str] = []
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        label = QLabel(f"{record.get('title') or '未命名作品'}\n"
-                       f"{record.get('archive_no') or '未编号'} · 修订 {record.get('revision') or 1}")
+        records = record if isinstance(record, list) else [record]
+        batch = len(records) > 1
+        first = records[0]
+        label = QLabel(f"将 {len(records)} 条证书记录合并导出为一个加密包" if batch else
+                       f"{first.get('title') or '未命名作品'}\n"
+                       f"{first.get('archive_no') or '未编号'} · 修订 {first.get('revision') or 1}")
         label.setWordWrap(True)
         layout.addWidget(label)
+        if batch:
+            summary = QPlainTextEdit()
+            summary.setReadOnly(True)
+            summary.setPlainText("\n".join(
+                f"{index}. {item.get('title') or '未命名作品'} · "
+                f"{item.get('archive_no') or '未编号'} · 修订 {item.get('revision') or 1}"
+                for index, item in enumerate(records, 1)))
+            summary.setMaximumHeight(100)
+            layout.addWidget(summary)
         layout.addWidget(_hint("导出所选记录的字段、可用文件和校验清单。旧记录未留存的材料会标为缺失；"
-                               "本次补选材料会单独注明来源，不使用当前表单中的图片。"))
+                               + ("每条记录的材料分别存放；补充材料请单条导出时添加。" if batch else
+                                  "本次补选材料会单独注明来源，不使用当前表单中的图片。")))
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.setMaxLength(128)
@@ -246,6 +260,7 @@ class EvidenceExportDialog(QDialog):
         self.validation_label = _hint("请妥善保管密码；软件不保存，也无法找回。")
         layout.addWidget(self.validation_label)
         self.files_label = _hint("未补选材料")
+        self.files_label.setVisible(not batch)
         layout.addWidget(self.files_label)
         actions = QHBoxLayout()
         add_btn = QPushButton("补充材料")
@@ -254,6 +269,8 @@ class EvidenceExportDialog(QDialog):
         clear_btn = QPushButton("清除补选")
         clear_btn.clicked.connect(self._clear_files)
         actions.addWidget(clear_btn)
+        add_btn.setVisible(not batch)
+        clear_btn.setVisible(not batch)
         actions.addStretch(1)
         layout.addLayout(actions)
         layout.addWidget(_hint("文件内容使用 AES-256 ZIP 加密；包内只显示通用文件名。"
@@ -316,6 +333,7 @@ class CertificateMakerPage(BasePage):
         self._cert_edits: dict[str, QLineEdit] = {}
         self._group_base_qss: dict[QGroupBox, str] = {}
         self._history_records: list[dict] = []
+        self._history_selected_ids: set[str] = set()
         self._suspend_signals = False
         self._auto_end = True          # 授权截止是否仍在跟随「起始 +3 年」
         self._last_year: int | None = None   # 上次用于编号的年份（None=自动）
@@ -820,24 +838,41 @@ class CertificateMakerPage(BasePage):
         self.history_search.textChanged.connect(self._filter_history)
         layout.addWidget(self.history_search)
         self.history_list = QListWidget()
+        self.history_list.setToolTip("勾选记录用于加密导出；载入和删除只作用于当前行")
+        self.history_list.itemChanged.connect(self._on_history_check_changed)
         self.history_list.itemDoubleClicked.connect(lambda _item: self._on_history_load())
         self.history_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.history_list.customContextMenuRequested.connect(self._on_history_menu)
         layout.addWidget(self.history_list, 1)
+        selection_row = QHBoxLayout()
+        self.history_select_all_btn = QPushButton("全选结果")
+        self.history_select_all_btn.setToolTip("勾选当前筛选结果，保留筛选外已勾选的记录")
+        self.history_select_all_btn.clicked.connect(self._select_visible_history)
+        selection_row.addWidget(self.history_select_all_btn)
+        self.history_clear_selection_btn = QPushButton("取消选择")
+        self.history_clear_selection_btn.setToolTip("取消所有勾选，包含筛选外的记录")
+        self.history_clear_selection_btn.clicked.connect(self._clear_history_selection)
+        selection_row.addWidget(self.history_clear_selection_btn)
+        self.history_selection_label = _hint("已勾选 0 条")
+        selection_row.addWidget(self.history_selection_label, 1)
+        layout.addLayout(selection_row)
         row = QHBoxLayout()
         load_btn = QPushButton("载入")
         load_btn.setToolTip("把历史记录回填到表单（只含数据，不含图片）")
         load_btn.clicked.connect(self._on_history_load)
         row.addWidget(load_btn)
         delete_btn = QPushButton("删除")
+        delete_btn.setToolTip("只删除当前行，不按勾选批量删除")
         delete_btn.clicked.connect(self._on_history_delete)
         row.addWidget(delete_btn)
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._on_history_clear)
         row.addWidget(clear_btn)
+        self._history_mutation_buttons = (load_btn, delete_btn, clear_btn)
         row.addStretch(1)
         self.history_export_btn = QPushButton("加密导出")
-        self.history_export_btn.setToolTip("将所选证书记录与可用证据文件导出为密码加密 ZIP")
+        self.history_export_btn.setToolTip("将勾选的证书记录与可用材料合并导出为一个密码加密 ZIP")
+        self.history_export_btn.setEnabled(False)
         self.history_export_btn.clicked.connect(self._on_history_export)
         row.addWidget(self.history_export_btn)
         layout.addLayout(row)
@@ -1553,6 +1588,11 @@ class CertificateMakerPage(BasePage):
         if not hasattr(self, "history_list"):
             return
         query = self.history_search.text().strip().lower()
+        current = self.history_list.currentItem()
+        current_id = current.data(Qt.UserRole) if current else None
+        valid_ids = {str(record.get("id") or "") for record in self._history_records}
+        self._history_selected_ids.intersection_update(valid_ids)
+        blocked = self.history_list.blockSignals(True)
         self.history_list.clear()
         for record in self._history_records:
             haystack = " ".join(
@@ -1568,11 +1608,56 @@ class CertificateMakerPage(BasePage):
                 f"{record.get('status') or '有效'}"
             )
             item.setData(Qt.UserRole, str(record.get("id") or ""))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if str(record.get("id") or "")
+                               in self._history_selected_ids else Qt.CheckState.Unchecked)
             self.history_list.addItem(item)
+            if item.data(Qt.UserRole) == current_id:
+                self.history_list.setCurrentItem(item)
         if self.history_list.count() == 0:
-            placeholder = QListWidgetItem("暂无历史记录" if not query else "没有匹配的记录")
+            placeholder = QListWidgetItem("还没有证书记录，生成证书后会显示在这里" if not query else
+                                          "没有匹配的记录，可清除筛选查看全部")
             placeholder.setFlags(Qt.NoItemFlags)
             self.history_list.addItem(placeholder)
+        self.history_list.blockSignals(blocked)
+        self._update_history_selection()
+
+    def _selected_history_records(self) -> list[dict]:
+        return [record for record in self._history_records
+                if str(record.get("id") or "") in self._history_selected_ids]
+
+    def _on_history_check_changed(self, item: QListWidgetItem) -> None:
+        record_id = item.data(Qt.UserRole)
+        if not record_id:
+            return
+        if item.checkState() == Qt.CheckState.Checked:
+            self._history_selected_ids.add(str(record_id))
+        else:
+            self._history_selected_ids.discard(str(record_id))
+        self._update_history_selection()
+
+    def _select_visible_history(self) -> None:
+        self._history_selected_ids.update(
+            str(item.data(Qt.UserRole)) for index in range(self.history_list.count())
+            if (item := self.history_list.item(index)).data(Qt.UserRole))
+        self._filter_history()
+
+    def _clear_history_selection(self) -> None:
+        self._history_selected_ids.clear()
+        self._filter_history()
+
+    def _update_history_selection(self) -> None:
+        visible_ids = {str(item.data(Qt.UserRole)) for index in range(self.history_list.count())
+                       if (item := self.history_list.item(index)).data(Qt.UserRole)}
+        count = len(self._history_selected_ids)
+        hidden = len(self._history_selected_ids - visible_ids)
+        self.history_selection_label.setText(
+            f"已勾选 {count} 条" + (f"（筛选外 {hidden} 条）" if hidden else ""))
+        active = getattr(self, "_evidence_cancel", None) is not None
+        self.history_select_all_btn.setEnabled(bool(visible_ids) and not active)
+        self.history_clear_selection_btn.setEnabled(bool(count) and not active)
+        if not active:
+            self.history_export_btn.setEnabled(bool(count))
 
     def _current_record(self) -> dict | None:
         item = self.history_list.currentItem()
@@ -1613,11 +1698,14 @@ class CertificateMakerPage(BasePage):
             self.history_export_btn.setEnabled(False)
             self.history_export_btn.setText("正在取消")
             return
-        record = self._current_record()
-        if record is None:
-            self.app.toast("先选中一条证书记录", "warning")
+        records = self._selected_history_records()
+        if not records:
+            self.app.toast("先勾选需要导出的证书记录", "warning")
             return
-        dialog = EvidenceExportDialog(record, self)
+        if len(records) > certificate_evidence.MAX_BATCH_RECORDS:
+            self.app.toast(f"每次最多导出 {certificate_evidence.MAX_BATCH_RECORDS} 条记录，请减少勾选", "warning")
+            return
+        dialog = EvidenceExportDialog(records, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             dialog.password_edit.clear()
             dialog.confirm_edit.clear()
@@ -1636,40 +1724,56 @@ class CertificateMakerPage(BasePage):
         if Path(target).exists():
             self.app.toast("同名文件已存在，请使用新的文件名", "warning")
             return
-        record_id = str(record["id"])
+        record_ids = tuple(str(record["id"]) for record in records)
         output_root = self._out_dir
         cancel = threading.Event()
         self._evidence_cancel = cancel
         self.history_export_btn.setText("取消导出")
-        self.evidence_progress.setValue(0)
+        for widget in (*self._history_mutation_buttons, self.history_list,
+                       self.history_search, self.history_select_all_btn,
+                       self.history_clear_selection_btn):
+            widget.setEnabled(False)
+        self.evidence_progress.setRange(0, 0)
         self.evidence_progress.show()
 
         def progress(done, total):
+            post_to_main(self.evidence_progress.setRange, 0, 100)
             post_to_main(self.evidence_progress.setValue,
                          min(100, int(done / total * 100)) if total else 0)
 
         def work():
-            return certificate_evidence.export_bundle(
-                record_id, password, target, output_root=output_root,
-                extra_files=extras, is_cancelled=cancel.is_set, on_progress=progress)
+            try:
+                return certificate_evidence.export_bundle(
+                    list(record_ids), password, target, output_root=output_root,
+                    extra_files=extras, is_cancelled=cancel.is_set, on_progress=progress)
+            except certificate_evidence.EvidenceCancelled:
+                return {"cancelled": True}
 
         def done(result, error):
             self._evidence_cancel = None
             self.history_export_btn.setText("加密导出")
-            self.history_export_btn.setEnabled(True)
+            for widget in (*self._history_mutation_buttons, self.history_list, self.history_search):
+                widget.setEnabled(True)
+            self._update_history_selection()
             self.evidence_progress.hide()
             if error:
-                self.app.toast("已取消证据导出" if cancel.is_set() else f"证据导出失败：{error}",
-                               "info" if cancel.is_set() else "error")
+                self.app.toast(f"证据导出失败：{error}", "error")
+                return
+            if result.get("cancelled"):
+                self.app.toast("已取消证据导出", "info")
                 return
             warnings = result.get("warnings") or []
+            count = result.get("record_count", len(record_ids))
             if warnings:
-                QMessageBox.information(
-                    self, "证据包已导出",
-                    f"已导出 {result.get('file_count', 0)} 个材料文件及记录快照。\n\n"
-                    + "\n".join(warnings) + "\n\n请保管好导出密码。")
+                summary = QMessageBox(self)
+                summary.setWindowTitle("证据包已导出")
+                summary.setText(f"已导出 {count} 条记录、{result.get('file_count', 0)} 个材料文件"
+                                f"至 {Path(target).name}。\n\n部分材料有缺失或来源提示，"
+                                "可展开详情核对；同样的提示已写入加密包。请保管好导出密码。")
+                summary.setDetailedText("\n".join(warnings))
+                summary.exec()
             else:
-                self.app.toast("加密证据包已导出", "success")
+                self.app.toast(f"已导出 {count} 条记录至 {Path(target).name}", "success")
 
         run_bg(work, done, owner=self)
 
