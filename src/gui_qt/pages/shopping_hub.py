@@ -24,6 +24,7 @@ from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_shop_page import BiliShopPage
 from gui_qt.pages.douyin_shop_page import DouyinShopPage
 from gui_qt.pages.shopping_page import ShoppingPage
+from gui_qt.table_columns import configure_table_columns
 from toolbox.shopping_parse import (
     PLATFORM_LABELS, SHOPPING_PLATFORM_OPTIONS, detect_platform,
     plan_shopping_parse,
@@ -93,6 +94,8 @@ class ShoppingHubPage(BasePage):
         self.taobao_page = ShoppingPage(app)
         self.douyin_page = DouyinShopPage(app)
         self.bili_page = BiliShopPage(app)
+        configure_table_columns(self.taobao_page.table, fixed={0: 36},
+                                minimums={1: 100}, stretch=(1,), auto_fit=True)
         for key, page in (("taobao", self.taobao_page),
                           ("douyin", self.douyin_page),
                           ("bili", self.bili_page)):

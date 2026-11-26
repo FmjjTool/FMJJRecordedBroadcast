@@ -12,6 +12,9 @@ class MusicDownloadService:
     def overview(self) -> dict:
         return webui_music_download.overview()
 
+    def qualities(self) -> dict:
+        return webui_music.download_quality_options()
+
     def _submit(self, kind: str, payload: dict, handler) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

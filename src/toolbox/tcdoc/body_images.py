@@ -131,6 +131,9 @@ def _inspect_image(content: bytes) -> tuple[str, int, int]:
                         or width * height > MAX_PIXELS):
                     raise ValueError("图片尺寸过大")
                 image.verify()
+            # verify() 对 JPEG 等格式只核对结构，实际解码再排除截断图片。
+            with Image.open(io.BytesIO(content)) as image:
+                image.load()
         return ext, width, height
     except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
         raise ValueError("图片尺寸过大") from exc

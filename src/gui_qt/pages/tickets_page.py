@@ -8,7 +8,7 @@
 
 import json
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.table_columns import fit_table_columns
+from gui_qt.table_columns import configure_table_columns
 from gui_qt.table_sort import install as install_table_sort
 from gui_qt.toolbox_common import ToolSectionCard
 
@@ -79,7 +79,7 @@ class TicketsPage(BasePage):
 
         platform_row = QHBoxLayout()
         platform_row.setSpacing(8)
-        platform_row.addWidget(QLabel("平台"))
+        platform_row.addWidget(QLabel("平台范围"))
         for key, label in tickets_mod.TICKET_PLATFORM_OPTIONS:
             check = QCheckBox(label)
             check.setChecked(True)
@@ -131,9 +131,10 @@ class TicketsPage(BasePage):
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
         self._sorter = install_table_sort(self.table, rows=self._events)
-        self._column_fit_timer = QTimer(self)
-        self._column_fit_timer.setSingleShot(True)
-        self._column_fit_timer.timeout.connect(lambda: fit_table_columns(self.table))
+        configure_table_columns(
+            self.table, fixed={0: 36}, minimums={1: 100, 2: 64, 3: 48,
+                                              4: 64, 5: 48, 6: 48},
+            stretch=(1,), auto_fit=True)
         # 比较与重排复用共享排序器；本页仅补第三次点击还原及选择状态恢复。
         self.table.horizontalHeader().sectionClicked.disconnect(
             self._sorter._on_header_clicked)
@@ -163,15 +164,6 @@ class TicketsPage(BasePage):
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: palette(placeholder-text);")
         layout.addWidget(self.status_label)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._column_fit_timer.start(0)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "_column_fit_timer"):
-            self._column_fit_timer.start(0)
 
     # ==================== 解析列表 ====================
 

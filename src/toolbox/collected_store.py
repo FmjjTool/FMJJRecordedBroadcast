@@ -9,6 +9,7 @@ increment.db 是它的派生分平台归档，由本模块的 `ingest_items(...,
 schema：videos 既有结构保持不变；主键由 toolbox.dedup.collect_key 提供。
 readers：collected_library 用例提供轻量目录/分页；显式导出与同步读取完整字段。
 保留策略：不自动清理主数据，仅在用户明确清空/删除时由本模块执行事务。
+指数补丁只更新已存在抖音行的 data，不改变既有 schema、主键与 created_at。
 """
 
 from __future__ import annotations
@@ -365,3 +366,57 @@ def ingest_items(items, *, incremental: bool = False, db_path=None, projector=No
     if projector is None:
         from toolbox.collected_projection import project_items as projector
     return projector(items)
+
+
+def patch_existing_metrics(patches, *, db_path=None) -> dict:
+    """在主数据中精确补充已有抖音作品；缺失库/表不创建，不运行迁移。"""
+    from toolbox.douyin_index_metrics import (
+        merge_existing_metrics, metric_patch_result, metric_patch_status)
+    result = metric_patch_result()
+    if not isinstance(patches, dict) or not patches:
+        return result
+    path = _resolve_db_path(db_path)
+    if not path.is_file():
+        return result
+    try:
+        with _lock:
+            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=10)
+            try:
+                conn.execute("PRAGMA busy_timeout=10000")
+                if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='videos'").fetchone():
+                    return result
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute("SELECT dedup_key, data FROM videos WHERE platform='douyin'").fetchall()
+                for key, payload in rows:
+                    try:
+                        record = json.loads(payload)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    video_id = str(record.get("video_id") or "")
+                    if video_id not in patches:
+                        continue
+                    result["matched"] += 1
+                    if video_id not in result["matched_ids"]:
+                        result["matched_ids"].append(video_id)
+                    status = metric_patch_status(record, patches[video_id])
+                    if status != "ready":
+                        result[status] += 1
+                        if status == "stale" and video_id not in result["stale_ids"]:
+                            result["stale_ids"].append(video_id)
+                        continue
+                    merged, changed = merge_existing_metrics(record, patches[video_id])
+                    if changed:
+                        conn.execute("UPDATE videos SET data=? WHERE dedup_key=? AND platform='douyin'",
+                                     (json.dumps(merged, ensure_ascii=False), key))
+                        result["updated"] += 1
+                        if video_id not in result["updated_ids"]:
+                            result["updated_ids"].append(video_id)
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception as exc:
+        result["updated"], result["updated_ids"] = 0, []
+        result["errors"].append({"store": "collected", "error": type(exc).__name__})
+    return result

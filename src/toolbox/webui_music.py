@@ -12,6 +12,26 @@ from typing import Callable, Iterable
 MERGE = "all"
 MERGE_LABEL = "五平台对比"
 
+_DOWNLOAD_META_KEYS = ("media_mid", "strMediaMid", "sqhash", "320hash", "HQFileHash",
+                       "SQFileHash", "HQHash", "SQHash", "album_audio_id", "AlbumAudioID")
+
+
+def download_quality_options() -> dict:
+    """桌面与 Web 共用平台音质声明，不在前端手抄参数映射。"""
+    from music.downloader import quality_options
+    catalog = {pid: [{"value": value, "label": label} for value, label in quality_options(pid)]
+               for pid in ("qq", "kugou", "kuwo", "5sing", "kugou_lite")}
+    catalog["all"] = [{"value": "highest", "label": "各平台最高可用"},
+                      {"value": "flac", "label": "无损 FLAC / APE"},
+                      {"value": "320k", "label": "320k 高音质"},
+                      {"value": "192k", "label": "192k 高音质"},
+                      {"value": "128k", "label": "128k 标准"}]
+    catalog["netease"] = [{"value": "lossless", "label": "无损"},
+                          {"value": "exhigh", "label": "320k"},
+                          {"value": "higher", "label": "192k"},
+                          {"value": "standard", "label": "标准"}]
+    return {"platforms": catalog}
+
 
 def _platforms() -> list[tuple[str, str, type]]:
     from music import ALL_PLATFORMS
@@ -35,22 +55,30 @@ def _row(song) -> dict:
         "name": song.song_name or song.title,
         "singer": song.singer or "",
         "album": song.album_name or "",
+        "album_id": song.album_id or "",
         "duration": int(song.duration or 0),
         "duration_text": _duration_text(song.duration or 0),
         "cover": song.cover_url or "",
+        "download_meta": {key: song.extra[key] for key in _DOWNLOAD_META_KEYS
+                          if isinstance(song.extra.get(key), (str, int))},
     }
 
 
 def _song_from_row(row: dict):
     from music.models import SongInfo
+    metadata = row.get("download_meta")
+    metadata = metadata if isinstance(metadata, dict) else {}
     return SongInfo(
         platform=row.get("platform") or "",
         song_id=str(row.get("song_id") or ""),
         song_name=row.get("name") or "",
         singer=row.get("singer") or "",
         album_name=row.get("album") or "",
+        album_id=str(row.get("album_id") or ""),
         duration=int(row.get("duration") or 0),
         cover_url=row.get("cover") or "",
+        extra={key: str(metadata[key])[:80] for key in _DOWNLOAD_META_KEYS
+               if isinstance(metadata.get(key), (str, int))},
     )
 
 

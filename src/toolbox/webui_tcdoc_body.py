@@ -29,6 +29,11 @@ def _document(doc_key: str) -> dict:
     return doc
 
 
+def validate_document(doc_key: str) -> None:
+    """后台排队前校验目标，非法文档不启动采集任务。"""
+    _document(doc_key)
+
+
 def cached(doc_key: str) -> dict:
     """返回可安全展示的本地正文；不会因读取而抓取或下载。"""
     from toolbox.tcdoc import archive, config
@@ -73,7 +78,15 @@ def fetch(doc_key: str, on_status=None, is_cancelled=None) -> dict:
         raise ValueError("抓取正文失败：网络或文档读取未完成，请重试") from exc
     if result.get("save_error"):
         raise ValueError("正文已读取，但本地存档失败，请检查可用空间后重试")
-    return cached(doc["key"])
+    saved = result.get("save") or {}
+    outcome = cached(doc["key"])
+    outcome["capture"] = {
+        "pages": int(saved.get("pages") or 0),
+        "skipped": int(saved.get("skipped") or 0),
+        "complete": bool(saved.get("complete", True)),
+        "snapshot_failed": bool(saved.get("file_error")),
+    }
+    return outcome
 
 
 def read_image(doc_key: str, page_id: str, image_key: str) -> tuple[bytes, str]:

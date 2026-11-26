@@ -330,6 +330,7 @@ class EditorPage(BasePage):
 
         # ==================== 左：文件队列 ====================
         left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(4)
         left.addWidget(_OptionGrid([
             self._btn("刷新", self._refresh_folders),
@@ -384,9 +385,9 @@ class EditorPage(BasePage):
         preview_layout = QVBoxLayout(preview_area)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(4)
-        preview_area.setMinimumHeight(260)
+        preview_area.setMinimumHeight(170)
         self.video = QVideoWidget()
-        self.video.setMinimumHeight(100)
+        self.video.setMinimumHeight(60)
         self.video.setStyleSheet("background: #000;")
         preview_layout.addWidget(self.video, 3)
 
@@ -456,18 +457,23 @@ class EditorPage(BasePage):
         self.set_start_btn.setToolTip("将当前播放指针标为起点（I），再标记结束生成片段")
         self.set_end_btn = self._btn("标记结束", self._set_end, small=True)
         self.set_end_btn.setToolTip("将当前播放指针标为终点（O）；未标记开始时从 00:00 开始")
-        self.remove_seg_btn = self._btn("删除选中片段", self._remove_segment, small=True)
-        self.clear_seg_btn = self._btn("清空片段", self._clear_segments, small=True)
-        self.shot_current_btn = self._btn("截图当前帧", self._shot_current, small=True)
+        self.preview_more_btn = QPushButton("更多")
+        self.preview_more_btn.setProperty("menuButton", True)
+        preview_menu = QMenu(self.preview_more_btn)
+        self.preview_more_btn.setMenu(preview_menu)
+        self.remove_seg_btn = preview_menu.addAction("删除选中片段")
+        self.remove_seg_btn.triggered.connect(self._remove_segment)
+        self.clear_seg_btn = preview_menu.addAction("清空片段")
+        self.clear_seg_btn.triggered.connect(self._clear_segments)
+        self.shot_current_btn = preview_menu.addAction("截图当前帧")
+        self.shot_current_btn.triggered.connect(self._shot_current)
         preview_layout.addWidget(_OptionGrid([
-            self.play_btn, self.set_start_btn, self.set_end_btn], columns=3, cell_width=88))
-        preview_layout.addWidget(_OptionGrid([
-            self.remove_seg_btn, self.clear_seg_btn, self.shot_current_btn], columns=3, cell_width=104))
+            self.play_btn, self.set_start_btn, self.set_end_btn, self.preview_more_btn],
+            columns=4, cell_width=80))
 
         self.segment_status = QLabel("未标记片段：移动播放指针后标记开始 / 结束")
         self.segment_status.setProperty("role", "caption")
         self.segment_status.setWordWrap(True)
-        preview_layout.addWidget(self.segment_status)
 
         # 高频步进直接显示，其余定位操作收进菜单，避免预览区挤占参数高度。
         jump_row = QHBoxLayout()
@@ -507,15 +513,12 @@ class EditorPage(BasePage):
         preview_layout.addLayout(jump_row)
 
         self.seg_list = QListWidget()
-        self.seg_list.setMinimumHeight(40)
-        self.seg_list.setMaximumHeight(64)
-        # Ignored：竖直方向不参与「最小高度」争夺，窗口变矮时先压它和日志，
-        # 而不是把视频和进度条一起挤成一条缝。
-        self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self.seg_list.setMinimumHeight(64)
+        self.seg_list.setMaximumHeight(100)
+        self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.seg_list.currentRowChanged.connect(self._sync_timeline)
         self.seg_list.itemDoubleClicked.connect(
             lambda item: self._seek_to(item.data(Qt.UserRole)[0]))
-        preview_layout.addWidget(self.seg_list)
         self.operation_splitter.addWidget(preview_area)
 
         self.tabs = QTabWidget()
@@ -558,8 +561,8 @@ class EditorPage(BasePage):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(60)
-        self.log_text.setMaximumHeight(90)
+        self.log_text.setMinimumHeight(24)
+        self.log_text.setMaximumHeight(64)
         self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         right.addWidget(self.log_text)
         body.addLayout(right, 1)
@@ -1011,7 +1014,7 @@ class EditorPage(BasePage):
     def _set_preview_enabled(self, enabled: bool):
         for widget in (self.play_btn, self.set_start_btn, self.set_end_btn,
                        self.remove_seg_btn, self.clear_seg_btn,
-                       self.shot_current_btn, self.jump_input, self.jump_btn,
+                       self.shot_current_btn, self.preview_more_btn, self.jump_input, self.jump_btn,
                        *self.jump_buttons):
             widget.setEnabled(enabled)
         self.slider.setEnabled(enabled)
@@ -1350,6 +1353,9 @@ class EditorPage(BasePage):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
+
+        v.addWidget(self.segment_status)
+        v.addWidget(self.seg_list)
 
         # 自动检测（静音/黑帧/场景）→ 切点 → 片段
         self.det_type = QComboBox()

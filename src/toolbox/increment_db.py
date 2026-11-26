@@ -12,6 +12,7 @@ config/increment.db，每个平台一张表（表名=平台英文标识，首次
 归属：collected.db 是「已获取」页面展示/导出快照，唯一写入方
 toolbox/collected_store.py；increment.db 是账号增量采集的分平台归档，
 唯一写入方本模块（由 collected_store.ingest_items 触发投影）。两者暂不合并。
+指数补丁经 collected_projection 进入，只更新已有归档的计数与 raw_json；schema 不变。
 内部表 _meta 是迁移标记，不出现在平台下拉里；历史 _content_keys 表可能残留在旧库，
 已停止维护且不参与去重。旧 download/已获取数据/_增量汇总.json 首次使用时自动迁移入库。
 
@@ -420,3 +421,79 @@ def delete_row(platform: str, dedup_key: str) -> bool:
                 conn.close()
     except Exception:
         return False
+
+
+def patch_existing_metrics(patches, *, db_path=None) -> dict:
+    """补充已有抖音派生归档；不创建库/表、不迁移、不插入新作品。"""
+    from pathlib import Path
+    from toolbox.douyin_index_metrics import (
+        METRIC_FIELDS, merge_existing_metrics, metric_patch_result, metric_patch_status)
+    result = metric_patch_result()
+    if not isinstance(patches, dict) or not patches:
+        return result
+    path = Path(db_path) if db_path is not None else globals()["db_path"]()
+    if not path.is_file():
+        return result
+    try:
+        with _lock:
+            conn = sqlite3.connect(path.resolve().as_uri() + "?mode=rw", uri=True, timeout=10)
+            try:
+                conn.execute("PRAGMA busy_timeout=10000")
+                if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='douyin'").fetchone():
+                    return result
+                have = {row[1] for row in conn.execute('PRAGMA table_info("douyin")')}
+                needed = {"dedup_key", "video_id", "fetched_at", "raw_json", *METRIC_FIELDS}
+                if not needed.issubset(have):
+                    result["errors"].append({"store": "increment", "error": "IncompatibleSchema"})
+                    return result
+                conn.execute("BEGIN IMMEDIATE")
+                names = ["dedup_key", "video_id", "fetched_at", "raw_json", *METRIC_FIELDS]
+                rows = conn.execute('SELECT ' + ','.join('"' + name + '"' for name in names)
+                                    + ' FROM "douyin"').fetchall()
+                for row in rows:
+                    values = dict(zip(names, row))
+                    video_id = str(values["video_id"] or "")
+                    if video_id not in patches:
+                        continue
+                    result["matched"] += 1
+                    if video_id not in result["matched_ids"]:
+                        result["matched_ids"].append(video_id)
+                    try:
+                        record = json.loads(values["raw_json"] or "{}")
+                    except (TypeError, ValueError):
+                        result["invalid"] += 1
+                        continue
+                    if not isinstance(record, dict):
+                        result["invalid"] += 1
+                        continue
+                    if record.get("platform", "douyin") != "douyin" or str(record.get("video_id", video_id)) != video_id:
+                        result["invalid"] += 1
+                        continue
+                    record = dict(record)
+                    record["platform"], record["video_id"] = "douyin", video_id
+                    # SQL 列是现有归档展示口径；完整原文中的未知字段仍保留。
+                    record["fetched_at"] = values["fetched_at"] or record.get("fetched_at", "")
+                    record.update({name: values[name] for name in METRIC_FIELDS})
+                    status = metric_patch_status(record, patches[video_id])
+                    if status != "ready":
+                        result[status] += 1
+                        if status == "stale" and video_id not in result["stale_ids"]:
+                            result["stale_ids"].append(video_id)
+                        continue
+                    merged, changed = merge_existing_metrics(record, patches[video_id])
+                    if not changed:
+                        continue
+                    conn.execute('UPDATE "douyin" SET like_count=?,comment_count=?,share_count=?,'
+                                 'favorite_count=?,raw_json=? WHERE dedup_key=? AND video_id=?',
+                                 tuple(merged[name] for name in METRIC_FIELDS) +
+                                 (json.dumps(merged, ensure_ascii=False), values["dedup_key"], values["video_id"]))
+                    result["updated"] += 1
+                    if video_id not in result["updated_ids"]:
+                        result["updated_ids"].append(video_id)
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception as exc:
+        result["updated"], result["updated_ids"] = 0, []
+        result["errors"].append({"store": "increment", "error": type(exc).__name__})
+    return result

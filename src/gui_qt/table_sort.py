@@ -141,12 +141,13 @@ def _reorder(table: QTableWidget, order: list) -> None:
 class HeaderSort:
     """表头点击状态机：只管「第几列、升还是降」，排序动作交给子类或回调。"""
 
-    def __init__(self, table: QTableWidget, skip_columns=(0,)):
+    def __init__(self, table: QTableWidget, skip_columns=(0,), *, tri_state=False):
         self.table = table
         self.skip_columns = set(skip_columns or ())
         self.col = -1
         self.ascending = True
         self._busy = False
+        self.tri_state = bool(tri_state)
 
         table.setSortingEnabled(False)      # 分页/记录列表由本模块统一处理
         header = table.horizontalHeader()
@@ -158,7 +159,10 @@ class HeaderSort:
         if col in self.skip_columns or self._busy:
             return
         if col == self.col:
-            self.ascending = not self.ascending
+            if self.tri_state and not self.ascending:
+                self.col, self.ascending = -1, True
+            else:
+                self.ascending = not self.ascending
         else:
             self.col, self.ascending = col, True
         self._update_indicator()
@@ -175,19 +179,19 @@ class HeaderSort:
         raise NotImplementedError
 
     def reapply(self) -> None:
-        if self.col >= 0:
+        if self.col >= 0 or self.tri_state:
             self.apply()
 
 
 class CallbackSort(HeaderSort):
     """排序动作交给页面回调，用于数据库分页查询（排序在 SQL 里做）。"""
 
-    def __init__(self, table, on_sort, skip_columns=(0,)):
-        super().__init__(table, skip_columns=skip_columns)
+    def __init__(self, table, on_sort, skip_columns=(0,), *, tri_state=False):
+        super().__init__(table, skip_columns=skip_columns, tri_state=tri_state)
         self._on_sort = on_sort
 
     def apply(self) -> None:
-        if self.col < 0:
+        if self.col < 0 and not self.tri_state:
             return
         self._on_sort(self.col, self.ascending)
 
@@ -239,12 +243,14 @@ def install(table: QTableWidget, rows=None, skip_columns=(0,)) -> TableSort:
     return sorter
 
 
-def install_callback(table: QTableWidget, on_sort, skip_columns=(0,)) -> CallbackSort:
-    """给表格装上「回调式」表头排序（排序由页面自己做，如 SQL ORDER BY）。"""
+def install_callback(table: QTableWidget, on_sort, skip_columns=(0,), *,
+                     tri_state=False) -> CallbackSort:
+    """安装回调排序；tri_state=True 时第三次点击回调 (-1, True) 恢复默认。"""
     sorter = getattr(table, "_table_sorter", None)
     if isinstance(sorter, CallbackSort):
         return sorter
-    sorter = CallbackSort(table, on_sort, skip_columns=skip_columns)
+    sorter = CallbackSort(table, on_sort, skip_columns=skip_columns,
+                          tri_state=tri_state)
     table._table_sorter = sorter
     return sorter
 

@@ -137,15 +137,24 @@ class TCDocService:
         doc_key = str((payload or {}).get("doc_key") or "").strip()
         if not doc_key:
             raise ValueError("请选择文档")
+        _body_module().validate_document(doc_key)
         if not self._lock.acquire(blocking=False):
             raise BusyError("已有采集或同步任务在运行")
 
         def run(job):
             from toolbox.tcdoc.body_images import BodyImagesCancelled
             try:
-                return _body_module().fetch(
+                result = _body_module().fetch(
                     doc_key, on_status=lambda text: job.update(str(text)),
                     is_cancelled=lambda: bool(job.cancel_requested))
+                capture = result.get("capture") or {}
+                if capture.get("skipped"):
+                    job.log(f"{capture['skipped']} 篇页面抓取失败，已保留可用旧存档")
+                if not capture.get("complete", True):
+                    job.log("页面列表未完整读取，缺失页面的旧存档保留")
+                if capture.get("snapshot_failed"):
+                    job.log("正文与图片已存入数据库，Markdown 快照写入失败")
+                return result
             except BodyImagesCancelled as exc:
                 raise JobCancelled("正文抓取已取消") from exc
             finally:

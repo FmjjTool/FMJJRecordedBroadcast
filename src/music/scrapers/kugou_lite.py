@@ -33,7 +33,7 @@ KG_HEADERS = {"kg-rc": "1", "kg-thash": "5d816a0", "kg-rec": "1",
               "kg-rf": "B9EDA08A64250DEFFBCADDEE00F8F25F"}
 
 # 音质映射：UI/下载器值 → v5/url quality 参数
-QUALITY_MAP = {"128k": "128", "320k": "320", "flac": "flac"}
+QUALITY_MAP = {"128k": "128", "320k": "320", "flac": "flac", "highest": "highest"}
 
 
 def _md5(s: str) -> str:
@@ -247,7 +247,7 @@ class KuGouLiteClient:
     # ---- 搜索（概念版 v3 字段：FileHash/FileName/PayType） ----
     def search(self, keyword: str, page: int = 1, pagesize: int = 30) -> list[dict]:
         if not self.token:
-            raise RuntimeError("酷狗概念版未登录（需先在 Cookie 管理扫码登录）")
+            raise RuntimeError("酷狗概念版需要登录")
         d = self._request("GET", "https://gateway.kugou.com/v3/search/song", {
             "keyword": keyword, "page": page, "pagesize": pagesize,
             "platform": "AndroidFilter", "albumhide": 0, "iscorrection": 1, "nocollect": 0,
@@ -258,38 +258,52 @@ class KuGouLiteClient:
 
     # ---- 播放链接（v5/url，key 参与签名） ----
     def song_url(self, h: str, quality: str = "128") -> tuple[str, str]:
-        """返回 (url, ext)；失败抛 RuntimeError。quality: 128/320/flac。"""
+        """兼容旧 (url, ext) 接口；新下载器使用详情接口保留实际音质。"""
+        result = self.song_url_details(h, {"128": "128k", "320": "320k"}.get(quality, quality))
+        if result.error:
+            raise RuntimeError(result.error)
+        return result.url, result.ext.lstrip(".")
+
+    def song_url_details(self, h: str, quality: str = "highest", *,
+                         album_id=0, album_audio_id=0, metadata=None):
+        """只读取当前账号获准的文件，最高可用按无损→320k→128k。"""
+        import re
+        from auth import is_cookie_enabled
+        from ..kugou_download import KugouUrlDetails, quality_hashes, stream_details
+        if not is_cookie_enabled():
+            return KugouUrlDetails(error="酷狗概念版当前登录不可用")
         if not self.token:
-            raise RuntimeError("酷狗概念版未登录（需先在 Cookie 管理扫码登录）")
-        h = h.lower()
-        extra = {
-            "album_id": 0, "area_code": 1, "hash": h, "ssa_flag": "is_fromtrack",
-            "version": 11430, "page_id": 967177915, "quality": quality,
-            "album_audio_id": 0, "behavior": "play", "pid": 411, "cmd": 26,
-            "pidversion": 3001, "IsFreePart": 0,
-            "ppage_id": "356753938,823673182,967485191",
-            "cdnBackup": 1, "module": "",
-        }
-        # key 必须在 signature 之前注入（参与签名）
-        extra["key"] = _sign_key(h, self.mid, self.userid)
-        d = self._request("GET", "https://gateway.kugou.com/v5/url", extra,
-                          x_router="trackercdn.kugou.com",
-                          dfid="".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=24)))
-        # v5/url 响应：顶层 url 为数组，backupUrl 为备选
-        url = ""
-        if isinstance(d.get("url"), list) and d["url"]:
-            url = d["url"][0]
-        elif isinstance(d.get("url"), str):
-            url = d["url"]
-        if not url and isinstance(d.get("backupUrl"), list) and d["backupUrl"]:
-            url = d["backupUrl"][0]
-        if d.get("status") == 1 and url:
-            return url, (d.get("extName") or "mp3")
-        err = d.get("error_code")
-        msg = f"未拿到播放链接（status={d.get('status')} error={err}）"
-        if err in (20020, 20021, 30004):
-            msg += "：会员歌曲，请先在 Cookie 管理领取概念版 VIP 后重试"
-        raise RuntimeError(msg)
+            return KugouUrlDetails(error="酷狗概念版需要登录")
+        if quality not in {"highest", "flac", "320k", "128k"}:
+            return KugouUrlDetails(error="酷狗概念版不支持所选音质")
+        if not re.fullmatch(r"[A-Fa-f0-9]{32}", h or ""):
+            return KugouUrlDetails(error="酷狗概念版歌曲标识无效")
+        hashes = quality_hashes(h, metadata or {})
+        levels = ["flac", "320k", "128k"] if quality == "highest" else [quality]
+        for level in levels:
+            file_hash = hashes.get(level, h).lower()
+            extra = {
+                "album_id": album_id or 0, "area_code": 1, "hash": file_hash,
+                "ssa_flag": "is_fromtrack", "version": 11430, "page_id": 967177915,
+                "quality": QUALITY_MAP[level], "album_audio_id": album_audio_id or 0,
+                "behavior": "play", "pid": 411, "cmd": 26, "pidversion": 3001,
+                "IsFreePart": 0, "ppage_id": "356753938,823673182,967485191",
+                "cdnBackup": 1, "module": "",
+            }
+            extra["key"] = _sign_key(file_hash, self.mid, self.userid)
+            data = self._request("GET", "https://gateway.kugou.com/v5/url", extra,
+                                 x_router="trackercdn.kugou.com",
+                                 dfid="".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=24)))
+            if not isinstance(data, dict):
+                return KugouUrlDetails(error="酷狗概念版下载接口可能已变化")
+            if data.get("status") != 1:
+                if data.get("error_code") in (152, 20020, 20021, 30004):
+                    return KugouUrlDetails(error="酷狗概念版当前账号没有该歌曲音质权限")
+                continue
+            result = stream_details(data)
+            if result.url and (level != "flac" or result.ext in {".flac", ".ape"}):
+                return result
+        return KugouUrlDetails(error="酷狗概念版未提供所选音质，请选择最高可用或其他档位")
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +371,7 @@ class KuGouLiteScraper:
                 title=name,
                 singer=singer,
                 album_name=it.get("AlbumName") or "",
+                album_id=str(it.get("AlbumID") or it.get("AlbumId") or ""),
                 duration=int(duration) if duration else 0,
                 interval=int(duration) if duration else 0,
                 cover_url=(it.get("Image") or "").replace("{size}", "480"),
@@ -366,7 +381,9 @@ class KuGouLiteScraper:
                 platform=self.platform,
                 platform_name=self.platform_name,
                 url=f"https://www.kugou.com/song/#hash={h}",
-                extra={"PayType": pay_type, "MixSongID": it.get("MixSongID") or ""},
+                extra={key: it[key] for key in (
+                    "PayType", "MixSongID", "HQFileHash", "SQFileHash", "HQHash", "SQHash",
+                    "320hash", "sqhash", "AlbumAudioID", "album_audio_id") if key in it},
             ))
         return songs
 

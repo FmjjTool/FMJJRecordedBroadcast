@@ -46,7 +46,7 @@ from toolbox.asset_content import (
 from toolbox.asset_bilibili import (
     av_bvid, download_video, dynamic_type, quality_to_qn,
 )
-from toolbox.asset_files import collect_asset_files
+from toolbox.asset_files import collect_asset_files, entry_after_file_deletion, merge_asset_media
 from toolbox.asset_images import extract_pic_urls
 from toolbox.asset_media import download_item_images, download_item_media
 from toolbox.asset_records import (
@@ -3225,8 +3225,10 @@ class AssetPage(BasePage):
         h.setContentsMargins(12, 12, 12, 12)
         h.setSpacing(12)
         key = self._dl_key(it)
+        row._asset_key = key
         no_dl = self._no_dl_flagged(key)
         cb = QCheckBox()
+        row._asset_check = cb
         cb.setChecked(key in self._checked_keys)
         cb.stateChanged.connect(
             lambda st, k=key: (self._checked_keys.add(k) if st else self._checked_keys.discard(k)))
@@ -3259,7 +3261,9 @@ class AssetPage(BasePage):
         author = (it.get("author") or "").strip() or "-"
         author_line = QHBoxLayout()
         author_line.setSpacing(8)
-        author_line.addWidget(_asset_label(f"#{index}  ·  {plat}  ·  @{author}", elide=True), 1)
+        row._asset_index_suffix = f"  ·  {plat}  ·  @{author}"
+        row._asset_index_label = _asset_label(f"#{index}" + row._asset_index_suffix, elide=True)
+        author_line.addWidget(row._asset_index_label, 1)
         if no_dl:
             flag = _asset_label("不可下载 · 右键可解除")
             flag.setProperty("assetTone", "danger")
@@ -3463,29 +3467,11 @@ class AssetPage(BasePage):
         self._refresh_flagged_rows(key)
 
     def _refresh_flagged_rows(self, key):
-        """下载限制变化后原地刷新对应行（不重扫磁盘，直接重建当前页受影响行）。"""
-        lay = self.collected_layout
-        total = len(self._collected_all_items)
-        if not total or not key:
-            return
-        total_pages = (total + BATCH - 1) // BATCH
-        page = min(max(1, self._collected_page), total_pages)
-        start = (page - 1) * BATCH
-        row_idx = 0
-        for i in range(start, min(start + BATCH, total)):
-            it = self._collected_all_items[i]
-            if self._dl_key(it) != key:
-                row_idx += 1
-                continue
-            if row_idx >= lay.count():
+        """只更新标记变化条目；筛选归属变化时复用其余卡片补位。"""
+        for it in self._disk_items:
+            if self._dl_key(it) == key:
+                self._refresh_item_row(it)
                 break
-            old = lay.itemAt(row_idx).widget()
-            if old is None:
-                break
-            lay.insertWidget(row_idx, self._make_collected_row(it, i + 1))
-            old.setParent(None)
-            old.deleteLater()
-            break
 
     def _open_media_video(self, it):
         """双击缩略图：优先播放本地视频文件，无则打开链接。"""
@@ -3693,61 +3679,16 @@ class AssetPage(BasePage):
                                            sub_bridge=sub_bridge, cancel_ev=cancel_ev)
 
     def _refresh_rows_for(self, items, new_paths=None):
-        """下载完成后的刷新：挂上媒体文件并按当前筛选立即重新归类。
-
-        new_paths=[(path, 类型中文), ...]（download_media stats["paths"]）时
-        直接把文件挂到条目——不触发全量磁盘扫描（_load_disk_items 要读
-        全部 json+raw，曾致下载完成后界面未响应）；无 paths 时回退全量扫描。
-        两种路径最后都走 _reload_from_memory：刚下完的条目当场从「未下载」
-        移到「已下载」，补全的条目从「下载不完整」消失。
-        """
-        keys = {self._dl_key(it) for it in items}
-        gen = self._reload_gen  # 不递增：不使进行中的整列表刷新作废
-
-        if new_paths:
-            # 轻量路径：下载结果已知，直接构造 media_files（与 _scan_media_files
-            # 的条目结构一致），毫秒级完成。单条下载场景 items 只有一条，
-            # 视频流+封面等全部路径都挂到该条
-            target = items[0]
-            existing = {m["path"] for m in target.get("media_files", [])}
-            for path, _mtype in new_paths:
-                if not path or not os.path.exists(path) or path in existing:
-                    continue
-                ext = os.path.splitext(path)[1].lower()
-                target.setdefault("media_files", []).append({
-                    "path": path, "name": os.path.basename(path),
-                    "type": "image" if ext in self._IMG_EXTS else "video",
-                    "date_part": target.get("date_part", ""),
-                    "author": target.get("author", ""),
-                    "subdir": target.get("platform", ""),
-                })
-                existing.add(path)
-            if not self._refresh_item_row(target):
-                self._reload_from_memory(keep_page=True)
+        """下载回执只更新对应条目，空产出也不回退到全盘扫描。"""
+        if getattr(self, "_view_mode", "entries") != "entries":
             return
-
-        def work():
-            return self._load_disk_items()
-
-        def done(disk_items, err):
-            if gen != self._reload_gen or err:
-                return  # 整列表刷新已接管/出错 → 交给全量刷新兜底
-            self._disk_items = disk_items or []
-            if self._loaded_view_scope and self._loaded_view_scope[1].startswith("entries:"):
-                self._loaded_view_items = self._disk_items
-            disk_by_key = {}
-            for d in self._disk_items:
-                k = self._dl_key(d)
-                if k in keys:
-                    disk_by_key[k] = d
-            # 更新 _collected_all_items 里的条目数据（dict 身份不变）
-            for it in self._collected_all_items:
-                nd = disk_by_key.get(self._dl_key(it))
-                if nd is not None:
-                    it.update(nd)
-            self._reload_from_memory(keep_page=True)
-
-        run_bg(work, done)
+        by_key = {self._dl_key(it): it for it in self._disk_items}
+        for item in items:
+            target = by_key.get(self._dl_key(item))
+            if target is None:
+                continue  # 已换来源或条目已删除，不刷新无关页面。
+            target["media_files"] = merge_asset_media(target, new_paths)
+            self._refresh_item_row(target)
 
     def _refresh_item_row(self, it) -> bool:
         """单条下载完成后的行级刷新：只换这一张卡片，不整页重渲染（滚动不跳底）。
@@ -3772,7 +3713,7 @@ class AssetPage(BasePage):
             # 原来被筛掉、下载后应出现（如「已下载」筛选）：重算清单，保滚动位置
             self._collected_all_items = self._apply_item_filters(
                 self._disk_items, plat, status, desc, kw)
-            self._render_collected_batch_keep_scroll()
+            self._sync_collected_rows(changed_keys={self._dl_key(it)})
             return True
         if matches:
             self._replace_collected_row(idx, it)
@@ -3782,7 +3723,13 @@ class AssetPage(BasePage):
         return True
 
     def _refresh_after_row_removed(self, idx):
-        """从当前页移除一条后，只重排该行之后的卡片与分页条（上方行不动）。"""
+        """移出后按稳定键复用其余卡片，只新增补位行。"""
+        self._sync_collected_rows()
+
+    def _sync_collected_rows(self, changed_keys=()):
+        """重排当前页已有卡片；未变化条目不重建、不重复加载缩略图。"""
+        if getattr(self, "_collected_rendering", False):
+            return
         lay = self.collected_layout
         total = len(self._collected_all_items)
         if not total:
@@ -3791,14 +3738,11 @@ class AssetPage(BasePage):
             return
         total_pages = (total + BATCH - 1) // BATCH
         page = min(max(1, self._collected_page), total_pages)
-        if page != self._collected_page:
-            self._render_collected_batch_keep_scroll()
-            return
+        self._collected_page = page
         start = (page - 1) * BATCH
-        pos = idx - start
-        if pos < 0 or pos >= BATCH:
-            self._render_collected_batch_keep_scroll()
-            return
+        desired = self._collected_all_items[start:start + BATCH]
+        keys = {self._dl_key(it) for it in desired}
+        changed_keys = set(changed_keys)
         bar = self.collected_scroll.verticalScrollBar()
         bar_pos = bar.value()
         old_spin = self._collected_pager_spin
@@ -3808,17 +3752,32 @@ class AssetPage(BasePage):
             except RuntimeError:
                 pass
             self._collected_pager_spin = None
-        while lay.count() > pos:
-            item = lay.takeAt(pos)
-            w = item.widget()
-            if w:
-                w.hide()
-                w.setParent(None)
-                w.deleteLater()
-        for i in range(start + pos, min(start + BATCH, total)):
-            self._render_collected_row(self._collected_all_items[i], i + 1)
-        lay.addWidget(self._make_pager(total, page, total_pages))
-        lay.addStretch(1)
+        reusable = {}
+        self._collected_rendering = True
+        try:
+            while lay.count():
+                layout_item = lay.takeAt(0)
+                widget = layout_item.widget()
+                if widget is None:
+                    continue
+                key = getattr(widget, "_asset_key", None)
+                if isinstance(widget, _RowWidget) and key in keys and key not in changed_keys:
+                    reusable[key] = widget
+                else:
+                    widget.hide()
+                    widget.setParent(None)
+                    widget.deleteLater()
+            for index, it in enumerate(desired, start + 1):
+                widget = reusable.get(self._dl_key(it))
+                if widget is None:
+                    widget = self._make_collected_row(it, index)
+                else:
+                    widget._asset_index_label.setText(f"#{index}" + widget._asset_index_suffix)
+                lay.addWidget(widget)
+            lay.addWidget(self._make_pager(total, page, total_pages))
+            lay.addStretch(1)
+        finally:
+            self._collected_rendering = False
         QTimer.singleShot(0, lambda: self._restore_scroll_pos(bar_pos))
 
     def _replace_collected_row(self, idx, it):
@@ -3846,9 +3805,13 @@ class AssetPage(BasePage):
             self._checked_keys = {self._dl_key(it) for it in self._collected_all_items}
         else:
             self._checked_keys.clear()
-        # 重渲染以同步复选框状态（保持当前页码）
-        if self._collected_all_items:
-            self._render_collected_batch()
+        for index in range(self.collected_layout.count()):
+            row = self.collected_layout.itemAt(index).widget()
+            check = getattr(row, "_asset_check", None)
+            if check is not None:
+                blocked = check.blockSignals(True)
+                check.setChecked(getattr(row, "_asset_key", None) in self._checked_keys)
+                check.blockSignals(blocked)
 
     def _batch_download_checked(self):
         """并发批量下载所有勾选条目（线程数下拉）：仅初次下载（本地无媒体）或
@@ -3942,8 +3905,6 @@ class AssetPage(BasePage):
             else:
                 card.finish(f"批量下载完成 {st['done']} 条")
                 self.app.toast(f"批量下载完成 {st['done']} 条", "success")
-            QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
-
         _launch()
 
     def _download_bilibili_item(self, it, on_finished=None, quiet=False, force=False,
@@ -4027,9 +3988,7 @@ class AssetPage(BasePage):
                     paths.append((result, "视频"))
                 self.app.toast("已下载 B站视频" + ("（含封面）" if cover_ok else ""),
                                "success")
-            if not quiet:  # 批量模式由 _advance 统一刷新一次，避免逐条骨架闪烁
-                # 轻量刷新：视频/封面路径已知，直接挂行（不触发全量磁盘扫描）
-                self._refresh_rows_for([it], new_paths=paths or None)
+            self._refresh_rows_for([it], new_paths=paths)
             if on_finished:
                 on_finished()
 
@@ -4137,9 +4096,7 @@ class AssetPage(BasePage):
                         # 0 失败 0 成功 = 一个任务都没建出来：重新解析没拿到
                         # 直链（风控/作品失效）且存量链接不是直链，压根没尝试
                         self.app.toast("视频未下载：未获取到可用直链（解析被拦或作品失效），可重试", "error")
-            if not quiet:  # 批量模式由 _advance 统一刷新一次
-                # 轻量刷新：stats["paths"] 已带下载文件路径，直接挂行
-                self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
+            self._refresh_rows_for([it], new_paths=stats.get("paths") or [])
             if on_finished:
                 on_finished()
 
@@ -4259,17 +4216,58 @@ class AssetPage(BasePage):
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         deleted = 0
+        deleted_paths = set()
         for f in targets:
             try:
                 os.remove(f)
                 deleted += 1
+                deleted_paths.add(os.path.normcase(os.path.abspath(f)))
             except Exception:
                 pass
         # 文本全删 = 条目本身消失，清下载状态允许重新采集
         if cb_doc.isChecked():
             self._dl_state.pop(self._dl_key(it), None)
         self.app.toast(f"已删除 {deleted} 个文件", "success")
-        QTimer.singleShot(100, lambda: self._refresh_collected(keep_page=True))
+        self._refresh_deleted_asset_files(deleted_paths)
+
+    def _refresh_deleted_asset_files(self, deleted_paths):
+        """按删除回执修补关联条目和当前页，不重新扫描导出目录。"""
+        if not deleted_paths:
+            return
+        removed = set()
+        changed = set()
+        for item in self._disk_items:
+            paths = [item.get("file_path")] + [m.get("path") for m in item.get("media_files") or []]
+            if not any(path and os.path.normcase(os.path.abspath(path)) in deleted_paths
+                       for path in paths):
+                continue
+            old_key = self._dl_key(item)
+            updated = entry_after_file_deletion(item, deleted_paths)
+            if updated is None:
+                removed.add(id(item))
+                self._checked_keys.discard(old_key)
+                self._dl_state.pop(old_key, None)
+            else:
+                item.clear()
+                item.update(updated)
+                key = self._dl_key(item)
+                changed.add(key)
+                if old_key != key:
+                    if old_key in self._checked_keys:
+                        self._checked_keys.discard(old_key)
+                        self._checked_keys.add(key)
+                    self._dl_state.pop(old_key, None)
+        if removed:
+            self._disk_items = [it for it in self._disk_items if id(it) not in removed]
+        if self._loaded_view_scope and self._loaded_view_scope[1].startswith("entries:"):
+            self._loaded_view_items = self._disk_items
+        if getattr(self, "_view_mode", "entries") != "entries":
+            return
+        plat = _CN2EN.get(self.plat_sel.currentText(), self.plat_sel.currentText())
+        self._collected_all_items = self._apply_item_filters(
+            self._disk_items, plat, self.status_sel.currentText(),
+            self.sort_sel.currentText() == "时间倒序", (self._search_var or "").strip().lower())
+        self._sync_collected_rows(changed_keys=changed)
 
     def _extract_pic_urls(self, it) -> tuple:
         return extract_pic_urls(it)
@@ -4363,9 +4361,7 @@ class AssetPage(BasePage):
                 if cancelled:
                     msg += "（已取消）"
                 self.app.toast(msg, "success" if not cancelled else "warning")
-            # 刷新该条目：stats["paths"] 已带新下载文件路径，直接挂行显示本地缩略图
-            if not quiet:  # 批量模式由 _advance 统一刷新一次
-                self._refresh_rows_for([it], new_paths=stats.get("paths") or None)
+            self._refresh_rows_for([it], new_paths=stats.get("paths") or [])
             if on_finished:
                 on_finished()
 

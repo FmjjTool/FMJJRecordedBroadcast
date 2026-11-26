@@ -121,7 +121,7 @@ def history(group_no: str, limit: int = 200) -> dict:
     rows = []
     for row in _service().history(group_no, limit=limit):
         rows.append({
-            "time": row.get("recorded_ts") or row.get("fetched_at") or "",
+            "time": row.get("fetched_at") or row.get("recorded_ts") or "",
             "members": row.get("member_count"),
             "name": row.get("name") or "",
         })

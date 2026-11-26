@@ -9799,11 +9799,28 @@ function renderLivestreamSummary(root) {
       style: 'flex:1;min-width:160px'
     });
     var searchBtn = h('button', { class: 'btn primary', type: 'button' }, '搜索');
-    var qualitySel = h('select', { class: 'select' },
-      h('option', { value: '' }, '各平台默认音质'),
-      h('option', { value: 'lossless' }, '无损（网易云）'),
-      h('option', { value: 'exhigh' }, '320k'),
-      h('option', { value: 'higher' }, '192k'));
+    var qualitySel = h('select', { class: 'select', 'aria-label': '下载音质' },
+      h('option', { value: 'highest' }, '最高可用'));
+    var qualityCatalog = {};
+    function refreshQualities() {
+      var choices = qualityCatalog[platformSel.value];
+      if (!choices || !choices.length) return;
+      var previous = qualitySel.value;
+      qualitySel.replaceChildren();
+      choices.forEach(function (choice) {
+        qualitySel.appendChild(h('option', { value: choice.value }, choice.label));
+      });
+      if (choices.some(function (choice) { return choice.value === previous; })) {
+        qualitySel.value = previous;
+      }
+    }
+    platformSel.addEventListener('change', refreshQualities);
+    api('/api/music-download/qualities').then(function (result) {
+      qualityCatalog = result.platforms || {};
+      refreshQualities();
+    }).catch(function () {
+      toast('音质列表读取失败，当前使用最高可用', 'warning');
+    });
     var fallbackBox = h('input', { type: 'checkbox', checked: 'checked' });
     var downloadBtn = h('button', {
       class: 'btn', type: 'button', disabled: true
@@ -12055,7 +12072,7 @@ function renderMusicTag(root) {
                 if (!window.confirm('补充「' + selected.name + '」的活动歌单？\n\n只更新该活动填写的平台歌单列，写入后读回核对。')) return;
                 submit.disabled = true;
                 post('/api/tcdoc/bridge/playlist', payload).then(function (res) {
-                  watchJob(jobHost2, res.job, function (job) { var receipt = job.result || {}; if (receipt.ok) { overlay.remove(); toast(receipt.summary || '已完成歌单补录', 'success'); } else message.textContent = receipt.summary || '没有写入，请检查回执。'; }, { onSettled: function () { submit.disabled = false; } });
+                  watchJob(jobHost2, res.job, function (job) { var receipt = job.result || {}; if (receipt.ok) { dirty = false; close(); toast(receipt.summary || '已完成歌单补录', 'success'); } else message.textContent = receipt.summary || '没有写入，请检查回执。'; }, { onSettled: function () { submit.disabled = false; } });
                 }).catch(function (error) { submit.disabled = false; message.textContent = '写入失败：' + error.message; });
               });
               function close() {
@@ -12234,10 +12251,14 @@ function renderMusicTag(root) {
             exportText.disabled = !pages.length || busy;
             fetchBody.textContent = pages.length ? '重新抓取' : '抓取正文';
             var images = result.images || {};
+            var capture = result.capture || {};
             note.textContent = (result.last ? '本地存档于 ' + result.last + ' · ' : '')
               + '共 ' + pages.length + ' 篇 · 图片 ' + (images.downloaded || 0)
               + ' / ' + (images.total || 0) + ' 张'
-              + (images.failed ? ' · ' + images.failed + ' 张失败，可重新抓取重试' : '');
+              + (images.failed ? ' · ' + images.failed + ' 张失败，可重新抓取重试' : '')
+              + (capture.skipped ? ' · ' + capture.skipped + ' 篇抓取失败，已保留旧存档' : '')
+              + (capture.complete === false ? ' · 页面列表未完整读取，缺失页面旧存档保留' : '')
+              + (capture.snapshot_failed ? ' · Markdown 快照写入失败，正文已存入数据库' : '');
             draw();
           }
 

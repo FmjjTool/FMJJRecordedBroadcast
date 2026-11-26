@@ -124,7 +124,7 @@ class CoverAutomationDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.hide()
-        self._sorter = table_sort.install_callback(self.table, self._on_sort, skip_columns=(0,))
+        self._sorter = table_sort.install_callback(self.table, self._on_sort, skip_columns=(0,), tri_state=True)
         cv.addWidget(self.table, 1)
         footer = QHBoxLayout()
         footer.setSpacing(8)
@@ -241,7 +241,8 @@ class CoverAutomationDialog(QDialog):
             self._refresh_controls()
             return
         self._rows = [dict(row) for row in rows or []]
-        for row in self._rows:
+        for index, row in enumerate(self._rows):
+            row["_scan_order"] = index
             row["_requires_date"] = (row.get("status") == "invalid"
                                      and "日期" in str(row.get("reason", "")))
         self._selected = {row["video"] for row in self._rows if row.get("status") == "ready"}
@@ -305,12 +306,17 @@ class CoverAutomationDialog(QDialog):
     def _on_sort(self, col, ascending):
         keys = {1: "video", 2: "title", 3: "date", 4: "status", 5: "reason"}
         key = keys.get(col)
-        if key is None or self._busy:
+        if self._busy:
             return
-        self._rows = table_sort.sort_records(
-            self._rows, lambda row: table_sort.sort_key(
-                _STATUS_TEXT.get(row.get(key), row.get(key)) if key == "status" else row.get(key)),
-            ascending=ascending)
+        if col < 0:
+            self._rows.sort(key=lambda row: row.get("_scan_order", 0))
+        elif key is not None:
+            self._rows = table_sort.sort_records(
+                self._rows, lambda row: table_sort.sort_key(
+                    _STATUS_TEXT.get(row.get(key), row.get(key)) if key == "status" else row.get(key)),
+                ascending=ascending)
+        else:
+            return
         self._page = 0
         self._render_page()
 

@@ -567,11 +567,11 @@ def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
     prev = ""
     total = len(pages)
     for i, item in enumerate(pages, 1):
-        body_images._check_cancelled(is_cancelled)
         title = item.get("title") or f"第 {i} 篇"
         _emit(on_status, f"正在读取第 {i}/{total} 篇：{title}")
         text, error, images = "", "", []
         try:
+            body_images._check_cancelled(is_cancelled)
             entry = page.query_selector(
                 f'#sc-sidebar-section [data-block-id="{item["id"]}"] .sc-page-item-rich-title')
             if entry is None:
@@ -584,7 +584,9 @@ def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
             prev = text or prev
             images = body_images.collect_page_images(
                 page, doc or {}, item["id"], on_status, is_cancelled)
-        except body_images.BodyImagesCancelled:
+        except body_images.BodyImagesCancelled as exc:
+            # 本页尚未完成时不交给存档；携带此前已经读完的页面供外层保留。
+            exc.completed_pages = list(results)
             raise
         except Exception as exc:  # noqa: BLE001 - 单页失败继续抓其余页面
             error = str(exc)[:120]
@@ -603,6 +605,21 @@ def join_pages(pages: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
+def _save_cancelled_pages(doc: dict, exc, pages: list[dict], on_status=None) -> None:
+    """取消时只保存本轮完整成功页；不删除旧页面，不覆盖未完成页。"""
+    completed = [item for item in pages if isinstance(item, dict) and not item.get("error")]
+    if not completed:
+        return
+    try:
+        from . import archive
+        archive.save_preview(doc, completed, join_pages(completed), complete=False)
+        exc.saved_pages = len(completed)
+        _emit(on_status, f"已取消，已保留本轮完成的 {len(completed)} 篇正文")
+    except Exception:  # noqa: BLE001 - 保留取消异常，不暴露本地路径
+        exc.save_error = "已取消，本轮完成的正文未能保存"
+        _emit(on_status, exc.save_error)
+
+
 def _finish_preview(doc: dict, page, text: str, pages: list[dict],
                     complete: bool) -> dict:
     """组装预览结果，并自动存档（落库 + Markdown 快照）；存档失败不影响预览。"""
@@ -611,6 +628,10 @@ def _finish_preview(doc: dict, page, text: str, pages: list[dict],
     try:
         from . import archive
         result["save"] = archive.save_preview(doc, pages, text, complete=complete)
+    except Exception:  # noqa: BLE001 - 本地存档失败不能挡住预览
+        result["save_error"] = "正文已读取，但本地存档保存失败"
+        return result
+    try:
         # 失败页/暂时缺失的图片由存档层保留；立即用实际提交结果展示，
         # 不让本次失败的临时清单遮住旧的完整正文和图片。
         stored_pages = archive.pages_of(str(doc.get("key") or ""))
@@ -618,8 +639,8 @@ def _finish_preview(doc: dict, page, text: str, pages: list[dict],
             result["pages"] = stored_pages
             result["text"] = (join_pages(stored_pages) if len(stored_pages) > 1
                               else str(stored_pages[0].get("text") or ""))
-    except Exception as exc:  # noqa: BLE001 - 本地存档失败不能挡住预览
-        result["save_error"] = str(exc)[:200]
+    except Exception:  # noqa: BLE001 - 读回失败不回传完整路径
+        result["save_error"] = "正文已保存，但本地存档读取失败"
     return result
 
 
@@ -644,7 +665,7 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
                 pass
             page.wait_for_timeout(1200)
             if _is_login_required(page):
-                raise LoginRequired("登录态已失效：请到「Cookie 管理器」重新登录腾讯文档")
+                raise LoginRequired("抓取正文失败：需要登录，请稍后重试")
 
             _emit(on_status, "正在读取正文……")
             kind = (doc.get("kind") or "").lower()
@@ -653,6 +674,7 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
             # AI 文档：展开左侧页面树，逐篇抓取（只抓当前页会漏掉其余子页面）
             tree_complete = False
             if kind == "aio":
+                completed_pages = []
                 try:
                     _emit(on_status, "正在展开文档页面列表……")
                     _, tree_complete = _expand_aio_tree(page, is_cancelled)
@@ -660,10 +682,13 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
                     if len(pages) > 1:
                         _emit(on_status, f"发现 {len(pages)} 篇页面，正在逐篇读取……")
                         results = _read_aio_pages(page, pages, on_status, doc, is_cancelled)
+                        completed_pages = results
                         body_images._check_cancelled(is_cancelled)
                         return _finish_preview(doc, page, join_pages(results),
                                                results, complete=tree_complete)
-                except body_images.BodyImagesCancelled:
+                except body_images.BodyImagesCancelled as exc:
+                    _save_cancelled_pages(doc, exc,
+                                          getattr(exc, "completed_pages", completed_pages), on_status)
                     raise
                 except Exception:  # noqa: BLE001 - 页面树异常时退回单篇预览
                     tree_complete = False

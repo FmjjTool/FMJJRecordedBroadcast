@@ -165,7 +165,8 @@ class QQMusicScraper(BaseScraper):
             platform=self.platform,
             platform_name=self.platform_name,
             url=f"https://y.qq.com/n/ryqq/songDetail/{song_id}",
-            extra=_remainder(info, "name title subtitle singer album interval index_album index_cd bpm genre language mv file pay time_public"),
+            extra={**_remainder(info, "name title subtitle singer album interval index_album index_cd bpm genre language mv file pay time_public"),
+                   "media_mid": fobj.get("media_mid") or info.get("strMediaMid") or ""},
         )
 
     # ------------------------------------------------------------------

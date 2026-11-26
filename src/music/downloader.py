@@ -73,7 +73,7 @@ def normalize_quality(quality: str = "") -> str:
 def _quality_matches(requested: str, ext: str, actual: str) -> bool:
     if requested == "highest":
         return True
-    lossless = ext.lower() in (".flac", ".ape")
+    lossless = ext.lower() in (".flac", ".ape") and actual.upper() == ext[1:].upper()
     if requested == "flac":
         return lossless
     if lossless:
@@ -109,9 +109,10 @@ def _audio_details(content: bytes, ext: str) -> tuple[str, str]:
             rate = getattr(audio.info, "bitrate", 0) or 0
             if rate:
                 return ext, f"{round(rate / 1000)}kbps"
+            return ext, ext[1:].upper()
     except Exception:
         pass
-    return ext, ext[1:].upper() if ext in (".flac", ".ape") else ""
+    return ext, ""
 
 
 def _save(content: bytes, base_name: str, ext: str, out_dir: str) -> str:
@@ -161,6 +162,8 @@ def _download_to(url: str, referer: str, base_name: str, ext: str, out_dir: str,
     if resp.content.lstrip()[:1] in (b"<", b"{", b"["):
         return DownloadResult(error_message="下载失败：平台返回了错误页面，请稍后重试")
     ext, actual = _audio_details(resp.content, ext)
+    if not actual:
+        return DownloadResult(error_message="下载失败：无法识别平台返回的音频文件，请稍后重试")
     if not _quality_matches(requested_quality, ext, actual):
         return DownloadResult(error_message="下载失败：实际文件未达到所选音质，请选择最高可用或其他档位")
     preview = _detect_preview(resp.content, expected_seconds)

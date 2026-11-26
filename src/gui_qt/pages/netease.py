@@ -8,7 +8,7 @@
 - 五个主平台能力对齐：搜索 / 单曲 / 歌单 / 专辑 / 歌手主页（名称或主页链接）
 - 详情滚动区：歌曲列表（封面+时长）、单曲详情卡（封面+歌词+立即下载）、歌单信息卡、
   专辑详情卡、歌手主页（信息卡 + 热门歌曲 + 专辑，均可勾选下载）
-- 下载：网易云 MusicDownloader；其余 music/downloader（QQ 仅解析，失败自动换源）
+- 下载：网易云 MusicDownloader；其余 music/downloader（默认最高可用，失败自动换源）
 - 导出：勾选结果导出 Excel/JSON/Markdown（原「音乐信息获取」能力）
 """
 
@@ -519,7 +519,7 @@ class NeteasePage(BasePage):
         self.quality_menu.clear()
         if platform == MERGE_PLATFORM:
             # 对比模式混合多平台，音质由各平台各自取默认（网易云走无损）
-            self.quality_menu.addItem("各平台默认（网易云无损）", "")
+            self.quality_menu.addItem("各平台最高可用", "highest")
             self.quality_menu.setEnabled(False)
         elif platform == "netease":
             self.quality_menu.addItems(list(QUALITY_NAMES.values()))
@@ -1746,11 +1746,12 @@ class NeteasePage(BasePage):
                 self.status_label.setText(f"{err}")
                 return
             via = f"（经{result.via_platform}换源）" if result.via_platform else ""
+            actual = f" · {result.quality}" if result.quality else ""
             if result.success:
                 if result.is_preview:
-                    self.status_label.setText(f"仅试听片段：{os.path.basename(result.file_path)}（各平台均为 VIP 付费曲）{via}")
+                    self.status_label.setText(f"仅试听片段：{os.path.basename(result.file_path)}{actual}{via}")
                 else:
-                    self.status_label.setText(f"已下载 {os.path.basename(result.file_path)}{via}")
+                    self.status_label.setText(f"已下载 {os.path.basename(result.file_path)}{actual}{via}")
             else:
                 self.status_label.setText(f"{result.error_message[:80]}")
 

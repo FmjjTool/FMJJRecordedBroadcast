@@ -509,6 +509,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/music-playlist/apply", start_playlist_apply)
 
     server.get("/api/music-download", lambda req: music_download.overview())
+    server.get("/api/music-download/qualities", lambda req: music_download.qualities())
 
     def start_music_search(req):
         return music_download.start_search(dict(req.json or {}))
@@ -744,6 +745,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tcdoc/body", lambda req: tcdoc.body(req.q("doc_key")))
 
     def tcdoc_body_fetch(req):
+        if not isinstance(req.json, dict):
+            raise ValueError("抓取参数格式错误，请刷新页面后重试")
         return tcdoc.start_body_fetch(dict(req.json or {}))
     server.post("/api/tcdoc/body/fetch", tcdoc_body_fetch)
 

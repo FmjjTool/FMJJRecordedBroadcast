@@ -116,8 +116,154 @@ def _desired_widths(view) -> list[int]:
     return desired
 
 
+def _proportional(total, weights):
+    """按权重分配整数像素，余数按小数部分分配，保证总宽精确。"""
+    weight_sum = sum(weights)
+    if total <= 0 or weight_sum <= 0:
+        return [0] * len(weights)
+    values = [total * weight // weight_sum for weight in weights]
+    remainder = total - sum(values)
+    order = sorted(range(len(weights)),
+                   key=lambda i: total * weights[i] % weight_sum, reverse=True)
+    for index in order[:remainder]:
+        values[index] += 1
+    return values
+
+
+def _configured_widths(view, desired):
+    """显式配置的表格：固定列不动，主文本列保底，其余列按容量收缩。"""
+    policy = view._table_column_policy
+    header = _header_of(view)
+    visible = [i for i in range(header.count()) if not view.isColumnHidden(i)]
+    fixed = policy["fixed"]
+    flexible = [i for i in visible if i not in fixed]
+    minimums = {i: policy["minimums"].get(i, _MIN_WIDTH) for i in flexible}
+    widths = {i: fixed[i] if i in fixed else max(desired[i], minimums[i])
+              for i in visible}
+    available = max(0, view.viewport().width() - 2)
+    overflow = sum(widths.values()) - available
+    preferred = [i for i in policy["stretch"] if i in flexible]
+    if overflow > 0:
+        # 先消化主文本列超出保底宽度的部分，再按其余列可收缩容量分摊。
+        for columns in (preferred, [i for i in flexible if i not in preferred]):
+            capacities = [max(0, widths[i] - minimums[i]) for i in columns]
+            cut = min(overflow, sum(capacities))
+            for i, amount in zip(columns, _proportional(cut, capacities)):
+                widths[i] -= amount
+            overflow -= cut
+        if overflow > 0 and flexible:
+            # 极窄视口放不下所有保底宽度时，只有弹性列按剩余空间缩小。
+            room = max(len(flexible), available - sum(widths[i] for i in visible
+                                                      if i in fixed))
+            shares = _proportional(room - len(flexible),
+                                   [widths[i] for i in flexible])
+            for i, amount in zip(flexible, shares):
+                widths[i] = 1 + amount
+    elif overflow < 0 and flexible:
+        columns = preferred or [max(flexible, key=lambda i: widths[i])]
+        shares = _proportional(-overflow, [widths[i] for i in columns])
+        for i, amount in zip(columns, shares):
+            widths[i] += amount
+    return widths
+
+
+def _apply_configured_widths(view, desired=None):
+    header = _header_of(view)
+    if header is None or header.count() == 0 or view.viewport().width() <= 0:
+        return
+    controller = view._table_column_sizing
+    controller.applying = True
+    try:
+        widths = _configured_widths(view, desired or _desired_widths(view))
+        header.setStretchLastSection(False)
+        for col in range(header.count()):
+            header.setSectionResizeMode(
+                col, QHeaderView.Fixed if col in view._table_column_policy["fixed"]
+                else QHeaderView.Interactive)
+        for col, width in widths.items():
+            view.setColumnWidth(col, int(width))
+        _capture_defaults(view)
+        controller.initialized = True
+    finally:
+        controller.applying = False
+
+
+class _ConfiguredColumnSizing(QObject):
+    """只服务于主动接入的表格；用户调宽后暂停随窗口自动调整。"""
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.view = view
+        self.applying = False
+        self.initialized = False
+        self.automatic = False
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._fit)
+        view.installEventFilter(self)
+        view.viewport().installEventFilter(self)
+        _header_of(view).sectionResized.connect(self._resized)
+
+    def resume(self):
+        self.automatic = self.view._table_column_policy["auto_fit"]
+
+    def _resized(self, _column, old_size, new_size):
+        if not self.initialized or self.applying:
+            return
+        if old_size == 0 or new_size == 0:
+            # 隐藏/重新显示列不算手动拖宽，重新分配剩余可见列。
+            if self.automatic:
+                self.timer.start(0)
+            return
+        self.automatic = False
+        self.timer.stop()
+
+    def _fit(self):
+        if self.automatic and self.view.isVisible():
+            _apply_configured_widths(self.view)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Show, QEvent.Resize) and self.automatic:
+            self.timer.start(0)
+        return False
+
+
+def configure_table_columns(view, *, minimums=None, fixed=None, stretch=None,
+                            auto_fit=False):
+    """显式接入列宽策略；未调用的表格保持原行为。
+
+    minimums/fixed 为「列编号: 像素宽度」，stretch 为吸收剩余空间的主文本列。
+    auto_fit 随显示与窗口尺寸调整；手动调宽后暂停，点「自适应」恢复。
+    """
+    if not isinstance(view, _TABLE_TYPES):
+        raise TypeError("需要表格控件")
+    view._table_column_policy = {
+        "minimums": {int(i): max(1, int(w)) for i, w in (minimums or {}).items()},
+        "fixed": {int(i): max(1, int(w)) for i, w in (fixed or {}).items()},
+        "stretch": list(dict.fromkeys(int(i) for i in (stretch or ()))),
+        "auto_fit": bool(auto_fit),
+    }
+    view._table_column_defaults = None
+    header = _header_of(view)
+    # 保底算法已逐列约束；允许极窄窗口时弹性列进一步收缩。
+    header.setMinimumSectionSize(1)
+    controller = getattr(view, "_table_column_sizing", None)
+    if controller is None:
+        controller = _ConfiguredColumnSizing(view)
+        view._table_column_sizing = controller
+    controller.initialized = False
+    controller.resume()
+    if auto_fit and view.isVisible():
+        controller.timer.start(0)
+    return controller
+
+
 def fit_table_columns(view):
     """按内容宽度分配列宽，并尽量填满视口；不改变表格数据与排序。"""
+    if getattr(view, "_table_column_policy", None) is not None:
+        view._table_column_sizing.resume()
+        _apply_configured_widths(view)
+        return
     header = _header_of(view)
     if header is None or header.count() == 0:
         return
@@ -155,6 +301,10 @@ def reset_table_columns(view):
     defaults = getattr(view, "_table_column_defaults", None)
     if not defaults or len(defaults) != header.count():
         fit_table_columns(view)
+        return
+    if getattr(view, "_table_column_policy", None) is not None:
+        view._table_column_sizing.resume()
+        _apply_configured_widths(view, defaults)
         return
     header.setSectionResizeMode(QHeaderView.Interactive)
     header.setStretchLastSection(False)

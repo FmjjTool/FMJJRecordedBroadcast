@@ -4,10 +4,10 @@
 界面结构对齐参考项目「江湖录播」（D:/PythonApps/Python版全量/ui/main_window.py）：
   菜单栏（文件 / 主播 / 工具 / 设置 / 帮助）
   + 工具栏（添加主播 / 批量导入 / 批量修改 / 开启监控录制 / 一键停止 /
-            立即检测 / 录制设置 / 推送设置 / FLV 修复 / 写时间码 / 打开录制目录）
+            立即检测 / 录制设置 / 推送设置 / FLV / TS 修复 / 写时间码 / 打开录制目录）
   + 顶部详情条 + 主播表格（状态着色、勾选列、双击切换监控/录制）
   + 下方运行日志（QSplitter 可拖）+ 状态栏
-  + 右键菜单（参考项目原版全部项目，逐条对应）
+  + 右键菜单（检测、重新录制、独立设置、备注、复制与删除）
   + 底部「抖音直播 / B站直播」切换（同源 UI，两套列表互不影响）
 
 录制特性参考 BililiveRecorder 2.20.0：
@@ -25,45 +25,43 @@ from datetime import datetime
 
 from PySide6.QtCore import (QAbstractTableModel, QDateTime, QModelIndex, QObject,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPalette
+from PySide6.QtGui import QAction, QBrush, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton, QSpinBox, QSplitter,
-    QStackedWidget, QStatusBar, QStyle, QStyleOptionHeader, QTableView,
+    QStackedWidget, QStatusBar, QTableView,
     QVBoxLayout, QWidget,
 )
 
 from toolbox import live_record as LR
+from gui_qt import theme
+from gui_qt.table_columns import configure_table_columns
+from gui_qt.table_sort import install_callback, sort_key, sort_records
 
 A = Qt.AlignmentFlag
 
 # 列：(key, 标题, 宽, 对齐)
 COLUMNS = [
-    ("selected", "选择", 44, A.AlignCenter),
+    ("selected", "选择", 36, A.AlignCenter),
     ("idx", "序号", 44, A.AlignCenter),
     ("name", "主播名称", 150, A.AlignLeft | A.AlignVCenter),
     ("live", "直播状态", 80, A.AlignCenter),
     ("checked", "监控时间", 84, A.AlignCenter),
     ("elapsed", "已录时间", 84, A.AlignCenter),
-    ("stop", "录制n分钟\n停止录制", 88, A.AlignCenter),
-    ("content", "录制\n内容", 62, A.AlignCenter),
-    ("monitoring", "监控\n状态", 62, A.AlignCenter),
-    ("want_record", "是否\n录制", 58, A.AlignCenter),
+    ("stop", "录满停止", 88, A.AlignCenter),
+    ("content", "录制内容", 62, A.AlignCenter),
+    ("monitoring", "监控状态", 62, A.AlignCenter),
+    ("want_record", "是否录制", 58, A.AlignCenter),
     ("quality", "录制质量", 88, A.AlignCenter),
-    ("segment", "分段\n录制", 76, A.AlignCenter),
+    ("segment", "分段录制", 76, A.AlignCenter),
     ("online", "在线人数", 78, A.AlignCenter),
     ("title", "直播标题", 180, A.AlignLeft | A.AlignVCenter),
 ]
 COL_INDEX = {c[0]: i for i, c in enumerate(COLUMNS)}
 VOLATILE = ("live", "checked", "elapsed", "monitoring",
             "want_record", "online", "stop", "content", "quality")
-
-C_LIVE_BG = QColor("#FFF4F4")
-C_REC_BG = QColor("#FFE4E4")
-C_ERR_FG = QColor("#C00000")
-C_MUTED_FG = QColor("#9A9A9A")
 
 # 清晰度档位（手动可选，不必等「识别」返回）
 QUALITY_PRESETS = {
@@ -110,53 +108,19 @@ def _ffplay():
     return shutil.which("ffplay") or ""
 
 
-class WrapHeader(QHeaderView):
-    """表头自动换行。
-
-    Qt 的 QHeaderView 不会自动折行，列宽不够时直接把文字截掉
-    （「录制n分钟停止录制」「是否监控」这类标题只剩一半）。这里接管表头绘制：
-    先按系统样式画底与边线，再用 TextWordWrap 把标题按列宽折行，表头高度固定两行。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(Qt.Orientation.Horizontal, parent)
-        self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setHighlightSections(False)
-        self.setSectionsClickable(False)
-        metrics = self.fontMetrics()
-        self.setFixedHeight(metrics.lineSpacing() * 2 + 12)
-
-    def paintSection(self, painter, rect, logical_index):
-        if not rect.isValid():
-            return
-        option = QStyleOptionHeader()
-        self.initStyleOption(option)
-        option.rect = rect
-        option.section = logical_index
-        option.text = ""
-        painter.save()
-        self.style().drawControl(QStyle.ControlElement.CE_Header, option,
-                                 painter, self)
-        text = self.model().headerData(
-            logical_index, self.orientation(), Qt.ItemDataRole.DisplayRole)
-        if text:
-            painter.setPen(self.palette().color(QPalette.ColorRole.ButtonText))
-            flags = int(Qt.AlignmentFlag.AlignCenter
-                        | Qt.TextFlag.TextWordWrap)
-            painter.drawText(rect.adjusted(4, 2, -4, -2), flags, str(text))
-        painter.restore()
-
-
 class AnchorModel(QAbstractTableModel):
     """主播表格模型（只发 dataChanged，刷新不丢选中与滚动位置）。"""
 
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self._sort_column = -1
+        self._sort_ascending = True
+        self._rows = list(manager.anchors)
 
     @property
     def anchors(self):
-        return self.manager.anchors
+        return self._rows
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.anchors)
@@ -168,10 +132,14 @@ class AnchorModel(QAbstractTableModel):
         if orientation == Qt.Orientation.Horizontal:
             if role == Qt.ItemDataRole.DisplayRole:
                 return COLUMNS[section][1]
-            if (role == Qt.ItemDataRole.ToolTipRole
-                    and COLUMNS[section][0] == "monitoring"):
-                return ("监控状态：未监控 / 等待开播 / 下播检测。\n"
-                        "录制中会继续按间隔检测是否下播，检测到关播就停止录制。")
+            if role == Qt.ItemDataRole.ToolTipRole:
+                key, title, *_ = COLUMNS[section]
+                if key == "monitoring":
+                    return ("监控状态：未监控 / 等待开播 / 下播检测。\n"
+                            "录制中会继续按间隔检测是否下播，检测到关播就停止录制。")
+                if key == "stop":
+                    return "录制多少分钟后停止录制；不限表示持续录制到下播或手动停止。"
+                return title
         return None
 
     def flags(self, index):
@@ -201,15 +169,15 @@ class AnchorModel(QAbstractTableModel):
             return self._text(a, index.row(), key)
         if role == Qt.ItemDataRole.BackgroundRole:
             if a.recording:
-                return QBrush(C_REC_BG)
+                return QBrush(theme.color("accent_soft"))
             if a.live:
-                return QBrush(C_LIVE_BG)
+                return QBrush(theme.color("surface_alt"))
             return None
         if role == Qt.ItemDataRole.ForegroundRole:
             if a.error:
-                return QBrush(C_ERR_FG)
+                return QBrush(theme.color("danger"))
             if key in ("monitoring", "want_record") and not self._flag(a, key):
-                return QBrush(C_MUTED_FG)
+                return QBrush(theme.color("muted"))
             return None
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int(COLUMNS[index.column()][3])
@@ -229,7 +197,7 @@ class AnchorModel(QAbstractTableModel):
         if key == "selected":
             return ""
         if key == "idx":
-            return str(row + 1)
+            return str(self.manager.anchors.index(a) + 1)
         if key == "name":
             return a.name or a.room or "-"
         if key == "live":
@@ -300,7 +268,34 @@ class AnchorModel(QAbstractTableModel):
 
     def refresh_all(self):
         self.beginResetModel()
+        self._rows = self._ordered_rows()
         self.endResetModel()
+
+    def _ordered_rows(self):
+        rows = list(self.manager.anchors)
+        if self._sort_column < 0:
+            return rows
+        key = COLUMNS[self._sort_column][0]
+
+        def value(anchor):
+            if key == "elapsed":
+                return sort_key(self.manager.elapsed(anchor))
+            return sort_key(self._text(anchor, 0, key))
+
+        return sort_records(rows, value, ascending=self._sort_ascending)
+
+    def set_display_sort(self, column, ascending):
+        """只重排显示行，管理层顺序、勾选与当前选中跟随同一个主播。"""
+        previous = list(self._rows)
+        indexes = self.persistentIndexList()
+        self.layoutAboutToBeChanged.emit()
+        self._sort_column, self._sort_ascending = column, ascending
+        self._rows = self._ordered_rows()
+        positions = {id(anchor): row for row, anchor in enumerate(self._rows)}
+        remapped = [self.index(positions[id(previous[index.row()])], index.column())
+                    for index in indexes]
+        self.changePersistentIndexList(indexes, remapped)
+        self.layoutChanged.emit()
 
     def refresh_volatile(self):
         if not self.anchors:
@@ -371,7 +366,8 @@ class PlatformPane(QWidget):
         bar2.setSpacing(6)
         self._tbtn(bar2, "录制设置", self.on_settings)
         self._tbtn(bar2, "推送设置", self.on_push_settings)
-        self._tbtn(bar2, "FLV 修复", self.on_repair_flv, "修复录制中断/时间戳错乱的 FLV")
+        self._tbtn(bar2, "FLV / TS 修复", self.on_repair_flv,
+                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
         self._tbtn(bar2, "写时间码", self.on_timecode,
                    "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
         self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
@@ -402,12 +398,24 @@ class PlatformPane(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.setHorizontalHeader(WrapHeader(self.table))
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         hh = self.table.horizontalHeader()
+        hh.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        hh.setHighlightSections(False)
+        hh.setTextElideMode(Qt.TextElideMode.ElideRight)
+        hh.setFixedHeight(max(32, hh.fontMetrics().height() + 12))
         for i, (_k, _t, w, _a) in enumerate(COLUMNS):
             self.table.setColumnWidth(i, w)
         hh.setStretchLastSection(True)
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        configure_table_columns(
+            self.table,
+            minimums={2: 100, 3: 64, 4: 76, 5: 76, 6: 64, 7: 40,
+                      8: 56, 9: 40, 10: 48, 11: 40, 12: 60, 13: 120},
+            fixed={0: 36, 1: 44}, stretch=[2, 13], auto_fit=True)
+        install_callback(self.table, self.model.set_display_sort,
+                         skip_columns=(0,), tri_state=True)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_menu)
         self.table.doubleClicked.connect(self._on_double)
@@ -504,8 +512,8 @@ class PlatformPane(QWidget):
 
     def _selected(self):
         rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
-        return [self.manager.anchors[r] for r in rows
-                if 0 <= r < len(self.manager.anchors)]
+        return [self.model.anchors[r] for r in rows
+                if 0 <= r < len(self.model.anchors)]
 
     def _checked(self):
         return [a for a in self.manager.anchors if a.selected]
@@ -518,7 +526,7 @@ class PlatformPane(QWidget):
     # ---------- 表格交互 ----------
     def _on_click(self, index):
         if COLUMNS[index.column()][0] == "selected":
-            a = self.manager.anchors[index.row()]
+            a = self.model.anchors[index.row()]
             a.selected = not a.selected
             self.model.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
 
@@ -560,43 +568,19 @@ class PlatformPane(QWidget):
         ad = menu.addAction
 
         ad(self._act("当前主播_立即检测开播", self.on_check_selected))
-        ad(self._act("当前主播_播放直播源", self.on_preview_stream))
-        menu.addSeparator()
-        ad(self._act("当前主播_加入监控", lambda: self._set_flag("monitoring", True)))
-        ad(self._act("当前主播_退出监控", lambda: self._set_flag("monitoring", False)))
-        ad(self._act("当前主播_加入录制", lambda: self._set_flag("_want_record", True)))
-        ad(self._act("当前主播_退出录制", lambda: self._set_flag("_want_record", False)))
-        sub = menu.addMenu("当前主播_修改录制多少分钟停止录制快捷值")
-        for mins in (0, 5, 10, 30, 60, 120, 180):
-            label = "不限制" if mins == 0 else "%d 分钟" % mins
-            sub.addAction(self._act(label, lambda _c=False, m=mins: self._set_stop_minutes(m)))
-        sub.addSeparator()
-        sub.addAction(self._act("自定义…", lambda: self._set_stop_minutes(None)))
         ad(self._act("当前主播_已录时间归零重新录制",
                      lambda: self.on_reset_elapsed(True)))
         menu.addSeparator()
         ad(self._act("当前主播_独立设置功能", self.on_anchor_settings))
-        menu.addSeparator()
-        ad(self._act("当前主播_移动至序号", self.on_move_to_index))
         ad(self._act("当前主播_修改备注信息", self.on_edit_remark))
+        menu.addSeparator()
         ad(self._act("当前主播_复制直播源", self.on_copy_stream))
         ad(self._act("当前主播_复制直播网址", self.on_copy_url))
         ad(self._act("当前主播_复制主播整体数据", self.on_copy_data))
+        menu.addSeparator()
         ad(self._act("当前主播_删除当前选择", self.on_delete))
-        menu.addSeparator()
-        ad(self._act("当前主播_打开当前视频保存目录", self.on_open_anchor_dir))
-        ad(self._act("当前主播_打开记录数据文件夹", self.on_open_record_dir))
-        menu.addSeparator()
-        ad(self._act("全部主播_复制直播网址", self.on_copy_all_url))
-        ad(self._act("列表拉篮选择_勾选", lambda: self._check_all(True)))
-        ad(self._act("列表拉篮选择_不选", lambda: self._check_all(False)))
-        ad(self._act("列表拉篮选择_反选", self.on_lan_reverse))
-        menu.addSeparator()
-        ad(self._act("当前主播_运行日志", self.on_show_log))
         for a in menu.actions():
-            if a.isSeparator() or a.menu():
-                continue
-            if a.text().startswith(("全部主播", "列表拉篮")):
+            if a.isSeparator():
                 continue
             a.setEnabled(has)
         return menu
@@ -1046,10 +1030,6 @@ class PlatformPane(QWidget):
         QApplication.clipboard().setText("\n".join(a.live_url for a in items))
         self._log("已复制 %d 条直播间地址" % len(items), "ok")
 
-    def on_copy_all_url(self):
-        QApplication.clipboard().setText("\n".join(a.live_url for a in self.manager.anchors))
-        self._log("已复制全部 %d 条直播间地址" % len(self.manager.anchors), "ok")
-
     def on_copy_stream(self):
         items = self._selected()
         if not items:
@@ -1079,11 +1059,6 @@ class PlatformPane(QWidget):
         QApplication.clipboard().setText("\n".join(lines))
         self._log("已复制 %d 个主播的数据" % len(items), "ok")
 
-    def on_lan_reverse(self):
-        for a in self.manager.anchors:
-            a.selected = not a.selected
-        self.model.refresh_all()
-
     def on_delete(self):
         items = self._selected() or self._checked()
         if not items:
@@ -1106,13 +1081,6 @@ class PlatformPane(QWidget):
         self.model.refresh_all()
         self.save()
         self._log("已删除 %d 个主播" % len(items), "warn")
-
-    def on_open_anchor_dir(self):
-        items = self._selected()
-        if not items:
-            return
-        _open_dir(os.path.join(self.manager.out_dir(),
-                               LR.safe_name(items[0].name or items[0].room)))
 
     def on_open_record_dir(self):
         _open_dir(os.path.join(os.path.abspath(self.manager.out_dir()), "..", "记录数据"))

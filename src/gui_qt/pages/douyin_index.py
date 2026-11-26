@@ -4,7 +4,7 @@
 - 抓取：核心指标（昨日/近7天/近15天/近30天）、稿均指标、每日趋势、
         达人视频（点赞/评论/分享/收藏/视频指数）、粉丝画像（地域/年龄/性别/手机/兴趣 + TGI）、
         相似达人
-- 保存：download/抖音指数/<达人名>/抖音指数_时间戳.json（+ latest.json）
+- 保存：完整指数快照；按视频 ID 回写已有资产的互动指标与指数来源信息。
 """
 
 import os
@@ -13,7 +13,7 @@ from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QLineEdit, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -21,7 +21,7 @@ from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from platforms import douyin_index as dxi
+from toolbox import douyin_index_service as dxi
 
 # 核心指标行：(显示名, 数据段, 计数字段前缀)
 _CORE_ROWS = [
@@ -174,10 +174,11 @@ class DouyinIndexPage(BasePage):
         self._name = ""
         self._data = None
         self._busy = False
+        self._cancel_requested = False
         self._icons = []          # (按钮, 图标名, 颜色角色)：切主题时按主题色重绘
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
         layout.addWidget(self._build_toolbar())
@@ -191,9 +192,21 @@ class DouyinIndexPage(BasePage):
         self.tabs.addTab(self._build_similar_tab(), "相似达人")
         layout.addWidget(self.tabs, 1)
 
-        self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认 → 获取全部数据并保存")
+        self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认 → 抓取并回写")
+        self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self.status_label)
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.hide()
+        progress_row.addWidget(self.progress_bar, 1)
+        self.cancel_btn = self._icon_button("停止", "stop")
+        self.cancel_btn.setToolTip("在当前步骤结束后停止；已保存的快照与已回写的数据保留")
+        self.cancel_btn.clicked.connect(self._cancel_fetch)
+        self.cancel_btn.hide()
+        progress_row.addWidget(self.cancel_btn)
+        layout.addLayout(progress_row)
 
     # ---------- 顶部工具栏 ----------
     def _build_toolbar(self) -> QFrame:
@@ -228,8 +241,8 @@ class DouyinIndexPage(BasePage):
         self.range_combo.setToolTip("达人视频列表与视频指数的统计时间范围（核心指标各时间窗一次全部返回）")
         row.addWidget(self.range_combo)
 
-        self.fetch_btn = self._icon_button("获取全部数据并保存", "download", "primary")
-        self.fetch_btn.setToolTip("抓取核心指标、稿均指标、每日趋势、达人视频、粉丝画像与相似达人，并保存 JSON")
+        self.fetch_btn = self._icon_button("抓取并回写", "download", "primary")
+        self.fetch_btn.setToolTip("保存完整指数快照，并按视频 ID 回写已有抖音资产的点赞、评论、分享、收藏与指数来源信息；不新建资产")
         self.fetch_btn.clicked.connect(self._do_fetch)
         row.addWidget(self.fetch_btn)
 
@@ -305,7 +318,7 @@ class DouyinIndexPage(BasePage):
         cv.addWidget(self.avg_table, 1)
         self.core_body = _StackedBody(
             content, "还没有达人数据",
-            "在上面输入达人名称或抖音号，搜索并确认后点「获取全部数据并保存」", parent)
+            "在上面输入达人名称或抖音号，搜索并确认后点「抓取并回写」", parent)
         return self.core_body
 
     def _build_trend_tab(self):
@@ -460,7 +473,7 @@ class DouyinIndexPage(BasePage):
                     f" · 粉丝 {dxi.fmt_count(u.get('follow_count'))}"
                     f" · 总获赞 {dxi.fmt_count(u.get('like_count'))}"
                     f" · 作品 {u.get('item_count')}")
-                self.status_label.setText(f"已选择「{self._name}」→ 点「获取全部数据并保存」")
+                self.status_label.setText(f"已选择「{self._name}」→ 点「抓取并回写」")
                 self.account_extra_label.hide()
                 self.fetch_btn.setFocus()
 
@@ -475,29 +488,59 @@ class DouyinIndexPage(BasePage):
             return
         days = self.range_combo.currentData() or 30
         uid, name = self._uid, self._name
-        self._set_busy(True, f"正在抓取「{name}」的抖音指数...")
+        if not self._confirm_writeback(name):
+            return
+        self._set_busy(True, f"正在抓取「{name}」的抖音指数…", cancellable=True)
 
         def prog(msg):
             post_to_main(self.status_label.setText, f"{msg}")
 
         def work():
-            data = dxi.fetch_daren_all(uid, days=days, progress=prog)
-            path = dxi.save_snapshot(data)
-            return data, path
+            try:
+                return dxi.fetch_and_save(uid, days=days, progress=prog,
+                                          is_cancelled=lambda: self._cancel_requested)
+            except dxi.FetchCancelled:
+                return {"cancelled": True}
 
         def done(result, err):
             self._set_busy(False)
             if err:
                 self.status_label.setText(f"抓取失败：{err}")
-                self.app.toast(f"抖音指数抓取失败：{err}", "warning")
                 return
-            data, path = result
+            if result.get("cancelled"):
+                self.status_label.setText("已取消，未回写资产")
+                return
+            data, path = result["data"], result["path"]
             self._data = data
             self._render(data)
-            self.status_label.setText(f"「{name}」数据已保存：{path}")
-            self.app.toast(f"抖音指数已保存：{os.path.basename(path)}", "success")
+            outcome = result["writeback"]
+            text = f"「{name}」快照已保存；{outcome['summary']}。在资产库刷新查看。"
+            if outcome.get("errors"):
+                text += " " + "；".join(dict.fromkeys(outcome["errors"]))
+            self.status_label.setText(text)
+            self.status_label.setToolTip(f"快照：{os.path.basename(path)}")
 
         run_bg(work, done)
+
+    def _confirm_writeback(self, name: str) -> bool:
+        box = QMessageBox(self)
+        box.setWindowTitle("回写资产")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f"抓取「{name}」并回写已有资产？")
+        box.setInformativeText(
+            "将保存完整指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。\n"
+            "不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。")
+        cancel = box.addButton("取消", QMessageBox.RejectRole)
+        confirm = box.addButton("抓取并回写", QMessageBox.AcceptRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is confirm
+
+    def _cancel_fetch(self):
+        self._cancel_requested = True
+        self.cancel_btn.setEnabled(False)
+        self.status_label.setText("已请求取消，将在当前步骤结束后停止；已完成的回写保留")
 
     # ---------- 渲染 ----------
     def _render(self, data: dict):
@@ -724,11 +767,16 @@ class DouyinIndexPage(BasePage):
         except Exception:
             self.app.toast("保存目录尚未创建（先完成一次抓取）", "info")
 
-    def _set_busy(self, busy: bool, text: str = ""):
+    def _set_busy(self, busy: bool, text: str = "", *, cancellable: bool = False):
         self._busy = busy
+        if busy:
+            self._cancel_requested = False
         self.search_btn.setEnabled(not busy)
         self.fetch_btn.setEnabled(not busy)
         self.open_btn.setEnabled(not busy)
         self.range_combo.setEnabled(not busy)
+        self.progress_bar.setVisible(busy)
+        self.cancel_btn.setVisible(busy and cancellable)
+        self.cancel_btn.setEnabled(busy and cancellable)
         if text:
             self.status_label.setText(text)
