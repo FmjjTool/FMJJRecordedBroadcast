@@ -1576,7 +1576,7 @@
       var providers = data.providers || [];
       var providerLabel = {};
       providers.forEach(function (item) { providerLabel[item.value] = item.label; });
-      var TABS = [['backup', '备份到网盘'], ['download', '文件下载']];
+      var TABS = [['backup', '网盘备份'], ['download', '网盘下载']];
       TABS.forEach(function (item) {
         tabs.appendChild(h('button', {
           class: 'tab' + (state.netdisk.tab === item[0] ? ' active' : ''),
@@ -3132,10 +3132,12 @@ function renderLivestreamSummary(root) {
       }
       function syncMode() {
         cloudFields.hidden = modeSel.value !== 'ai';
+        cloudFields.classList.toggle('hidden', modeSel.value !== 'ai');
         [baseInput, modelInput, keyInput].forEach(function (input) {
           input.disabled = modeSel.value !== 'ai' || running;
         });
         localBox.hidden = modeSel.value !== 'local';
+        localBox.classList.toggle('hidden', modeSel.value !== 'local');
         localForm.setDisabled(modeSel.value !== 'local' || running);
         chunkInput.disabled = modeSel.value === 'rule' || running;
         testBtn.disabled = modeSel.value === 'rule' || running;

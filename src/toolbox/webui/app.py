@@ -10,6 +10,7 @@ from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.cover import CoverService
+from toolbox.webui.services.certificate import CertificateService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
@@ -41,6 +42,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     jobs = JobManager()
     collected = CollectedService()
     cover = CoverService(jobs)
+    certificates = CertificateService()
     assets = AssetService(jobs)
     record = RecordService(jobs)
     modules = ModuleService()
@@ -75,6 +77,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/cover/overview", lambda req: cover.overview())
     server.post("/api/cover/preview", lambda req: cover.preview(req.json))
     server.post("/api/cover/generate", lambda req: cover.start_generate(req.json))
+
+    server.get("/api/certificates/history", lambda req: certificates.overview())
+
+    def export_certificate_evidence(req):
+        result = certificates.export(req.json)
+        return AttachmentResponse(result["data"], result["filename"], "application/zip")
+
+    server.post("/api/certificates/evidence/export", export_certificate_evidence)
 
     server.get("/api/collected/overview", lambda req: collected.overview())
     server.get("/api/collected/items", lambda req: collected.items(

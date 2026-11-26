@@ -70,12 +70,12 @@ class DiagnosticSession:
         self.gui_attached = True
 
     def info(self):
-        with self._save_lock:
-            return {"id": self.report_id, "enabled": True,
-                    "filename": (self._last_saved or {}).get("filename"),
-                    "saved_at": (self._last_saved or {}).get("saved_at"),
-                    "error": self._save_error, "status": self.status,
-                    "interval_seconds": self.SAVE_INTERVAL}
+        # 保存完成后整份替换元数据；UI 读最后成功快照，不等待磁盘写入锁。
+        saved = self._last_saved or {}
+        return {"id": self.report_id, "enabled": True,
+                "filename": saved.get("filename"), "saved_at": saved.get("saved_at"),
+                "error": self._save_error, "status": self.status,
+                "interval_seconds": self.SAVE_INTERVAL}
 
     def _save_locked(self, reason):
         from toolbox.performance_reports import save_report
