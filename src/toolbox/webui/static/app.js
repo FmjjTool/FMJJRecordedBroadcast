@@ -11025,6 +11025,9 @@ function renderMusicTag(root) {
             var isSnapshot = !!target && target.profile === 'fragments';
             accSel.style.display = (isLives || isSnapshot) ? 'none' : '';
             daysSel.disabled = isSnapshot;
+            optAllow.checked = false;
+            optLabel.style.display = 'none';
+            optPanel.replaceChildren();
             dupSel.style.display = isLives ? '' : 'none';
             playlistBtn.style.display = (target && target.profile === 'events')
               ? '' : 'none';
@@ -11078,24 +11081,67 @@ function renderMusicTag(root) {
               if (result.profile === 'fragments') {
                 summary.textContent = '歌曲片段 · 本地快照 '
                   + fmtNumber(result.total) + ' 行（只读）';
-                var snapshotHead = h('tr');
-                result.columns.forEach(function (name) {
-                  snapshotHead.appendChild(h('th', null, name));
-                });
-                var snapshotBody = h('tbody');
-                (result.snapshot_rows || []).forEach(function (cells) {
-                  var row = h('tr');
-                  cells.forEach(function (value) {
-                    row.appendChild(h('td', { title: value }, value || '-'));
+                var snapshotSort = { order: '', asc: true };
+                var snapshotWidths = result.columns.map(function () { return 1; });
+                function drawSnapshot() {
+                  var cols = result.columns.map(function (name, i) {
+                    return { key: String(i), label: name };
                   });
-                  snapshotBody.appendChild(row);
-                });
-                tableHost.replaceChildren(result.total
-                  ? h('div', { class: 'table-wrap' },
-                    h('table', { class: 'db-table' },
-                      h('thead', null, snapshotHead), snapshotBody))
-                  : empty('歌曲片段快照暂无记录，请先在「表格同步」同步该子表。'),
-                  h('div', { class: 'muted small' }, result.note || ''));
+                  var colgroup = h('colgroup');
+                  var totalWidth = snapshotWidths.reduce(function (a, b) { return a + b; }, 0) || 1;
+                  var head = h('tr');
+                  cols.forEach(function (col, i) {
+                    colgroup.appendChild(h('col', { style: 'width:'
+                      + (100 * snapshotWidths[i] / totalWidth) + '%' }));
+                    head.appendChild(h('th', {
+                      class: 'sortable',
+                      onclick: function () { cycleSort(snapshotSort, col.key); drawSnapshot(); }
+                    }, col.label + (snapshotSort.order === col.key
+                      ? (snapshotSort.asc ? ' ↑' : ' ↓') : '')));
+                  });
+                  var body = h('tbody');
+                  sortRows(result.snapshot_rows || [], cols, snapshotSort).forEach(function (cells) {
+                    var row = h('tr');
+                    cells.forEach(function (value) {
+                      row.appendChild(h('td', {
+                        title: value, style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
+                      }, value || '-'));
+                    });
+                    body.appendChild(row);
+                  });
+                  function fit() {
+                    snapshotWidths = result.columns.map(function (name, i) {
+                      return Math.min(40, Math.max(name.length, 6,
+                        Math.max.apply(null, (result.snapshot_rows || []).map(function (row) {
+                          return String(row[i] || '').length;
+                        }))));
+                    });
+                    drawSnapshot();
+                  }
+                  function reset() {
+                    snapshotWidths = result.columns.map(function () { return 1; });
+                    drawSnapshot();
+                  }
+                  head.addEventListener('contextmenu', function (event) {
+                    event.preventDefault();
+                    var menu = h('div', { class: 'card', style: 'position:fixed;z-index:10000;left:'
+                      + event.clientX + 'px;top:' + event.clientY + 'px' },
+                      h('button', { class: 'btn mini', onclick: function () { menu.remove(); fit(); } }, '列宽自适应'),
+                      h('button', { class: 'btn mini', onclick: function () { menu.remove(); reset(); } }, '重置列宽'));
+                    document.body.appendChild(menu);
+                    document.addEventListener('click', function () { menu.remove(); }, { once: true });
+                  });
+                  tableHost.replaceChildren(result.total
+                    ? h('div', { class: 'table-wrap' }, h('table', {
+                      class: 'db-table', style: 'table-layout:fixed;width:100%'
+                    }, colgroup, h('thead', null, head), body))
+                    : empty('歌曲片段快照暂无记录，请先在「表格同步」同步该子表。'),
+                    h('div', { class: 'toolbar', style: 'margin-top:8px' },
+                      h('span', { class: 'muted small', style: 'flex:1' }, result.note || ''),
+                      h('button', { class: 'btn mini', onclick: fit }, '自适应'),
+                      h('button', { class: 'btn mini', onclick: reset }, '重置')));
+                }
+                drawSnapshot();
                 syncButtons();
                 return;
               }
@@ -11439,7 +11485,8 @@ function renderMusicTag(root) {
             });
             overlay.appendChild(h('div', { class: 'preview-box' },
               h('div', { class: 'preview-caption' },
-                h('span', null, '待同步 TSV（全选后 Ctrl+C 复制，不含表头）'),
+                h('span', null, (lastPreview.profile === 'fragments' ? '快照 TSV' : '待同步 TSV')
+                  + '（全选后 Ctrl+C 复制，不含表头）'),
                 h('button', {
                   class: 'btn mini', type: 'button',
                   onclick: function () { overlay.remove(); }
