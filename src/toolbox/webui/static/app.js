@@ -20,7 +20,7 @@
       offline: { year: '', selected: null, order: '', asc: true, platforms: new Set(['bilibili', 'douyin_archive']) } },
     record: { platform: '', order: '', asc: true, selected: new Set() },
     trackers: { platform: '', open: '' },
-    fangroups: { open: '' },
+    fangroups: { open: '', tables: {} },
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
     image_sorter: { kind: 'all', q: '' },
@@ -7361,6 +7361,110 @@ function renderLivestreamSummary(root) {
     setLoading(root, '正在读取 QQ 群订阅列表…');
     api('/api/fangroups').then(function (data) {
       root.replaceChildren();
+      // Table state belongs to this page; shared sorting keeps three-state semantics.
+      function groupTable(key, rows, columns, className) {
+        var sort = state.fangroups.tables[key] || { order: '', asc: true };
+        state.fangroups.tables[key] = sort;
+        var holder = h('div');
+        var wrap = h('div', { class: 'table-wrap' });
+        var table = h('table', { class: 'db-table fg-table ' + (className || '') });
+        var controls = h('div', { class: 'toolbar fg-table-controls' });
+        var widths = columns.map(function (column) { return column.width || 100; });
+        var headers = [];
+        function sizeColumns(values) {
+          var total = values.reduce(function (sum, value) { return sum + value; }, 0);
+          headers.forEach(function (header, index) {
+            header.style.width = (values[index] / total * 100) + '%';
+          });
+        }
+        function fitColumns() {
+          var canvas = document.createElement('canvas');
+          var measure = canvas.getContext('2d');
+          measure.font = getComputedStyle(table).font;
+          var values = columns.map(function (column, index) {
+            if (!column.key) return widths[index];
+            var longest = measure.measureText(column.label).width;
+            rows.forEach(function (row) {
+              var value = row[column.key];
+              longest = Math.max(longest, measure.measureText(value == null ? '' : String(value)).width);
+            });
+            return Math.max(48, Math.min(280, longest + 24));
+          });
+          sizeColumns(values);
+        }
+        function drawTable() {
+          var head = h('tr');
+          headers = [];
+          columns.forEach(function (column) {
+            var active = sort.order === column.key;
+            var header = h('th', {
+              class: (column.extra ? 'fg-extra ' : '')
+                + (column.numeric ? 'num ' : '') + (column.key ? 'sortable' : ''),
+              'data-key': column.key || '',
+              title: column.label,
+              'aria-sort': active ? (sort.asc ? 'ascending' : 'descending') : 'none'
+            }, column.label + (active ? (sort.asc ? ' ↑' : ' ↓') : ''));
+            if (column.key) {
+              header.tabIndex = 0;
+              function changeSort() { cycleSort(sort, column.key); drawTable(); }
+              header.addEventListener('click', changeSort);
+              header.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault(); changeSort();
+                }
+              });
+            }
+            headers.push(header);
+            head.appendChild(header);
+          });
+          var body = h('tbody');
+          sortRows(rows, columns, sort).forEach(function (row) {
+            var tr = h('tr');
+            columns.forEach(function (column) {
+              var value = row[column.key];
+              tr.appendChild(h('td', {
+                class: (column.extra ? 'fg-extra ' : '') + (column.numeric ? 'num' : ''),
+                title: column.key && value != null ? String(value) : null
+              }, column.render ? column.render(row) : (value == null || value === '' ? '-' : value)));
+            });
+            body.appendChild(tr);
+          });
+          table.replaceChildren(h('thead', null, head), body);
+          sizeColumns(widths);
+        }
+        controls.appendChild(h('span', { class: 'grow' }));
+        controls.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: fitColumns }, '自适应'));
+        controls.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: function () { sizeColumns(widths); } }, '重置'));
+        table.addEventListener('contextmenu', function (event) {
+          if (!event.target.closest('th')) return;
+          event.preventDefault();
+          var previous = holder.querySelector('.fg-column-menu');
+          if (previous) previous.remove();
+          var menu = h('div', { class: 'fg-column-menu', role: 'menu' });
+          [['列宽自适应', fitColumns], ['重置列宽', function () { sizeColumns(widths); }]]
+            .forEach(function (action) {
+              menu.appendChild(h('button', {
+                class: 'btn', type: 'button', role: 'menuitem',
+                onclick: function () { action[1](); menu.remove(); }
+              }, action[0]));
+            });
+          menu.style.left = Math.max(8, Math.min(event.clientX, innerWidth - 180)) + 'px';
+          menu.style.top = Math.max(8, Math.min(event.clientY, innerHeight - 90)) + 'px';
+          holder.appendChild(menu);
+          menu.firstChild.focus();
+          menu.addEventListener('keydown', function (keyEvent) {
+            if (keyEvent.key === 'Escape') menu.remove();
+          });
+          menu.addEventListener('focusout', function (focusEvent) {
+            if (!menu.contains(focusEvent.relatedTarget)) menu.remove();
+          });
+        });
+        wrap.appendChild(table);
+        holder.appendChild(wrap);
+        holder.appendChild(controls);
+        drawTable();
+        return holder;
+      }
       var QUERY_PLATFORMS = {
         douyin: ['抖音', 'https://www.douyin.com/user/... 或 sec_uid'],
         weibo: ['微博', 'https://weibo.com/u/3056354293 或 UID'],
@@ -7373,7 +7477,7 @@ function renderLivestreamSummary(root) {
       var queryInput = h('input', {
         class: 'input grow', placeholder: QUERY_PLATFORMS.douyin[1]
       });
-      var queryBtn = h('button', { class: 'btn primary', type: 'button' },
+      var platformQueryBtn = h('button', { class: 'btn primary', type: 'button' },
         '查询粉丝群');
       var queryHost = h('div', { style: 'margin-top:8px' });
       var queryJobHost = h('div');
@@ -7382,22 +7486,22 @@ function renderLivestreamSummary(root) {
         queryInput.placeholder = QUERY_PLATFORMS[platformSel.value][1];
         queryHost.replaceChildren();
       });
-      queryBtn.addEventListener('click', function () {
+      platformQueryBtn.addEventListener('click', function () {
         if (querying) return;
         if (!queryInput.value.trim()) {
           toast('请粘贴主页链接或输入 UID', 'warning');
           return;
         }
         querying = true;
-        queryBtn.disabled = true;
-        queryBtn.textContent = '查询中…';
+        platformQueryBtn.disabled = true;
+        platformQueryBtn.textContent = '查询中…';
         post('/api/fangroups/query', {
           platform: platformSel.value, text: queryInput.value.trim()
         }).then(function (result) {
           watchJob(queryJobHost, result.job, function (job) {
             querying = false;
-            queryBtn.disabled = false;
-            queryBtn.textContent = '查询粉丝群';
+            platformQueryBtn.disabled = false;
+            platformQueryBtn.textContent = '查询粉丝群';
             var outcome = job.result || {};
             toast(outcome.summary || '查询完成',
               (outcome.groups || []).length ? 'success' : 'info');
@@ -7406,26 +7510,13 @@ function renderLivestreamSummary(root) {
               queryHost.replaceChildren(empty('没有查到公开粉丝群。'));
               return;
             }
-            var head = h('tr', null, h('th', null, '群名'),
-              h('th', null, '群号'), h('th', { class: 'num' }, '人数'),
-              h('th', { class: 'num' }, '变化'), h('th', null, '标签'),
-              h('th', null, '链接'));
-            var body = h('tbody');
             groups.forEach(function (row) {
               var changeText = '-';
               if (row.change === null) changeText = '新群';
               else if (typeof row.change === 'number' && row.change !== 0) {
                 changeText = (row.change > 0 ? '+' : '') + row.change;
               } else if (typeof row.change === 'number') changeText = '0';
-              body.appendChild(h('tr', null,
-                h('td', { class: 'ellipsis' }, row.name || '-'),
-                h('td', { class: 'muted small' }, row.group_no || row.group_id || '-'),
-                h('td', { class: 'num' }, row.member_text || '-'),
-                h('td', { class: 'num' }, changeText),
-                h('td', { class: 'muted small' }, row.tags || '-'),
-                h('td', { class: 'ellipsis' }, row.url
-                  ? h('a', { href: row.url, target: '_blank',
-                    rel: 'noopener noreferrer' }, row.url) : '-')));
+              row.change_text = changeText;
             });
             queryHost.replaceChildren(
               h('div', { class: 'muted small', style: 'margin-bottom:6px' },
@@ -7436,15 +7527,25 @@ function renderLivestreamSummary(root) {
                 + (outcome.avatars && outcome.avatars.total
                   ? ' · 头像 ' + outcome.avatars.ok + '/'
                     + outcome.avatars.total : '')),
-              h('div', { class: 'table-wrap' },
-                h('table', { class: 'db-table' },
-                  h('thead', null, head), body)));
+              groupTable('public', groups, [
+                { key: 'name', label: '群名', width: 180 },
+                { key: 'group_no', label: '群号', extra: true },
+                { key: 'members', label: '人数', numeric: true, width: 70,
+                  render: function (row) { return row.member_text || row.members || '-'; } },
+                { key: 'change', label: '变化', numeric: true, width: 65,
+                  render: function (row) { return row.change_text; } },
+                { key: 'tags', label: '标签', extra: true },
+                { key: 'url', label: '链接', width: 70,
+                  render: function (row) { return row.url ? h('a', {
+                    href: row.url, target: '_blank', rel: 'noopener noreferrer'
+                  }, '打开') : '-'; } }
+              ], 'fg-query-table'));
           }, {
             cancelable: true,
             onSettled: function (job) {
               querying = false;
-              queryBtn.disabled = false;
-              queryBtn.textContent = '查询粉丝群';
+              platformQueryBtn.disabled = false;
+              platformQueryBtn.textContent = '查询粉丝群';
               if (job.status === 'error') {
                 toast('查询失败：' + (job.error || '未知错误'), 'error');
               }
@@ -7452,8 +7553,8 @@ function renderLivestreamSummary(root) {
           });
         }).catch(function (error) {
           querying = false;
-          queryBtn.disabled = false;
-          queryBtn.textContent = '查询粉丝群';
+          platformQueryBtn.disabled = false;
+          platformQueryBtn.textContent = '查询粉丝群';
           toast('查询失败：' + error.message, 'error');
         });
       });
@@ -7461,7 +7562,7 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'row-title' }, '查询粉丝群'),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           h('span', { class: 'muted small' }, '平台'), platformSel,
-          queryInput, queryBtn),
+          queryInput, platformQueryBtn),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '抖音 / 微博 / B站 需要对应平台登录态；B站网页端只能列出当前账号'
           + '已加入的应援团。查询会保存快照并加入定时快照名单。'),
