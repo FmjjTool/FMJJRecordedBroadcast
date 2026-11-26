@@ -16,6 +16,9 @@ class PublishService:
     def precheck(self, payload: dict) -> dict:
         return webui_bili_publish.precheck(dict(payload))
 
+    def categories(self) -> dict:
+        return webui_bili_publish.categories()
+
     def templates(self) -> dict:
         return webui_bili_publish.templates()
 

@@ -43,7 +43,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     tool_service = ToolService(jobs)
     tcdoc = TCDocService(jobs)
     trackers = TrackerService(jobs)
-    fangroups = FanGroupService()
+    fangroups = FanGroupService(jobs)
     douyin_index = DouyinIndexService(jobs)
     chaohua = WeiboChaohuaService()
     info_accounts = InfoAccountsService(jobs)
@@ -207,6 +207,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                 ".gif": "image/gif"}.get(suffix, "application/octet-stream")
         return BytesResponse(path.read_bytes(), mime)
     server.get("/api/fangroups/avatar", fangroup_avatar)
+
+    def start_fangroups_query(req):
+        return fangroups.start_query(dict(req.json or {}))
+    server.post("/api/fangroups/query", start_fangroups_query)
+
 
     server.get("/api/douyin-index", lambda req: douyin_index.overview())
     server.get("/api/douyin-index/report", lambda req: douyin_index.report(
@@ -410,6 +415,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_publish_upload(req):
         return publish.start_upload(dict(req.json or {}))
     server.post("/api/publish/upload", start_publish_upload)
+
+    server.get("/api/publish/categories", lambda req: publish.categories())
 
     server.get("/api/publish/templates", lambda req: publish.templates())
 

@@ -98,6 +98,54 @@ def overview() -> dict:
     }
 
 
+def _flatten_categories(data) -> list[dict]:
+    """创作中心 typelist → [{id, name}]；与桌面弹窗的扁平化规则一致。"""
+    items = []
+
+    def visit(nodes, prefix="") -> None:
+        if isinstance(nodes, dict):
+            nodes = list(nodes.values())
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or node.get("typename") or "")
+            children = node.get("children") or node.get("sub")
+            if children:
+                visit(children, prefix + name + "/")
+                continue
+            value = node.get("id") or node.get("tid") or node.get("typeid")
+            if not value:
+                continue
+            try:
+                category_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            items.append({"id": category_id, "name": prefix + name})
+
+    visit(data.get("typelist") or data.get("type_list") or [])
+    return items
+
+
+def categories() -> dict:
+    """当前账号可用分区（创作中心 typelist）。"""
+    bu = _bu()
+    try:
+        uploader = bu.BiliUploader()
+        try:
+            data = uploader.creator_info()
+        finally:
+            uploader.close()
+    except Exception as exc:  # noqa: BLE001 - 未登录 / 网络 / 风控统一提示
+        raise ValueError(f"读取分区失败：{exc}") from exc
+    items = _flatten_categories(data)
+    if not items:
+        raise ValueError("账号没有可用分区（可能未开通投稿权限或接口变更）")
+    return {"items": items, "total": len(items),
+            "note": "来自 B站创作中心「当前账号可用分区」；可在下拉里选，也可手填 ID。"}
+
+
 def templates() -> dict:
     """投稿模板列表（与桌面共用 `BU.load_settings()['upload_templates']`）。"""
     bu = _bu()
@@ -294,6 +342,8 @@ def precheck(payload: dict) -> dict:
 
     account = None
     seasons = []
+    category_list = []
+    category_error = ""
     try:
         uploader = bu.BiliUploader()
         try:
@@ -303,10 +353,29 @@ def precheck(payload: dict) -> dict:
                 seasons = uploader.list_seasons()
             except Exception:  # noqa: BLE001 - 合集列表不可读不阻断
                 seasons = []
+            try:
+                category_list = _flatten_categories(uploader.creator_info())
+            except Exception as exc:  # noqa: BLE001 - 分区接口失败降级为手填
+                category_list = []
+                category_error = str(exc)[:120]
         finally:
             uploader.close()
     except Exception as exc:  # noqa: BLE001 - 登录 / 网络失败统一提示
         add("account", "B站登录", False, str(exc))
+
+    tid = int((metadata or {}).get("tid") or 0)
+    tid_name = ""
+    if metadata and category_list:
+        found = next((item for item in category_list if item["id"] == tid), None)
+        tid_name = found["name"] if found else ""
+        add("category", "分区可用", found is not None,
+            (f"分区 {tid}「{found['name']}」" if found
+             else f"分区 {tid} 不在当前账号可用分区内，请从下拉中重新选择"))
+    elif metadata:
+        add("category", "分区可用", True,
+            "未能读取分区列表，按手填 ID 继续" + (f"（{category_error}）"
+                                          if category_error else ""),
+            fatal=False)
 
     wanted_season = str(settings.get("season") or "").strip()
     if wanted_season and seasons:
@@ -315,11 +384,12 @@ def precheck(payload: dict) -> dict:
             f"合集「{wanted_season}」" + ("" if wanted_season in titles
                                           else "不存在，请在设置中改选"), fatal=False)
     return _result(paths, metadata, checks, "", settings, account,
-                   [item.get("title") for item in seasons], total_bytes)
+                   [item.get("title") for item in seasons], total_bytes,
+                   tid_name=tid_name, categories=category_list)
 
 
 def _result(paths, metadata, checks, blocking, settings, account=None,
-            seasons=None, total_bytes=0) -> dict:
+            seasons=None, total_bytes=0, tid_name="", categories=None) -> dict:
     fatal_failed = [item for item in checks if item["fatal"] and not item["ok"]]
     ok = not fatal_failed and metadata is not None
     return {
@@ -332,6 +402,7 @@ def _result(paths, metadata, checks, blocking, settings, account=None,
             "desc": (metadata or {}).get("desc", ""),
             "tag": (metadata or {}).get("tag", ""),
             "tid": (metadata or {}).get("tid", 0),
+            "tid_name": tid_name,
             "copyright": (metadata or {}).get("copyright", 1),
             "source": (metadata or {}).get("source", ""),
         } if metadata else {},
@@ -339,6 +410,7 @@ def _result(paths, metadata, checks, blocking, settings, account=None,
         "total_bytes": int(total_bytes),
         "names": [path.name for path in paths],
         "seasons": seasons or [],
+        "categories": categories or [],
         "auto_publish": bool(settings.get("auto_publish", True)),
         "season": str(settings.get("season") or ""),
         "note": ("预检只读：未创建稿件。确认无误后点「确认投稿」才会真实上传。"

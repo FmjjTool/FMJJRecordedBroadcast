@@ -3920,13 +3920,15 @@
       api('/api/tools/rename/preview?limit=300'),
       api('/api/publish/overview').catch(function () { return null; }),
       api('/api/publish/templates').catch(function () { return null; }),
-      api('/api/publish/history').catch(function () { return null; })
+      api('/api/publish/history').catch(function () { return null; }),
+      api('/api/publish/categories').catch(function () { return null; })
     ]).then(function (results) {
       var overview = results[0];
       var preview = results[1];
       var publishInfo = results[2] || {};
       var templateInfo = results[3] || {};
       var historyInfo = results[4] || {};
+      var categoryInfo = results[5] || null;
       host.replaceChildren();
       if (!overview.has_work_dir) {
         host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
@@ -3955,6 +3957,12 @@
       var publishJobHost = h('div');
       var checksHost = h('div');
       var pset = publishInfo.settings || {};
+      var activeTpl = (templateInfo.items || []).filter(function (item) {
+        return item.name === (templateInfo.active || '');
+      })[0];
+      if (activeTpl && activeTpl.settings) {
+        pset = Object.assign({}, pset, activeTpl.settings);
+      }
       var titleInput = h('input', {
         class: 'input', style: 'width:100%',
         value: pset.title || '', placeholder: '标题模板'
@@ -3996,6 +4004,29 @@
         placeholder: '封面图片完整路径（留空自动提取首帧，需要 FFmpeg）'
       });
       var templateSel = h('select', { class: 'select' });
+      var categorySel = h('select', { class: 'select' });
+      var categoryItems = (categoryInfo && categoryInfo.items) || [];
+      if (!categoryItems.length) {
+        categorySel.appendChild(h('option', { value: '' },
+          categoryInfo === null ? '分区读取失败，请手填分区 ID'
+            : '账号没有可用分区'));
+        categorySel.disabled = true;
+      } else {
+        categorySel.appendChild(h('option', { value: '' }, '选择分区'));
+        categoryItems.forEach(function (item) {
+          categorySel.appendChild(h('option', {
+            value: String(item.id),
+            selected: String(item.id) === String(pset.tid || '')
+          }, item.name + '（' + item.id + '）'));
+        });
+      }
+      categorySel.addEventListener('change', function () {
+        if (!categorySel.value) return;
+        tidInput.value = categorySel.value;
+        precheckResult = null;
+        checksHost.replaceChildren();
+        syncPublish();
+      });
       var tplItems = templateInfo.items || [];
       if (!tplItems.length) {
         templateSel.appendChild(h('option', { value: '' }, '（暂无模板）'));
@@ -4045,6 +4076,27 @@
         });
       });
       var delTplBtn = h('button', { class: 'btn ghost', type: 'button' }, '删除模板');
+      var saveTplQuickBtn = h('button', {
+        class: 'btn', type: 'button', title: '保存当前表单到选中的模板'
+      }, '保存设置');
+      saveTplQuickBtn.addEventListener('click', function () {
+        var name = templateSel.value || '默认模板';
+        post('/api/publish/templates', {
+          name: name, action: 'save', settings: currentSettings()
+        }).then(function (result) {
+          toast(result.summary || '模板已保存', 'success');
+          renderRename(host);
+        }).catch(function (error) {
+          toast('模板保存失败：' + error.message, 'error');
+        });
+      });
+      tidInput.addEventListener('change', function () {
+        var value = String(Number(tidInput.value) || '');
+        var matched = categoryItems.some(function (item) {
+          return String(item.id) === value;
+        });
+        categorySel.value = matched ? value : '';
+      });
       delTplBtn.addEventListener('click', function () {
         var name = templateSel.value;
         if (!name) return;
@@ -4115,8 +4167,9 @@
           },
             h('div', { class: 'row-title' }, meta.title || '（无标题）'),
             h('div', { class: 'muted small', style: 'margin-top:4px' },
-              result.parts + ' P · 分区 ' + meta.tid + ' · 标签 '
-              + meta.tag + ' · 共 '
+              result.parts + ' P · 分区 ' + meta.tid
+              + (meta.tid_name ? '「' + meta.tid_name + '」' : '')
+              + ' · 标签 ' + meta.tag + ' · 共 '
               + fmtBytes(result.total_bytes)
               + (result.account && result.account.name
                 ? ' · 账号 ' + result.account.name : '')),
@@ -4212,6 +4265,7 @@
         h('div', { class: 'toolbar', style: 'margin-top:6px' },
           h('span', { class: 'muted small' }, '标签'), tagsInput),
         h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '账号可用分区'), categorySel,
           h('span', { class: 'muted small' }, '分区 ID'), tidInput,
           h('span', { class: 'muted small' }, '创作声明'), statementSel,
           h('label', { class: 'muted small' }, autoCheck, ' 上传后自动投稿')),
@@ -4226,7 +4280,7 @@
           h('span', { class: 'muted small' }, '封面'), coverInput),
         h('div', { class: 'toolbar', style: 'margin-top:6px' },
           h('span', { class: 'muted small' }, '投稿模板'), templateSel,
-          saveTplBtn, delTplBtn),
+          saveTplQuickBtn, saveTplBtn, delTplBtn),
         checksHost, publishJobHost));
 
       var STATE_LABELS = {
@@ -6772,6 +6826,111 @@
     setLoading(root, '正在读取 QQ 群订阅列表…');
     api('/api/fangroups').then(function (data) {
       root.replaceChildren();
+      var QUERY_PLATFORMS = {
+        douyin: ['抖音', 'https://www.douyin.com/user/... 或 sec_uid'],
+        weibo: ['微博', 'https://weibo.com/u/3056354293 或 UID'],
+        bilibili: ['B站', 'https://space.bilibili.com/1467772 或 UID']
+      };
+      var platformSel = h('select', { class: 'select' },
+        Object.keys(QUERY_PLATFORMS).map(function (key) {
+          return h('option', { value: key }, QUERY_PLATFORMS[key][0]);
+        }));
+      var queryInput = h('input', {
+        class: 'input grow', placeholder: QUERY_PLATFORMS.douyin[1]
+      });
+      var queryBtn = h('button', { class: 'btn primary', type: 'button' },
+        '查询粉丝群');
+      var queryHost = h('div', { style: 'margin-top:8px' });
+      var queryJobHost = h('div');
+      var querying = false;
+      platformSel.addEventListener('change', function () {
+        queryInput.placeholder = QUERY_PLATFORMS[platformSel.value][1];
+        queryHost.replaceChildren();
+      });
+      queryBtn.addEventListener('click', function () {
+        if (querying) return;
+        if (!queryInput.value.trim()) {
+          toast('请粘贴主页链接或输入 UID', 'warning');
+          return;
+        }
+        querying = true;
+        queryBtn.disabled = true;
+        queryBtn.textContent = '查询中…';
+        post('/api/fangroups/query', {
+          platform: platformSel.value, text: queryInput.value.trim()
+        }).then(function (result) {
+          watchJob(queryJobHost, result.job, function (job) {
+            querying = false;
+            queryBtn.disabled = false;
+            queryBtn.textContent = '查询粉丝群';
+            var outcome = job.result || {};
+            toast(outcome.summary || '查询完成',
+              (outcome.groups || []).length ? 'success' : 'info');
+            var groups = outcome.groups || [];
+            if (!groups.length) {
+              queryHost.replaceChildren(empty('没有查到公开粉丝群。'));
+              return;
+            }
+            var head = h('tr', null, h('th', null, '群名'),
+              h('th', null, '群号'), h('th', { class: 'num' }, '人数'),
+              h('th', { class: 'num' }, '变化'), h('th', null, '标签'),
+              h('th', null, '链接'));
+            var body = h('tbody');
+            groups.forEach(function (row) {
+              var changeText = '-';
+              if (row.change === null) changeText = '新群';
+              else if (typeof row.change === 'number' && row.change !== 0) {
+                changeText = (row.change > 0 ? '+' : '') + row.change;
+              } else if (typeof row.change === 'number') changeText = '0';
+              body.appendChild(h('tr', null,
+                h('td', { class: 'ellipsis' }, row.name || '-'),
+                h('td', { class: 'muted small' }, row.group_no || row.group_id || '-'),
+                h('td', { class: 'num' }, row.member_text || '-'),
+                h('td', { class: 'num' }, changeText),
+                h('td', { class: 'muted small' }, row.tags || '-'),
+                h('td', { class: 'ellipsis' }, row.url
+                  ? h('a', { href: row.url, target: '_blank',
+                    rel: 'noopener noreferrer' }, row.url) : '-')));
+            });
+            queryHost.replaceChildren(
+              h('div', { class: 'muted small', style: 'margin-bottom:6px' },
+                (outcome.platform_label || '') + ' ' + (outcome.owner_id || '')
+                + ' · ' + groups.length + ' 个群'
+                + (outcome.previous_at
+                  ? ' · 较 ' + outcome.previous_at : '')
+                + (outcome.avatars && outcome.avatars.total
+                  ? ' · 头像 ' + outcome.avatars.ok + '/'
+                    + outcome.avatars.total : '')),
+              h('div', { class: 'table-wrap' },
+                h('table', { class: 'db-table' },
+                  h('thead', null, head), body)));
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              querying = false;
+              queryBtn.disabled = false;
+              queryBtn.textContent = '查询粉丝群';
+              if (job.status === 'error') {
+                toast('查询失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          querying = false;
+          queryBtn.disabled = false;
+          queryBtn.textContent = '查询粉丝群';
+          toast('查询失败：' + error.message, 'error');
+        });
+      });
+      root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '查询粉丝群'),
+        h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '平台'), platformSel,
+          queryInput, queryBtn),
+        h('div', { class: 'muted small', style: 'margin-top:6px' },
+          '抖音 / 微博 / B站 需要对应平台登录态；B站网页端只能列出当前账号'
+          + '已加入的应援团。查询会保存快照并加入定时快照名单。'),
+        queryHost, queryJobHost));
       var groups = data.groups || [];
       var tableHost = h('div');
       var historyHost = h('div', { style: 'margin-top:12px' });
