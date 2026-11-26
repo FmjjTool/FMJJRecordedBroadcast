@@ -10900,12 +10900,14 @@ function renderMusicTag(root) {
               var pushBtn = h('button', {
                 class: 'btn primary', type: 'button'
               }, '推送到腾讯文档');
+              var overwriteBox = h('input', { type: 'checkbox' });
               var overlay = h('div', { class: 'preview-overlay' });
               overlay.addEventListener('click', function (event) {
                 if (event.target === overlay) overlay.remove();
               });
               pushBtn.addEventListener('click', function () {
-                var payload = { row_no: Number(evSel.value) };
+                var payload = { row_no: Number(evSel.value),
+                  overwrite: overwriteBox.checked };
                 var any = false;
                 Object.keys(inputs).forEach(function (key) {
                   payload[key] = inputs[key].value.trim();
@@ -10949,6 +10951,8 @@ function renderMusicTag(root) {
                   h('div', { class: 'toolbar' },
                     h('span', { class: 'muted small' }, '活动'), evSel),
                   rows,
+                  h('label', { class: 'check muted small', style: 'margin-top:6px' },
+                    overwriteBox, ' 覆盖该列已有的其它链接'),
                   h('div', { class: 'muted small', style: 'margin-top:8px' },
                     '只写「活动歌单_*」三列，已有其它链接不会覆盖；'
                     + '可填完整链接，也可只填歌单 ID。'),

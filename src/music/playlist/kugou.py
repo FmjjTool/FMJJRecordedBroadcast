@@ -185,6 +185,30 @@ class KugouPlaylistWriter(BasePlaylistWriter):
             )
         return str(playlist_id)
 
+    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     transport: Optional[httpx.BaseTransport] = None) -> str:
+        """酷狗云歌单的公开页：只有分配了 specialid 的歌单才有网页地址。
+
+        自建云歌单（listid）没有 specialid 时没有可公开访问的网页链接，
+        返回空串，由调用方提示到客户端复制分享链接手动登记。
+        """
+        try:
+            userid, token, mid, dfid = self._identity(cookie)
+            global_id = f"collection_3_{userid}_{str(playlist_id).strip()}_0"
+            body = self._signed_request(
+                "https://gateway.kugou.com/pubsongs/v3/get_list_info",
+                {"data": [{"global_collection_id": global_id, "userid": 0,
+                           "specialid": 0}], "userid": 0, "token": ""},
+                {}, cookie, userid, token, mid, dfid, transport)
+        except Exception:  # noqa: BLE001 - 拿不到链接不影响歌单已创建
+            return ""
+        items = body.get("data") or []
+        info = items[0] if items and isinstance(items[0], dict) else {}
+        specialid = info.get("specialid")
+        if specialid:
+            return f"https://www.kugou.com/yy/special/single/{specialid}.html"
+        return ""
+
     def add_songs(self, playlist_id: str, songs: list[SongInfo],
                   cookie: dict[str, str], *,
                   transport: Optional[httpx.BaseTransport] = None,

@@ -160,6 +160,7 @@ class ApplyResult:
     platform: str
     playlist_name: str
     playlist_id: str = ""
+    playlist_url: str = ""
     added: list[str] = field(default_factory=list)
     failed: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
@@ -171,6 +172,7 @@ class ApplyResult:
             "platform": self.platform,
             "playlist_name": self.playlist_name,
             "playlist_id": self.playlist_id,
+            "playlist_url": self.playlist_url,
             "added": self.added,
             "failed": self.failed,
             "skipped": self.skipped,
@@ -599,6 +601,12 @@ def apply_plan(plan: PlatformPlan, cookie: dict[str, str], *,
                                    transport=transport)
         except PlaylistWriteError as exc:
             result.sort_error = str(exc)
+    # 歌单公开链接：QQ 需要把 dirId 换成 tid，酷狗只有已分配 specialid 才有网页页
+    try:
+        result.playlist_url = str(plan.writer.playlist_url(
+            playlist_id, cookie, transport=transport) or "").strip()
+    except Exception:  # noqa: BLE001 - 拿不到链接不影响已写入的歌单
+        result.playlist_url = ""
     return result
 
 

@@ -79,7 +79,8 @@ def write_event_playlist(payload: dict) -> dict:
     for platform, text in entries.items():
         if text:
             event_playlist.parse_input(platform, text)
-    receipt = event_playlist.write_manual(event, entries)
+    receipt = event_playlist.write_manual(
+        event, entries, overwrite=bool(payload.get("overwrite")))
     receipt["summary"] = event_playlist.summary_text(receipt)
     return receipt
 

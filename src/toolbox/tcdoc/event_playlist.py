@@ -39,9 +39,13 @@ STATUS_LABELS = {
     "conflict": "已有其它链接",
     "missing_column": "缺少目标列",
     "mapped_off": "映射为不写",
+    "no_public_url": "平台无网页链接",
     "unverified": "链接校验未通过",
     "failed": "写入失败",
 }
+
+_NOT_FOUND_MARKERS = ("notfound", "没有找到相关", "您输入的网址可能不正确",
+                      "页面不存在", "404 not found", "歌单不存在")
 
 
 def summary_text(receipt) -> str:
@@ -135,7 +139,11 @@ def find_event_record(records, event) -> dict | None:
 
 
 def probe_page(url: str, name: str = "", timeout: float = 8.0) -> tuple[bool, str]:
-    """只读探测歌单网页是否真的可打开；返回 (是否通过, 说明)。"""
+    """只读探测歌单网页是否真的可打开；返回 (是否通过, 说明)。
+
+    音乐平台是前端渲染，正文里不一定有歌单名：这里以「状态码 + 路径 + 无错误页文案」
+    判断，歌单名命中只作为加分项，不作为必要条件。
+    """
     request = Request(url, headers={"User-Agent": _PROBE_UA,
                                     "Accept": "text/html,application/xhtml+xml"})
     try:
@@ -144,17 +152,22 @@ def probe_page(url: str, name: str = "", timeout: float = 8.0) -> tuple[bool, st
             final = str(response.geturl() or url)
             body = response.read(400_000).decode("utf-8", "replace")
     except HTTPError as exc:
-        return False, f"网页返回 HTTP {exc.code}"
+        return False, f"网页返回 HTTP {exc.code}（链接已失效）"
     except (URLError, TimeoutError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         return False, f"网页无法访问（{reason}）"
     if status != 200:
-        return False, f"网页返回 HTTP {status}"
+        return False, f"网页返回 HTTP {status}（链接已失效）"
     path = urlsplit(final).path
     if "/special/single/" not in path and "/playlist" not in path:
-        return False, "网页跳转到了非歌单页"
-    if name and name not in body:
-        return False, "网页里找不到歌单名称"
+        return False, "网页跳转到了非歌单页（链接已失效）"
+    lowered = body.lower()
+    if any(marker in lowered for marker in _NOT_FOUND_MARKERS):
+        return False, "网页显示歌单不存在（链接已失效）"
+    if name and name in body:
+        return True, "网页可访问"
+    if len(body) < 1500:
+        return False, "网页内容为空（链接已失效）"
     return True, "网页可访问"
 
 
@@ -169,6 +182,8 @@ def parse_input(platform: str, text: str) -> str:
         return raw
     if not re.match(r"^[A-Za-z0-9_-]{2,64}$", raw):
         raise ValueError(f"歌单 ID 无法识别：{raw}")
+    if platform == "kugou":
+        raise ValueError("酷狗请粘贴客户端「复制链接」得到的歌单链接（云歌单 ID 没有网页页）")
     url = playlist_link.url_of(platform, raw)
     if not url:
         raise ValueError(f"{platform} 暂不支持生成歌单链接")
@@ -196,7 +211,7 @@ def write_manual(event, entries, *, reader=None, client_factory=None,
                 "record_id": "", "items": [],
                 "message": "没有填写任何平台的歌单链接"}
     return _write_links(event, links, reader=reader, client_factory=client_factory,
-                        overwrite=overwrite, probe=probe, verify=False)
+                        overwrite=overwrite, probe=probe, verify=True)
 
 
 def write_results(event, results, *, reader=None, client_factory=None,
@@ -239,6 +254,11 @@ def _write_links(event, links, *, reader=None, client_factory=None,
         item = {"platform": link["platform"], "column": column or link["column"],
                 "url": link["url"], "status": "", "message": ""}
         receipt["items"].append(item)
+        if not link["url"]:
+            item["status"] = "no_public_url"
+            item["message"] = ("平台没有可公开访问的歌单网页；"
+                               "请在客户端复制分享链接后用「歌单录入」登记")
+            continue
         if not column:
             item["status"] = "mapped_off"
             item["message"] = "字段映射已把该列设为不写"
@@ -258,9 +278,18 @@ def _write_links(event, links, *, reader=None, client_factory=None,
             item["message"] = "已是该歌单链接"
             continue
         if current and not overwrite:
-            item["status"] = "conflict"
-            item["message"] = f"已有其它链接（{current}），未覆盖"
-            continue
+            # 程序生成的旧链接如果已经打不开（如 QQ 旧版把 dirId 当链接），
+            # 允许自动替换；打不开只认「明确失效」，网络异常不覆盖。
+            replaced = False
+            if verify:
+                alive, why = (probe or probe_page)(current, "")
+                if not alive and "失效" in why:
+                    replaced = True
+                    item["message"] = "原链接已失效，替换为新的歌单链接"
+            if not replaced:
+                item["status"] = "conflict"
+                item["message"] = f"已有其它链接（{current}），未覆盖"
+                continue
         if verify and link.get("verify"):
             check = (probe or probe_page)(link["url"], link.get("playlist_name") or "")
             if not check[0]:

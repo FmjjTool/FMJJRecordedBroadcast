@@ -31,7 +31,8 @@ _URL_TEMPLATES = {
     "kugou": "https://www.kugou.com/yy/special/single/{id}.html",
 }
 
-# 需要先探测网页可访问的平台：酷狗云歌单 ID 与网页歌单 ID 可能不是同一套
+# 需要先探测网页可访问的平台：酷狗云歌单只有分配 specialid 才有网页页，
+# 探测不通过就不写死链。QQ 的链接由官方账号接口解析（tid），不再额外探测。
 VERIFY_BEFORE_WRITE = frozenset({"kugou"})
 
 
@@ -56,7 +57,8 @@ def url_of(platform: str, playlist_id: str) -> str:
 def build_links(results) -> list[dict]:
     """写入结果 → 待回写清单。
 
-    只收成功创建出歌单 ID 的平台；未登录/失败/没有 ID 的条目自动跳过。
+    优先用平台自己解析出的公开链接（QQ 的 tid、酷狗 published specialid）；
+    酷狗云歌单没有公开页时保留一条空链接记录，供回执说明原因。
     返回 [{platform, column, playlist_id, url, playlist_name, verify}, …]
     """
     links = []
@@ -68,12 +70,19 @@ def build_links(results) -> list[dict]:
         playlist_id = str(item.get("playlist_id") or "").strip()
         if not column or not playlist_id:
             continue
+        url = str(item.get("playlist_url") or "").strip()
+        if not url:
+            if platform == "kugou":
+                # 云歌单没分配 specialid 时没有网页页，不能拿 listid 硬拼
+                url = ""
+            else:
+                url = url_of(platform, playlist_id)
         links.append({
             "platform": platform,
             "column": column,
             "playlist_id": playlist_id,
-            "url": url_of(platform, playlist_id),
+            "url": url,
             "playlist_name": str(item.get("playlist_name") or ""),
-            "verify": platform in VERIFY_BEFORE_WRITE,
+            "verify": bool(url) and platform in VERIFY_BEFORE_WRITE,
         })
-    return [link for link in links if link["url"]]
+    return [link for link in links if link["column"]]

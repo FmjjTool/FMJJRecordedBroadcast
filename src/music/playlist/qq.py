@@ -226,6 +226,48 @@ class QQPlaylistWriter(BasePlaylistWriter):
             result.failed.append((song.song_name or song.song_id, message))
         return result
 
+    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     transport: Optional[httpx.BaseTransport] = None) -> str:
+        """dirId → 歌单公开页（真正链接用的是 tid，不是 dirId）。"""
+        uin = _qq_uin(cookie)
+        ident = str(playlist_id or "").strip()
+        if not uin or not ident:
+            return ""
+        payload = {
+            "comm": {
+                "g_tk": _g_tk(cookie),
+                "uin": uin,
+                "format": "json",
+                "inCharset": "utf-8",
+                "outCharset": "utf-8",
+                "notice": 0,
+                "platform": "h5",
+                "needNewCode": 1,
+            },
+            "req_0": {
+                "module": "music.musicasset.PlaylistBaseRead",
+                "method": "GetPlaylistByUin",
+                "param": {"uin": uin, "sin": 0, "size": 200, "songNumTag": 0},
+            },
+        }
+        text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        sign = ("zza" + "".join(random.choice("0123456789abcdef") for _ in range(10))
+                + hashlib.md5((SIGN_SALT + text).encode()).hexdigest())
+        headers = {
+            "User-Agent": QQ_UA,
+            "Content-Type": "application/json",
+            "Origin": "https://i.y.qq.com",
+            "Referer": "https://y.qq.com/",
+        }
+        try:
+            with self._client(cookie, transport) as client:
+                resp = client.post(f"{MUSICU_URL}?sign={sign}",
+                                   content=text.encode("utf-8"), headers=headers)
+            body = response_json(resp, platform=self.platform, phase="url")
+        except (ParseChangedError, RateLimitedError):
+            return ""
+        req = _musicu_req(body)
+        return _playlist_url_from_account(req, ident)
     def _resolve_song_ref(self, client: httpx.Client, song: SongInfo) -> tuple[int, int]:
         numeric_id = self._extra_int(song, "id", "songid", "songId")
         song_type = 0
@@ -254,6 +296,24 @@ class QQPlaylistWriter(BasePlaylistWriter):
         numeric_id = info.get("id") or info.get("songid") or 0
         song_type = int(info.get("type") or 0)
         return int(numeric_id) if numeric_id else 0, song_type
+
+
+def _playlist_url_from_account(req: dict, dirid: str) -> str:
+    """GetPlaylistByUin 回执（已拆到 req_0）→ 歌单页链接（tid 才是网页用的 id）。"""
+    try:
+        code = int((req or {}).get("code", 0))
+    except (TypeError, ValueError):
+        code = 0
+    if code != 0:
+        return ""
+    for item in (req.get("data") or {}).get("v_playlist") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("dirId") or item.get("dirid") or "") == str(dirid):
+            tid = str(item.get("tid") or item.get("dissid") or "").strip()
+            if tid:
+                return f"https://y.qq.com/n/ryqq/playlist/{tid}"
+    return ""
 
 
 def _musicu_req(body: dict) -> dict:

@@ -145,6 +145,11 @@ class BasePlaylistWriter:
         """按给定顺序重排歌单；平台不支持时由 supports_sort=False 跳过。"""
         return None
 
+    def playlist_url(self, playlist_id: str, cookie: dict[str, str], *,
+                     transport: Optional[httpx.BaseTransport] = None) -> str:
+        """歌单公开网页链接；拿不到（或平台没有网页歌单页）返回空串。"""
+        return ""
+
     def _client(self, cookie: dict[str, str], transport=None) -> httpx.Client:
         return httpx.Client(
             timeout=20.0,

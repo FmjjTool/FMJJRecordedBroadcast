@@ -2053,6 +2053,9 @@ class TcDocBridgePanel(QWidget):
             edit.setPlaceholderText("歌单链接，或歌单 ID（可留空）")
             edits[platform] = edit
             form.addRow(f"活动歌单_{label}", edit)
+        overwrite_box = QCheckBox("覆盖该列已有的其它链接")
+        overwrite_box.setToolTip("默认不覆盖人工登记的链接；勾选后填写的平台会直接替换")
+        form.addRow("", overwrite_box)
         root.addLayout(form)
         root.addStretch(1)
 
@@ -2084,18 +2087,18 @@ class TcDocBridgePanel(QWidget):
                 QMessageBox.warning(dlg, "歌单录入", str(exc))
                 return
             dlg.accept()
-            self._run_playlist_write(event, entries)
+            self._run_playlist_write(event, entries, overwrite_box.isChecked())
 
         ok.clicked.connect(submit)
         dlg.exec()
 
-    def _run_playlist_write(self, event, entries) -> None:
+    def _run_playlist_write(self, event, entries, overwrite: bool = False) -> None:
         from toolbox.tcdoc import event_playlist
 
         self.status.setText(f"正在写入「{event.get('name') or ''}」的活动歌单…")
 
         def work():
-            return event_playlist.write_manual(event, entries)
+            return event_playlist.write_manual(event, entries, overwrite=overwrite)
 
         def done(receipt, err):
             if err:

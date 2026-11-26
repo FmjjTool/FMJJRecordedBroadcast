@@ -214,4 +214,6 @@ description: "腾讯文档同步编辑范围强制约束（强制阅读）。仅
 6. 触发入口只有歌单页（桌面 `gui_qt/pages/music_playlist.py`、WebUI `webui_music_playlist.py`）在来源为「线下活动曲目」时执行；不使用独立脚本批量刷表。
 7. 实现：`src/toolbox/tcdoc/event_playlist.py`（回写编排）、`src/toolbox/tcdoc/import_local.py::update_playlist_link`（白名单校验）、`src/music/playlist_link.py`（列名与链接模板）。
 8. 手工入口（2026-11-26）：桌面中间层「歌单录入」与 WebUI 中间层「歌单录入」允许用户为某场线下活动手工填三列链接；同样只走单行单字段 `updateRecords`，不覆盖已有链接、不改其它列、不探测用户自贴的链接（只做 http(s) / ID 格式校验）。
+9. 链接口径（2026-11-26）：QQ 必须把建单的 `dirId` 换成 `GetPlaylistByUin` 返回的 `tid` 再写，禁止把 `dirId` 直接拼成网页链接；酷狗云歌单只有分配 `specialid` 时才写 `special/single/{specialid}.html`，否则回执「平台无网页链接」不得写死链。已有链接经探测确认「已失效」时才允许自动替换；网络异常不视为失效。
+10. 手工覆盖：`write_manual` / WebUI 的「覆盖该列已有的其它链接」是用户当次显式选择，仅对本次填写的平台生效；不改变自动回写「不覆盖」的默认。
 
