@@ -144,7 +144,8 @@
           });
           card.appendChild(h('div', { class: 'toolbar', style: 'margin-bottom:8px' },
             h('span', { class: 'grow' }, item.label + ' · '
-              + (item.installed ? '已安装' : '未安装') + ' · 下载约 ' + sizeText(item.size)),
+              + (item.installed ? '已安装' : '未安装') + ' · 下载约 '
+              + sizeText(item.download_size || item.size)),
             install, remove));
         });
 

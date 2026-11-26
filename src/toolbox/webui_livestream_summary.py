@@ -14,7 +14,6 @@ from toolbox import livestream_summary_rule as rule
 from toolbox.config_manager import get_export_subdir, load_convert_config
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import pipeline
-from toolbox.livestream_summary.client import ChatClient, is_local_base_url
 from toolbox.livestream_summary.local_options import FIELD_SPECS, defaults, normalize_options
 from toolbox.livestream_summary.session import client_session
 
@@ -161,17 +160,6 @@ def save_settings(payload: dict) -> dict:
             "summary": "设置已保存" + ("（含新 API Key）" if api_key else "")}
 
 
-def _client(settings: ls_config.Settings) -> ChatClient:
-    api_key = ls_config.load_api_key()
-    allow_empty = is_local_base_url(settings.base_url)
-    if not api_key and not allow_empty:
-        raise ValueError("还没有保存 API Key（本机模型地址可不填）")
-    if not settings.model:
-        raise ValueError("请先填写模型名称")
-    return ChatClient(settings.base_url, api_key, settings.model,
-                      allow_empty_key=allow_empty)
-
-
 def test_connection(on_log=None, is_cancelled=None, on_progress=None) -> dict:
     settings = ls_config.load_settings()
     log = on_log or (lambda _message: None)
@@ -240,7 +228,8 @@ def run_summary(payload: dict, on_log=None, is_cancelled=None, on_progress=None)
             result = pipeline.run(
                 text, source.name, client,
                 progress=progress, cancel=flag,
-                chunk_chars=settings.chunk_chars, folder=folder)
+                chunk_chars=settings.chunk_chars, folder=folder,
+                max_tokens=settings.local["max_tokens"] if mode == "local" else 8192)
 
     target = pipeline.default_output_path(
         result.text, source, str(get_export_subdir("livestream_summary")))

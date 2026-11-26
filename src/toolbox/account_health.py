@@ -215,6 +215,8 @@ def probe_platform(platform: str) -> tuple[str, str, str]:
                   else "登录态已失效，请重新登录")
         return STATE_BAD, "", detail
     # ok=None：平台没有校验通道 / 接口不可达 / 只有缓存昵称 → 无法确认
+    if platform == "xianyu" and info.get("detail"):
+        return STATE_WARN, username, str(info["detail"])
     return STATE_WARN, username, "平台没有可用校验接口或接口不可达"
 
 

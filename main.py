@@ -2,6 +2,11 @@
 
 启动：python main.py
 """
+import time as _startup_clock
+_ENTRY_STARTED = _startup_clock.perf_counter()
+_ENTRY_WALL = _startup_clock.time()
+_ENTRY_CPU = _startup_clock.process_time()
+
 import os
 import subprocess
 import sys
@@ -103,10 +108,25 @@ if "--music-playlist" in sys.argv:
     _player_args = [arg for arg in sys.argv[1:] if arg != "--music-playlist"]
     sys.exit(_music_playlist_job(_player_args))
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from toolbox.startup_diagnostics import (
+    bootstrap as _start_diagnostics, phase as _startup_phase,
+    finish_current as _finish_diagnostics, install_exception_hook as _diagnostic_exception_hook,
+    finish_failure as _diagnostic_failure,
+)
 
-from gui_qt.main_window import MainWindow
-from gui_qt import theme
+# 所有无窗口入口均已分流；此处仍在 Qt/GUI 模块导入之前。
+if __name__ == "__main__":
+    try:
+        _start_diagnostics(_ENTRY_STARTED, _ENTRY_WALL, _ENTRY_CPU)
+    except Exception:
+        pass  # 诊断自身不可阻止软件启动。
+
+with _startup_phase("加载 Qt 组件"):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+with _startup_phase("加载主界面模块"):
+    from gui_qt.main_window import MainWindow
+    from gui_qt import theme
 
 
 def _headless_io():
@@ -201,25 +221,29 @@ def _install_qt_noise_filter():
 
 
 def main():
-    _headless_io()
-    # 任何启动方式（python/pythonw/打包 exe）下都不让子进程弹黑框
-    _suppress_child_consoles()
-    # 开发模式启动后把 cmd 控制台窗口自动最小化（打包/pythonw 无控制台则跳过）
-    _minimize_console()
+    with _startup_phase("准备运行环境"):
+        _headless_io()
+        # 任何启动方式（python/pythonw/打包 exe）下都不让子进程弹黑框
+        _suppress_child_consoles()
+        # 开发模式启动后把 cmd 控制台窗口自动最小化（打包/pythonw 无控制台则跳过）
+        _minimize_console()
 
-    from toolbox.config_manager import init_all_configs
-    init_all_configs()
+    with _startup_phase("初始化配置"):
+        from toolbox.config_manager import init_all_configs
+        init_all_configs()
 
     # 初始化日志（每次运行生成独立 log，上限可配置，见 max_log_files）。
     # console=False：GUI 模式控制台静默——下载进度/解析输出/Qt 警告只进
     # logs/app_*.log，不再刷 cmd（未处理异常仍回显控制台）
     try:
-        from app_logger import setup_logging
-        from toolbox.config_manager import load_convert_config
-        setup_logging(max_files=int(load_convert_config().get("max_log_files", 50) or 50),
-                      console=False)
+        with _startup_phase("初始化日志"):
+            from app_logger import setup_logging
+            from toolbox.config_manager import load_convert_config
+            setup_logging(max_files=int(load_convert_config().get("max_log_files", 50) or 50),
+                          console=False)
     except Exception:
         pass  # 日志初始化失败不影响主程序
+    _diagnostic_exception_hook()
 
     # QtWebEngine 已随内嵌登录改造移除（登录走系统 Edge + Playwright 嵌入），
     # AA_ShareOpenGLContexts 保留给 QtMultimedia 视频预览的 GL 上下文共享
@@ -232,21 +256,24 @@ def main():
     QLoggingCategory.setFilterRules(_FONTDB_RULES)
     _install_qt_noise_filter()
 
-    app = QApplication(sys.argv)
-    # 后台托盘模式下主窗口会被隐藏而不是关闭；关闭最后一个独立窗口时不能自动退出。
-    app.setQuitOnLastWindowClosed(False)
-    app.setStyle("Fusion")
-    from gui_qt.app_icon import configure_app_icon
-    configure_app_icon(app)
+    with _startup_phase("初始化 Qt 应用"):
+        app = QApplication(sys.argv)
+        # 后台托盘模式下主窗口会被隐藏而不是关闭；关闭最后一个独立窗口时不能自动退出。
+        app.setQuitOnLastWindowClosed(False)
+        app.setStyle("Fusion")
+        from gui_qt.app_icon import configure_app_icon
+        configure_app_icon(app)
     # 主题：先装 setStyleSheet 自动重映射补丁，再按配置应用浅色/深色 QSS
-    theme.init_theme()
-    theme.install_auto_remap()
+    with _startup_phase("读取界面主题"):
+        theme.init_theme()
+        theme.install_auto_remap()
     # 跟随系统/定时对齐必须在首次上色前完成（只改内存态+配置，不碰 UI）：
     # 若留到 MainWindow 构造途中才翻转（原 _check_theme_schedule 启动对齐），
     # 骨架页已按旧主题构造，而 app.setPalette 对尚未显示的控件树不生效，
     # retheme 又只重映射内联样式 → 深底+白块混合态（骨架期右侧发黑的根因）
-    theme.check_auto_switch()
-    theme.apply_theme(app)
+    with _startup_phase("应用界面主题"):
+        theme.check_auto_switch()
+        theme.apply_theme(app)
 
     # 右键菜单统一：Qt 自带的文本菜单是英文（&Copy / Select All）且无图标，
     # 这里换成中文 + 线形图标菜单，覆盖所有页面的输入框/日志/文本浏览区
@@ -260,13 +287,16 @@ def main():
     # 程序内代理：上次处于启用状态就在后台恢复内核与进程环境变量，不阻塞首屏。
     # 只影响本进程及其子进程，不改系统代理；失败只记日志，不打断启动。
     try:
-        from toolbox.proxy import bootstrap as _proxy_bootstrap
-        _proxy_bootstrap()
+        with _startup_phase("恢复本地代理"):
+            from toolbox.proxy import bootstrap as _proxy_bootstrap
+            _proxy_bootstrap()
     except Exception:
         pass
 
-    win = MainWindow()
-    win.show()
+    with _startup_phase("构造主窗口"):
+        win = MainWindow()
+    with _startup_phase("显示主窗口"):
+        win.show()
 
     # 延后启动检查，并在后台探测 ffmpeg：仅用 singleShot 延后仍会在
     # 主线程等待子进程（最坏 5s），期间窗口无法响应。
@@ -274,7 +304,8 @@ def main():
         from gui_qt.common import run_bg
 
         def _probe_ffmpeg():
-            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+            with _startup_phase("检查媒体运行环境"):
+                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
 
         def _on_ffmpeg_checked(_result, err):
             # run_bg 的完成回调回到主线程，提示框及浏览器检查保持原顺序。
@@ -307,8 +338,9 @@ def main():
 
         # WebUI 独立服务：按设置自动启动（独立子进程，失败只记日志）
         def _start_webui_service():
-            from toolbox.webui_launcher import get_launcher
-            get_launcher().start_if_enabled()
+            with _startup_phase("恢复 WebUI 服务"):
+                from toolbox.webui_launcher import get_launcher
+                get_launcher().start_if_enabled()
 
         run_bg(_start_webui_service, lambda _result, _err: None)
 
@@ -316,10 +348,11 @@ def main():
     # 信息写 logs/webui_desktop_bridge.json；不改 config/download）
     record_bridge = None
     try:
-        from gui_qt.live_record_bridge_controller import DesktopRecordController
-        from toolbox.live_record_bridge import DesktopBridge
-        record_bridge = DesktopBridge(DesktopRecordController(win))
-        record_bridge.start()
+        with _startup_phase("初始化桌面控制桥"):
+            from gui_qt.live_record_bridge_controller import DesktopRecordController
+            from toolbox.live_record_bridge import DesktopBridge
+            record_bridge = DesktopBridge(DesktopRecordController(win))
+            record_bridge.start()
     except Exception:
         import logging
         logging.getLogger("startup").warning("录制控制桥启动失败", exc_info=True)
@@ -328,6 +361,7 @@ def main():
     QTimer.singleShot(1200, _post_startup_checks)
 
     code = app.exec()
+    _finish_diagnostics("normal_exit")
 
     if record_bridge is not None:
         try:
@@ -374,4 +408,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as _startup_error:
+        _diagnostic_failure(type(_startup_error).__name__)
+        raise

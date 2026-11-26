@@ -9,6 +9,7 @@ from gui_qt import common
 from toolbox.performance import (
     PerformanceRecorder, auto_start_enabled, child_process_memory, process_memory,
 )
+from toolbox import startup_diagnostics
 
 
 def get_performance_monitor(app):
@@ -20,7 +21,7 @@ def get_performance_monitor(app):
 
 def start_automatic_monitoring(app):
     """只在软件启动收尾时恢复普通采样，始终不自动启用分配追踪。"""
-    if auto_start_enabled():
+    if startup_diagnostics.current_recorder() is not None or auto_start_enabled():
         get_performance_monitor(app).start(trace=False)
 
 
@@ -28,7 +29,9 @@ class PerformanceMonitor(QObject):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.recorder = PerformanceRecorder()
+        early = startup_diagnostics.current_session()
+        self._session = early if early is not None and early.recorder.active else None
+        self.recorder = self._session.recorder if self._session is not None else PerformanceRecorder()
         self._children = []
         self._child_busy = False
         self._lag = 0.0
@@ -43,9 +46,12 @@ class PerformanceMonitor(QObject):
         self._child_timer.timeout.connect(self._read_children)
 
     def start(self, trace=False):
-        if self.recorder.active:
+        if not self.recorder.active:
+            self._session = startup_diagnostics.start_runtime_session(self.recorder, trace)
+        if self._sample_timer.isActive():
             return
-        self.recorder.start(trace)
+        if self._session is not None:
+            self._session.attach_gui()
         common.PERFORMANCE_RECORDER = self.recorder
         self._last_beat = time.perf_counter()
         self._lag = 0.0
@@ -55,12 +61,21 @@ class PerformanceMonitor(QObject):
         self.sample()
         self._read_children()
 
-    def stop(self):
+    def stop(self, reason="stopped"):
         for timer in (self._heartbeat, self._sample_timer, self._child_timer):
             timer.stop()
         if common.PERFORMANCE_RECORDER is self.recorder:
             common.PERFORMANCE_RECORDER = None
-        self.recorder.stop()
+        if self._session is not None:
+            self._session.finish(reason)
+        else:
+            self.recorder.stop()
+
+    def autosave_info(self):
+        return self._session.info() if self._session is not None else {"enabled": False}
+
+    def save_now(self):
+        return self._session.save_now() if self._session is not None else False
 
     def _beat(self):
         now = time.perf_counter()
@@ -92,6 +107,10 @@ class PerformanceMonitor(QObject):
                                                  for table in grids if table.model() is not None)})
         self.recorder.sample(self.app.current_page or "启动阶段", self._lag, inventory, list(self._children))
         self._lag = 0.0
+        preloader = getattr(self.app, "page_preloader", None)
+        if (self.app.current_page and preloader is not None and not preloader.queue
+                and not any(page.preload_is_pending() for page in self.app.pages.values())):
+            startup_diagnostics.complete_startup()
 
     def _read_children(self):
         if self._child_busy or not self.recorder.active:
@@ -120,3 +139,9 @@ class PerformanceMonitor(QObject):
             before = token[2][field]
             metrics[f"{field}_delta"] = after[field] - before if after[field] is not None and before is not None else None
         self.recorder.event(kind, key, **metrics)
+        if kind == "page_preload":
+            self.recorder.record_startup_phase("页面预载：" + str(key), metrics["duration_ms"],
+                                               started_seconds=token[1] - self.recorder.started,
+                                               failed=failed,
+                                               rss_delta=metrics.get("rss_delta"),
+                                               private_delta=metrics.get("private_delta"))

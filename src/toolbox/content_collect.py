@@ -144,6 +144,8 @@ def _collect_topic(identity: str, settings: dict, is_cancelled) -> dict:
             raise CollectCancelled("已取消，已采集部分已保存")
         return {"posts": len(wch.merge_posts(data)),
                 "new_posts": int(saved.get("new_posts") or 0)}
+    except wch.ChaohuaStopped as exc:
+        raise CollectCancelled("已取消，本次采集未完成") from exc
     finally:
         session = getattr(client, "session", None)
         if session is not None:
@@ -201,6 +203,9 @@ def run(kind: str, on_log=None, is_cancelled=None) -> dict:
                     outcome["results"].append({"id": identity, "ok": False, "cancelled": True})
                     raise
                 except Exception:
+                    if is_cancelled and is_cancelled():
+                        outcome["results"].append({"id": identity, "ok": False, "cancelled": True})
+                        raise CollectCancelled("已取消后续采集，已保存结果保留") from None
                     outcome["failed"] += 1
                     outcome["results"].append({"id": identity, "ok": False,
                                                "error": "采集或保存失败，请检查网络、登录状态与写入权限"})

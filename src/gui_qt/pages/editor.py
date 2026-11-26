@@ -83,7 +83,7 @@ def _fmt_ms(ms: int) -> str:
 
 
 class _OptionGrid(QWidget):
-    """参数组按可用宽度切换网格列数，窄窗口只纵向滚动。"""
+    """参数组响应式排布；短控件可按内容宽度流式换行。"""
 
     def __init__(self, widgets, columns=2, cell_width=210, *, compact=False):
         super().__init__()
@@ -132,17 +132,21 @@ class _SeekSlider(QSlider):
     """点击/拖动播放指针，并在同一时间轴显示片段和待定起点。"""
 
     clickedAt = Signal(int)
+    markerDeleteRequested = Signal(object)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._segments = ()
+        self._partial_segments = ()
         self._pending_start = None
         self._selected_index = -1
         self._pointer_dragging = False
         self.valueChanged.connect(lambda _value: self.update())
 
-    def set_segments(self, segments, pending_start=None, selected_index=-1):
+    def set_segments(self, segments, pending_start=None, selected_index=-1,
+                     partial_segments=()):
         self._segments = tuple(segments)
+        self._partial_segments = tuple(dict(row) for row in partial_segments)
         self._pending_start = pending_start
         self._selected_index = selected_index
         self.update()
@@ -155,6 +159,15 @@ class _SeekSlider(QSlider):
         handle = self.style().subControlRect(
             QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
         return option, groove, handle
+
+    def _x_at(self, value, option=None, groove=None, handle=None):
+        if option is None:
+            option, groove, handle = self._geometry()
+        span = max(1, groove.width() - handle.width())
+        value = max(self.minimum(), min(self.maximum(), int(value)))
+        return (groove.left() + handle.width() / 2
+                + QStyle.sliderPositionFromValue(
+                    self.minimum(), self.maximum(), value, span, option.upsideDown))
 
     def _value_at(self, x):
         option, groove, handle = self._geometry()
@@ -196,20 +209,13 @@ class _SeekSlider(QSlider):
         if self.maximum() <= self.minimum():
             return
         option, groove, handle = self._geometry()
-        span = max(1, groove.width() - handle.width())
-
-        def x_at(value):
-            value = max(self.minimum(), min(self.maximum(), int(value)))
-            return (groove.left() + handle.width() / 2
-                    + QStyle.sliderPositionFromValue(
-                        self.minimum(), self.maximum(), value, span, option.upsideDown))
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setClipRect(self.rect())
         y = groove.center().y()
         for index, (start, end) in enumerate(self._segments):
-            x1, x2 = sorted((x_at(start), x_at(end)))
+            x1, x2 = sorted((self._x_at(start, option, groove, handle),
+                             self._x_at(end, option, groove, handle)))
             selected = index == self._selected_index
             fill = QColor(theme.color("accent" if selected else "success"))
             fill.setAlpha(180 if selected else 110)
@@ -219,31 +225,92 @@ class _SeekSlider(QSlider):
             if selected:
                 for point, role in ((start, "success"), (end, "danger")):
                     painter.setPen(QPen(QColor(theme.color(role)), 1))
-                    painter.drawLine(int(x_at(point)), 2, int(x_at(point)), self.height() - 2)
+                    x = int(self._x_at(point, option, groove, handle))
+                    painter.drawLine(x, 2, x, self.height() - 2)
+        for row in self._partial_segments:
+            for endpoint, role in (("start", "success"), ("end", "danger")):
+                point = row.get(endpoint)
+                if point is None:
+                    continue
+                x = int(self._x_at(point, option, groove, handle))
+                painter.setPen(QPen(QColor(theme.color(role)), 2))
+                painter.drawLine(x, 3, x, self.height() - 3)
+                painter.setBrush(QColor(theme.color(role)))
+                painter.drawEllipse(QRectF(x - 3, y - 3, 6, 6))
         if self._pending_start is not None:
-            x1, x2 = sorted((x_at(self._pending_start), x_at(self.value())))
+            x1, x2 = sorted((self._x_at(self._pending_start, option, groove, handle),
+                             self._x_at(self.value(), option, groove, handle)))
             fill = QColor(theme.color("warning"))
             fill.setAlpha(70)
             painter.setPen(Qt.NoPen)
             painter.setBrush(fill)
             painter.drawRoundedRect(QRectF(x1, y - 4, max(2, x2 - x1), 8), 2, 2)
             painter.setPen(QPen(QColor(theme.color("warning")), 1, Qt.DashLine))
-            x = int(x_at(self._pending_start))
+            x = int(self._x_at(self._pending_start, option, groove, handle))
             painter.drawLine(x, 2, x, self.height() - 2)
         # 片段底色在手柄下，当前位置始终清楚可见。
         option.subControls = QStyle.SC_SliderHandle
         self.style().drawComplexControl(QStyle.CC_Slider, option, painter, self)
 
+    def contextMenuEvent(self, event):  # noqa: N802
+        if self.maximum() <= self.minimum():
+            return
+        x = event.pos().x()
+        hits = []
+        for index, (start, end) in enumerate(self._segments):
+            for endpoint, point in (("start", start), ("end", end)):
+                if abs(self._x_at(point) - x) <= 8:
+                    hits.append({"kind": "segment", "index": index,
+                                 "endpoint": endpoint,
+                                 "label": f"片段 {index + 1} · 删除{'起点' if endpoint == 'start' else '终点'} {_fmt_ms(point)}"})
+        for row in self._partial_segments:
+            for endpoint in ("start", "end"):
+                point = row.get(endpoint)
+                if point is not None and abs(self._x_at(point) - x) <= 8:
+                    hits.append({"kind": "partial", "id": row["id"],
+                                 "endpoint": endpoint,
+                                 "label": f"待补标记 · 删除{'起点' if endpoint == 'start' else '终点'} {_fmt_ms(point)}"})
+        if self._pending_start is not None and abs(self._x_at(self._pending_start) - x) <= 8:
+            hits.append({"kind": "pending", "endpoint": "start",
+                         "label": f"当前起点 · 删除 {_fmt_ms(self._pending_start)}"})
+        if not hits:
+            event.ignore()
+            return
+        menu = QMenu(self)
+        if len(hits) <= 8:
+            for hit in hits:
+                action = menu.addAction(hit["label"])
+                action.triggered.connect(
+                    lambda _checked=False, value=hit: self.markerDeleteRequested.emit(value))
+        else:
+            groups = {}
+            for hit in hits:
+                key = (("片段 " + str(hit["index"] + 1)) if hit["kind"] == "segment"
+                       else ("待补标记" if hit["kind"] == "partial" else "当前起点"))
+                groups.setdefault(key, []).append(hit)
+            for name, group in groups.items():
+                submenu = menu.addMenu(name)
+                for hit in group:
+                    action = submenu.addAction(hit["label"])
+                    action.triggered.connect(
+                        lambda _checked=False, value=hit: self.markerDeleteRequested.emit(value))
+        menu.exec(event.globalPos())
+
 
 class EditorPage(BasePage):
-    SESSION_FIELDS = ("files", "current_path", "segments", "detect_points")
+    SESSION_FIELDS = ("files", "current_path", "segments", "partial_segments",
+                     "_pending_start", "detect_points")
 
     def restore_session_data(self):
         segments = self.segments
+        partial_segments = self.partial_segments
+        pending_start = self._pending_start
         points = self.detect_points
         current = self.current_path
         self._refresh_files(self.files.index(current) if current in self.files else 0)
         self.segments = segments
+        self.partial_segments = partial_segments
+        self._pending_start = pending_start
         self.detect_points = points
         self._refresh_segments()
 
@@ -313,6 +380,8 @@ class EditorPage(BasePage):
         self.files: List[str] = []
         self.current_path: Optional[str] = None
         self.segments: List[Tuple[int, int]] = []
+        self.partial_segments: List[dict] = []
+        self._next_partial_id = 1
         self.detect_points: List[int] = []
         self.ext_audio_path: Optional[str] = None
         self.ext_sub_path: Optional[str] = None
@@ -470,15 +539,23 @@ class EditorPage(BasePage):
         self.preview_more_btn.setProperty("menuButton", True)
         preview_menu = QMenu(self.preview_more_btn)
         self.preview_more_btn.setMenu(preview_menu)
-        self.remove_seg_btn = preview_menu.addAction("删除选中片段")
-        self.remove_seg_btn.triggered.connect(self._remove_segment)
-        self.clear_seg_btn = preview_menu.addAction("清空片段")
-        self.clear_seg_btn.triggered.connect(self._clear_segments)
         self.shot_current_btn = preview_menu.addAction("截图当前帧")
         self.shot_current_btn.triggered.connect(self._shot_current)
         preview_layout.addWidget(_OptionGrid([
             self.play_btn, self.set_start_btn, self.set_end_btn, self.preview_more_btn],
             columns=4, cell_width=80))
+        self.remove_start_btn = self._btn("删起点", self._remove_start_mark, small=True)
+        self.remove_start_btn.setToolTip("删除选中片段的起点；保留终点待重新标记")
+        self.remove_end_btn = self._btn("删终点", self._remove_end_mark, small=True)
+        self.remove_end_btn.setToolTip("删除选中片段的终点；保留起点待重新标记")
+        self.remove_seg_btn = self._btn("删选中", self._remove_segment, small=True)
+        self.remove_seg_btn.setToolTip("删除选中的整段或单个待补标记")
+        self.clear_seg_btn = self._btn("清除标记", self._clear_segments, small=True, danger=True)
+        self.clear_seg_btn.setToolTip("清除当前视频全部片段、待补标记与未完成起点")
+        preview_layout.addWidget(_OptionGrid([
+            self.remove_start_btn, self.remove_end_btn,
+            self.remove_seg_btn, self.clear_seg_btn], columns=4, cell_width=70))
+        self.slider.markerDeleteRequested.connect(self._delete_timeline_marker)
 
         self.segment_status = QLabel("未标记片段：移动播放指针后标记开始 / 结束")
         self.segment_status.setProperty("role", "caption")
@@ -527,7 +604,7 @@ class EditorPage(BasePage):
         self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.seg_list.currentRowChanged.connect(self._sync_timeline)
         self.seg_list.itemDoubleClicked.connect(
-            lambda item: self._seek_to(item.data(Qt.UserRole)[0]))
+            self._seek_to_segment_item)
         self.operation_splitter.addWidget(preview_area)
 
         self.tabs = QTabWidget()
@@ -634,7 +711,7 @@ class EditorPage(BasePage):
         content.setMinimumWidth(0)
         content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         for combo in content.findChildren(QComboBox):
-            combo.setMinimumWidth(100)
+            combo.setMinimumWidth(160)
             combo.setMinimumContentsLength(8)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setToolTip(combo.currentText())
@@ -1024,6 +1101,7 @@ class EditorPage(BasePage):
 
     def _set_preview_enabled(self, enabled: bool):
         for widget in (self.play_btn, self.set_start_btn, self.set_end_btn,
+                       self.remove_start_btn, self.remove_end_btn,
                        self.remove_seg_btn, self.clear_seg_btn,
                        self.shot_current_btn, self.preview_more_btn, self.jump_input, self.jump_btn,
                        *self.jump_buttons):
@@ -1045,6 +1123,15 @@ class EditorPage(BasePage):
         self.convert_clear_btn.setEnabled(idle)
         self.rotate_btn.setEnabled(has_file and idle)
         self.meta_rotation.setEnabled(has_file and idle)
+        data = self._selected_segment_data() if hasattr(self, "seg_list") else None
+        segment = self._selected_complete_segment(data)
+        partial = self._partial_by_id(data.get("id")) if data and data.get("kind") == "partial" else None
+        pending = bool(data and data.get("kind") == "pending" and self._pending_start is not None)
+        self.remove_start_btn.setEnabled(idle and bool(segment or (partial and partial.get("start") is not None) or pending))
+        self.remove_end_btn.setEnabled(idle and bool(segment or (partial and partial.get("end") is not None)))
+        self.remove_seg_btn.setEnabled(idle and bool(segment or partial or pending))
+        self.clear_seg_btn.setEnabled(idle and bool(
+            self.segments or self.partial_segments or self._pending_start is not None))
 
     # ==================== 转换页签 ====================
 

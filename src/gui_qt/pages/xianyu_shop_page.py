@@ -55,8 +55,8 @@ class XianyuShopPage(BasePage):
         self.table.cellDoubleClicked.connect(lambda *_: self._open_item())
         self._sorter = table_sort.install_callback(self.table, self._sort_changed,
                                                    skip_columns=(0,), tri_state=True)
-        configure_table_columns(self.table, fixed={0: 36}, minimums={1: 140},
-                                stretch=(1,), auto_fit=True)
+        self._columns = configure_table_columns(self.table, fixed={0: 36}, minimums={1: 140},
+                                                stretch=(1,), auto_fit=True)
         body.addWidget(self.table, 1)
         self.table.hide()
 
@@ -244,3 +244,8 @@ class XianyuShopPage(BasePage):
 
     def has_active_tasks(self):
         return self._busy
+
+    def on_theme_changed(self):
+        # 主题切换会改变表格边框占用，沿用统一列宽控制器重新适配视口。
+        self._columns.resume()
+        self._columns.timer.start(0)

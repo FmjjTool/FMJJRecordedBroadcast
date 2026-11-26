@@ -104,6 +104,11 @@ def _taobao(cookie: str) -> dict:
         return fallback
 
 
+def _xianyu(cookie: str) -> dict:
+    from platforms.xianyu import verify_login
+    return verify_login(cookie)
+
+
 def _xhs_state(html: str) -> dict:
     """取页面内嵌的 window.__INITIAL_STATE__（复用笔记解析的花括号配平逻辑）。"""
     try:
@@ -734,6 +739,7 @@ _VERIFIERS = {
     "kuaishou": _kuaishou,
     "kuwo": _kuwo, "kugou": _kugou, "xiaohongshu": _xiaohongshu,
     "taobao": _taobao, "5sing": _fivesing, "tcdoc": _tcdoc,
+    "xianyu": _xianyu,
     "quark": _quark, "baidu": _baidu, "yun139": _yun139,
     "115": _115, "qqgroup": _qqgroup,
 }

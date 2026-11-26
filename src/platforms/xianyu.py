@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import time
 from http.cookies import SimpleCookie
@@ -331,3 +332,79 @@ def fetch_item(text, *, credential=None, on_log=None, is_cancelled=None):
     value = item_id(text)
     return _fetch(item_url(value), "mtop.taobao.idle.pc.detail",
                   lambda data: parse_detail(data, value), credential, on_log, is_cancelled)
+
+
+def parse_login(payload):
+    """官网导航使用 data.module.base.displayName 判定登录，不把本地ID当成功。"""
+    if isinstance(payload, dict):
+        ret = payload.get("ret") or []
+        codes = " ".join(str(value).split("::", 1)[0] for value in
+                         ([ret] if isinstance(ret, str) else ret)).upper()
+        if any(code in codes for code in ("SESSION_EXPIRED", "NEED_LOGIN", "NOT_LOGIN")):
+            return {"ok": False, "username": "", "detail": "闲鱼登录已失效"}
+    data = _data(payload)
+    module = data.get("module")
+    base = module.get("base") if isinstance(module, dict) else None
+    if not isinstance(base, dict):
+        raise ParseChanged("闲鱼登录验证结构已变化，请稍后重试")
+    name = _text(base.get("displayName"), 100)
+    return {"ok": bool(name), "username": name,
+            "detail": "" if name else "闲鱼尚未返回已登录账号"}
+
+
+def _verify_http(cookie):
+    """只读官方导航接口；响应票据仅在请求内存中，绝不写管理层。"""
+    jar = SimpleCookie()
+    jar.load(cookie)
+    morsel = jar.get("_m_h5_tk")
+    token = morsel.value.split("_", 1)[0] if morsel else ""
+    if not token:
+        raise AuthRequired("闲鱼需要临时页面验证")
+    timestamp = str(int(time.time() * 1000))
+    data = "{}"
+    app_key = "34839810"
+    sign = hashlib.md5(f"{token}&{timestamp}&{app_key}&{data}".encode()).hexdigest()
+    api = "mtop.idle.web.user.page.nav"
+    with httpx.Client(timeout=httpx.Timeout(15, connect=8), follow_redirects=False) as client:
+        with client.stream("GET", f"https://h5api.m.goofish.com/h5/{api}/1.0/",
+                           params={"jsv": "2.7.3", "appKey": app_key, "t": timestamp,
+                                   "sign": sign, "api": api, "v": "1.0", "type": "originaljson",
+                                   "dataType": "json", "accountSite": "xianyu", "data": data},
+                           headers={"User-Agent": UA, "Cookie": cookie,
+                                    "Referer": "https://www.goofish.com/", "Accept": "application/json"}) as response:
+            if response.status_code == 429:
+                raise RateLimited("闲鱼请求过于频繁，请稍后验证")
+            if response.status_code == 403:
+                raise Blocked("闲鱼暂时拒绝验证，请稍后重试")
+            if response.status_code != 200:
+                raise NetworkError("闲鱼验证连接失败，请稍后重试")
+            if "json" not in response.headers.get("content-type", "").lower():
+                raise ParseChanged("闲鱼未返回登录验证数据，请稍后重试")
+            raw = bytearray()
+            for block in response.iter_bytes():
+                raw.extend(block)
+                if len(raw) > MAX_BODY:
+                    raise ParseChanged("闲鱼验证返回内容过大，已停止读取")
+            try:
+                return parse_login(json.loads(raw))
+            except json.JSONDecodeError as exc:
+                raise ParseChanged("闲鱼验证返回格式已变化，请稍后重试") from exc
+
+
+def verify_login(cookie):
+    """统一账户管理验证契约；明确失效=False，网络/风控/结构变化=None。"""
+    if not cookie:
+        return {"ok": False, "username": "", "detail": "尚未登录闲鱼"}
+    try:
+        try:
+            return _verify_http(cookie)
+        except AuthRequired:
+            # H5临时票据不等于账号失效，由官网在独立内存会话完成一次只读验证。
+            return _browser_payload("https://www.goofish.com/", "mtop.idle.web.user.page.nav",
+                                    parse_login, cookie, None)
+    except AuthRequired:
+        return {"ok": False, "username": "", "detail": "闲鱼登录已失效"}
+    except XianyuError as exc:
+        return {"ok": None, "username": "", "detail": str(exc)}
+    except (httpx.HTTPError, ValueError):
+        return {"ok": None, "username": "", "detail": "闲鱼验证网络不可用，请稍后重试"}

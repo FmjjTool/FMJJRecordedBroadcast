@@ -8,9 +8,10 @@
 时间用 24 小时制数字滚轮选择（时 / 分各一列，首尾无限循环）。
 """
 
+from copy import deepcopy
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -272,12 +273,12 @@ class _ScheduleDialog(QDialog):
             box = QMessageBox(self)
             box.setWindowTitle("放弃修改")
             box.setText("放弃尚未保存的计划与采集对象修改？")
-            discard = box.addButton("放弃修改", QMessageBox.DestructiveRole)
+            box.addButton("放弃修改", QMessageBox.DestructiveRole)
             keep = box.addButton("继续编辑", QMessageBox.RejectRole)
             box.setDefaultButton(keep)
             box.setEscapeButton(keep)
             box.exec()
-            if box.clickedButton() is not discard:
+            if box.buttonRole(box.clickedButton()) != QMessageBox.DestructiveRole:
                 return
         super().reject()
 
@@ -409,13 +410,24 @@ class TasksPage(BasePage):
 
         run_bg(work, done)
 
-    def _edit_schedule(self, task, schedule):
+    def _edit_schedule(self, task, schedule, error_text=""):
         dialog = _ScheduleDialog(self, task, schedule)
+        if error_text and dialog.collection_values() is not None:
+            dialog.collection_error.setText(error_text)
+            dialog.collection_error.show()
+            QTimer.singleShot(0, lambda: dialog.scroll.ensureWidgetVisible(
+                dialog.collection_error))
         if dialog.exec() != QDialog.Accepted:
             return
         mode, time_text, interval, extra_times = dialog.values()
         collection = dialog.collection_values()
         task_id = task["id"]
+        draft = None
+        if collection is not None:
+            draft = deepcopy(schedule)
+            draft.update(mode=mode, time=time_text, interval=interval,
+                         extra_times=extra_times)
+            draft["collection"]["values"] = collection
 
         def work():
             from toolbox import task_center
@@ -425,6 +437,12 @@ class TasksPage(BasePage):
             return task_center.install(task_id, mode, time_text, interval, extra_times)
 
         def done(result, err):
+            if draft is not None and (err or not result or not result[0]):
+                self._edit_schedule(
+                    task, draft,
+                    "保存计划失败，请确认采集对象有效且有系统计划任务权限后重试。"
+                    "本次填写内容已保留。")
+                return
             if err:
                 self.app.toast(f"安装定时任务失败：{err}", "error")
                 return

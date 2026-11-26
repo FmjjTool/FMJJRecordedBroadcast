@@ -213,7 +213,8 @@ class BackgroundTasks:
 
 
 TASKS = BackgroundTasks()
-PERFORMANCE_RECORDER = None  # 仅用户开启诊断期间连接；默认不采样、不启用追踪。
+from toolbox.startup_diagnostics import current_recorder as _startup_recorder
+PERFORMANCE_RECORDER = _startup_recorder()  # 已开启时延续入口记录；默认仍不采样/追踪。
 
 
 def _performance_call(recorder, method, *args):

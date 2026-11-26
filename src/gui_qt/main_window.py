@@ -399,21 +399,25 @@ class MainWindow(QMainWindow):
             return
         # 在首个页面构造前恢复性能采样，无需先打开诊断页。
         from gui_qt.performance_monitor import start_automatic_monitoring
+        from toolbox.startup_diagnostics import phase
         try:
             start_automatic_monitoring(self)
         except Exception:
             self.toast("自动开始性能检测失败，请在性能页重试", "error")
         if first_key in PAGE_CLASSES:
-            self.show_page(first_key)
+            with phase("首页加载"):
+                self.show_page(first_key)
         # 骨架退场
         if self.skeleton is not None:
             self.stack.removeWidget(self.skeleton)
             self.skeleton.deleteLater()
             self.skeleton = None
         # 延迟刷新 Cookie 状态（内部 import auth 等重依赖，避免阻塞启动）
-        self._refresh_cookie_status()
+        with phase("恢复侧栏状态"):
+            self._refresh_cookie_status()
         # 恢复上次「已获取」的数据（config/collected.json，重启不丢）
-        common.load_collected()
+        with phase("恢复本地采集结果"):
+            common.load_collected()
         # 保存了深色主题时，把构造期内联样式统一适配（含 styleSheet= 关键字参数）
         if theme.is_dark():
             theme.adapt(self)
@@ -1123,7 +1127,7 @@ class MainWindow(QMainWindow):
         self._closed = True
         self.page_preloader.stop()
         if self.performance_monitor is not None:
-            self.performance_monitor.stop()
+            self.performance_monitor.stop(reason="normal_exit")
         self.page_lifecycle.shutdown()
         # 直播录制二级窗口（独立窗口，随主程序一起收尾）
         if lrw is not None:

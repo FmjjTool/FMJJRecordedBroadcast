@@ -12,6 +12,7 @@ CPU/Vulkan 程序、GGUF 模型分别保存；均不属于 FULL 内置资源。�
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import math
@@ -90,6 +91,16 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 class RuntimeErrorBase(RuntimeError):
     """可直接显示的本地推理组件错误，不包含用户绝对路径或凭据。"""
+
+
+def _public_io_errors(function):
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except OSError as exc:
+            raise RuntimeErrorBase("本地组件文件操作失败，请检查目录权限、文件占用与可用空间") from exc
+    return wrapped
 
 
 def _check_cancel(cancel) -> None:
@@ -294,6 +305,7 @@ def _entry_ready(root, kind, identifier, *, verify=False, cancel=None):
         return None
 
 
+@_public_io_errors
 def status(*, root=None):
     """只读本地安装快照；不扫描用户模型目录，不初始化目录，不输出绝对路径。"""
     base = _root(root)
@@ -499,7 +511,20 @@ def _file_record(path, relative, cancel=None):
             "sha256": _sha_file(path, cancel)}
 
 
-def _publish(root, staged, kind, identifier):
+def _rename_path(source, target, cancel=None):
+    # Windows 实时扫描可能短暂占用新写入的 GGUF/DLL；只重试明确失败的原子 rename。
+    for attempt in range(6):
+        _check_cancel(cancel)
+        try:
+            source.rename(target)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            threading.Event().wait(min(0.05 * 2 ** attempt, 0.8))
+
+
+def _publish(root, staged, kind, identifier, cancel=None):
     target = _within(root, "runtimes" if kind == "runtime" else "models", identifier)
     target.parent.mkdir(parents=True, exist_ok=True)
     backup = target.with_name(".previous-" + uuid.uuid4().hex)
@@ -507,13 +532,13 @@ def _publish(root, staged, kind, identifier):
     if target.exists():
         if not _read_manifest(target, kind, identifier):
             raise RuntimeErrorBase("目标目录已有未知内容，未覆盖；请人工核对")
-        target.rename(backup)
+        _rename_path(target, backup, cancel)
         previous = True
     try:
-        staged.rename(target)
+        _rename_path(staged, target, cancel)
     except BaseException:
         if previous:
-            backup.rename(target)
+            _rename_path(backup, target)
         raise
     if previous:
         _remove_tree(backup, root)
@@ -577,6 +602,7 @@ def _extract_runtime(archive_path, staged, cancel):
     return records, servers[0]
 
 
+@_public_io_errors
 def install_runtime(backend, *, progress=None, cancel=None, root=None):
     backend = str(backend or "")
     if backend not in _RUNTIMES:
@@ -601,7 +627,7 @@ def install_runtime(backend, *, progress=None, cancel=None, root=None):
             _write_manifest(staged, "runtime", backend, records, version=_TAG,
                             archive_sha256=item["sha256"], server=server)
             _check_cancel(cancel)
-            _publish(base, staged, "runtime", backend)
+            _publish(base, staged, "runtime", backend, cancel)
             _report(progress, 100, "运行模块已安装")
         except (OSError, zipfile.BadZipFile) as exc:
             raise RuntimeErrorBase("运行模块无法安装，请检查文件、可用空间与目录权限") from exc
@@ -622,6 +648,7 @@ def _model_result(identifier, value):
             "size": sum(i["size"] for i in value["files"])}
 
 
+@_public_io_errors
 def download_model(model_id, *, progress=None, cancel=None, root=None):
     identifier = _safe_name(model_id, gguf=True)
     item = next((m for m in _MODELS if m["id"] == identifier), None)
@@ -630,9 +657,18 @@ def download_model(model_id, *, progress=None, cancel=None, root=None):
     base = _root(root)
     with _Guard(base):
         _check_cancel(cancel)
+        existing_dir = _within(base, "models", identifier)
+        existing = _read_manifest(existing_dir, "model", identifier)
         ready = _entry_ready(base, "model", identifier, verify=True, cancel=cancel)
-        if ready:
+        expected_files = {(f["filename"], f["size"], f["sha256"]) for f in item["files"]}
+        same_asset = bool(existing) and {
+            (f["filename"], f["size"], f["sha256"]) for f in existing["files"]} == expected_files
+        if ready and same_asset:
             return _model_result(identifier, ready)
+        if existing_dir.exists() and not (same_asset and existing.get("source") == "official"
+                                           and existing.get("repo") == item["repo"]
+                                           and existing.get("revision") == item["revision"]):
+            raise RuntimeErrorBase("已存在不同来源或内容的同名模型，未覆盖；请保留原副本并改名导入，或先删除受控副本")
         temporary = Path(tempfile.mkdtemp(prefix=".model-", dir=base))
         try:
             staged = temporary / "model"
@@ -655,7 +691,7 @@ def download_model(model_id, *, progress=None, cancel=None, root=None):
             _write_manifest(staged, "model", identifier, records, label=item["label"],
                             source="official", repo=item["repo"], revision=item["revision"])
             _check_cancel(cancel)
-            _publish(base, staged, "model", identifier)
+            _publish(base, staged, "model", identifier, cancel)
             _report(progress, 100, "模型已下载并校验")
             return _model_result(identifier, {"label": item["label"], "files": records})
         except OSError as exc:
@@ -687,6 +723,7 @@ def _import_sources(path):
     return identifier, sources, total
 
 
+@_public_io_errors
 def import_model(path, *, progress=None, cancel=None, root=None):
     _check_cancel(cancel)
     identifier, sources, total = _import_sources(path)
@@ -724,7 +761,7 @@ def import_model(path, *, progress=None, cancel=None, root=None):
                                 "sha256": digest.hexdigest(), "mtime_ns": target.stat().st_mtime_ns})
             _write_manifest(staged, "model", identifier, records, label=identifier, source="import")
             _check_cancel(cancel)
-            _publish(base, staged, "model", identifier)
+            _publish(base, staged, "model", identifier, cancel)
             _report(progress, 100, "模型副本已导入，原文件保持不变")
             return _model_result(identifier, {"files": records})
         except OSError as exc:
@@ -747,12 +784,14 @@ def _remove(kind, identifier, root):
         return True
 
 
+@_public_io_errors
 def remove_runtime(backend, *, root=None):
     if backend not in _RUNTIMES:
         raise RuntimeErrorBase("未知的运行模块")
     return _remove("runtime", backend, root)
 
 
+@_public_io_errors
 def remove_model(model_id, *, root=None):
     return _remove("model", _safe_name(model_id, gguf=True), root)
 
@@ -849,7 +888,10 @@ class LocalSession:
         self.options = _options(options)
         self.cancel = cancel
         self.progress = progress
-        self.root = _root(root)
+        try:
+            self.root = _root(root)
+        except OSError as exc:
+            raise RuntimeErrorBase("无法访问本地组件目录，请检查目录权限") from exc
         self.process = self.client = self.guard = None
         self._closed = True
         self._used = False

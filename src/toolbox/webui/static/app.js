@@ -3131,8 +3131,14 @@ function renderLivestreamSummary(root) {
       });
 
       testBtn.addEventListener('click', function () {
+        if (running) return;
+        running = true;
+        startBtn.disabled = true;
+        modeSel.disabled = true;
+        saveBtn.disabled = true;
         testBtn.disabled = true;
         testBtn.textContent = '测试中…';
+        localForm.setDisabled(true);
         persistSettings().then(function () {
           return post('/api/tools/livestream-summary/test', {});
         }).then(function (result) {
@@ -3142,6 +3148,10 @@ function renderLivestreamSummary(root) {
             settingsHost.textContent = outcome.message || outcome.summary;
           }, { cancelable: true, indeterminate: true,
             onSettled: function (job) {
+              running = false;
+              startBtn.disabled = false;
+              modeSel.disabled = false;
+              saveBtn.disabled = false;
               testBtn.textContent = '测试连接';
               syncMode();
               if (job.status === 'error') settingsHost.textContent = '连接失败：' + job.error;
@@ -3149,6 +3159,10 @@ function renderLivestreamSummary(root) {
             }
           });
         }).catch(function (error) {
+          running = false;
+          startBtn.disabled = false;
+          modeSel.disabled = false;
+          saveBtn.disabled = false;
           settingsHost.textContent = '连接失败：' + error.message;
           toast('连接失败：' + error.message, 'error');
           testBtn.textContent = '测试连接';
@@ -5386,7 +5400,8 @@ function renderLivestreamSummary(root) {
       var running = false;
       var actionRefreshers = [];
       var cutDrafts = {};
-      var emptyCutDraft = { text: '', pendingStart: null, selected: -1 };
+      var emptyCutDraft = { text: '', pendingStart: null, selected: -1,
+        drafts: [], selectedDraft: -1 };
       var cutEditorRefresh = null;
       var previewDurationMs = 0;
       var rangeLayer = h('div', { class: 'video-time-ranges', 'aria-hidden': 'true' });
@@ -5399,14 +5414,20 @@ function renderLivestreamSummary(root) {
       var markStartBtn = h('button', { class: 'btn', type: 'button' }, '标记开始');
       var markEndBtn = h('button', { class: 'btn', type: 'button' }, '标记结束');
       var removeSegmentBtn = h('button', { class: 'btn', type: 'button' }, '删除选中片段');
-      var clearSegmentsBtn = h('button', { class: 'btn ghost', type: 'button' }, '清空片段');
+      var deleteStartBtn = h('button', { class: 'btn', type: 'button' }, '删除起点');
+      var deleteEndBtn = h('button', { class: 'btn', type: 'button' }, '删除终点');
+      var clearSegmentsBtn = h('button', { class: 'btn ghost', type: 'button' }, '清除标记');
       var markHint = h('span', { class: 'muted small video-mark-hint' });
+      var pointMenu = h('div', { class: 'video-point-menu', role: 'menu', hidden: true });
       previewHost.insertBefore(h('div', { class: 'video-timebar' },
         currentTimeLabel, h('div', { class: 'video-time-track' }, rangeLayer, seek),
         durationLabel), previewNote);
       previewHost.insertBefore(h('div', { class: 'toolbar video-mark-actions' },
-        markStartBtn, markEndBtn, removeSegmentBtn, clearSegmentsBtn), previewNote);
+        markStartBtn, markEndBtn), previewNote);
+      previewHost.insertBefore(h('div', { class: 'toolbar video-point-actions' },
+        deleteStartBtn, deleteEndBtn, removeSegmentBtn, clearSegmentsBtn), previewNote);
       previewHost.insertBefore(markHint, previewNote);
+      previewHost.appendChild(pointMenu);
 
       function videoClock(ms) {
         var total = Math.max(0, Math.round(Number(ms) || 0));
@@ -5422,7 +5443,8 @@ function renderLivestreamSummary(root) {
         var paths = selectedPaths();
         if (paths.length !== 1) return emptyCutDraft;
         if (!cutDrafts[paths[0]]) {
-          cutDrafts[paths[0]] = { text: '', pendingStart: null, selected: -1 };
+          cutDrafts[paths[0]] = { text: '', pendingStart: null, selected: -1,
+            drafts: [], selectedDraft: -1 };
         }
         return cutDrafts[paths[0]];
       }
@@ -5444,9 +5466,15 @@ function renderLivestreamSummary(root) {
         seek.disabled = !hasDuration;
         markStartBtn.disabled = running || !hasDuration;
         markEndBtn.disabled = running || !hasDuration;
-        removeSegmentBtn.disabled = running || !one || !rows[draft.selected];
+        var partial = draft.drafts[draft.selectedDraft];
+        var complete = rows[draft.selected];
+        removeSegmentBtn.disabled = running || !one || (!partial && !complete);
+        deleteStartBtn.disabled = running || !one
+          || (partial ? partial.start === null : !complete);
+        deleteEndBtn.disabled = running || !one
+          || (partial ? partial.end === null : !complete);
         clearSegmentsBtn.disabled = running || !one
-          || (!draft.text && draft.pendingStart === null);
+          || (!draft.text && draft.pendingStart === null && !draft.drafts.length);
         markHint.textContent = draft.pendingStart === null
           ? '按当前播放指针标记；未标记开始时，从 00:00:00.000 开始。'
           : '开始 ' + videoClock(draft.pendingStart) + ' · 移动指针后标记结束';
@@ -5460,6 +5488,14 @@ function renderLivestreamSummary(root) {
             style: 'left:' + start + '%;width:' + Math.max(0, end - start) + '%'
           }));
         });
+        draft.drafts.forEach(function (item, index) {
+          var point = item.start !== null ? item.start : item.end;
+          if (point === null) return;
+          rangeLayer.appendChild(h('span', {
+            class: 'video-draft-point' + (index === draft.selectedDraft ? ' is-selected' : ''),
+            style: 'left:' + Math.min(100, Math.max(0, point / previewDurationMs * 100)) + '%'
+          }));
+        });
         if (draft.pendingStart !== null) {
           rangeLayer.appendChild(h('span', {
             class: 'video-time-pending',
@@ -5470,9 +5506,170 @@ function renderLivestreamSummary(root) {
       }
 
       function refreshCutDraft() {
+        pointMenu.hidden = true;
         refreshMarkers();
         if (cutEditorRefresh) cutEditorRefresh();
       }
+
+      function writeCutRows(draft, rows, selectedRow) {
+        rows.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+        draft.text = rows.map(function (row) {
+          return videoClock(row[0]) + '-' + videoClock(row[1]);
+        }).join('\n');
+        draft.selected = selectedRow
+          ? rows.findIndex(function (row) { return row[0] === selectedRow[0] && row[1] === selectedRow[1]; })
+          : -1;
+      }
+
+      function promoteCutDraft(draft, index) {
+        var item = draft.drafts[index];
+        if (!item || item.start === null || item.end === null) return;
+        if (item.end <= item.start) {
+          toast('结束时间必须大于开始时间，请调整端点后重试', 'warning');
+          return;
+        }
+        var row = [item.start, item.end];
+        var rows = currentCutRows();
+        rows.push(row);
+        draft.drafts.splice(index, 1);
+        draft.selectedDraft = -1;
+        writeCutRows(draft, rows, row);
+      }
+
+      function markEndpoint(endpoint) {
+        var draft = currentCutDraft();
+        var position = Number(seek.value) || 0;
+        if (draft.selectedDraft >= 0) {
+          var item = draft.drafts[draft.selectedDraft];
+          if (!item) { draft.selectedDraft = -1; return; }
+          var previous = item[endpoint];
+          item[endpoint] = position;
+          if (item.start !== null && item.end !== null && item.end <= item.start) {
+            item[endpoint] = previous;
+            toast('结束时间必须大于开始时间，请调整端点后重试', 'warning');
+            return;
+          }
+          promoteCutDraft(draft, draft.selectedDraft);
+        } else if (draft.selected >= 0) {
+          var rows = currentCutRows();
+          var selected = rows[draft.selected];
+          if (!selected) { draft.selected = -1; return; }
+          var original = selected.slice();
+          selected[endpoint === 'start' ? 0 : 1] = position;
+          if (selected[1] <= selected[0]) {
+            rows[draft.selected] = original;
+            toast('结束时间必须大于开始时间，请调整端点后重试', 'warning');
+            return;
+          }
+          writeCutRows(draft, rows, selected);
+        } else if (endpoint === 'start') {
+          draft.pendingStart = position;
+        } else {
+          var start = draft.pendingStart === null ? 0 : draft.pendingStart;
+          if (position <= start) {
+            toast('结束时间必须大于开始时间，请移动播放指针后重试', 'warning');
+            return;
+          }
+          var nextRows = currentCutRows();
+          var newRow = [start, position];
+          nextRows.push(newRow);
+          draft.pendingStart = null;
+          writeCutRows(draft, nextRows, newRow);
+        }
+        refreshCutDraft();
+      }
+
+      function deleteEndpoint(endpoint) {
+        var draft = currentCutDraft();
+        if (draft.selectedDraft >= 0) {
+          var partial = draft.drafts[draft.selectedDraft];
+          if (!partial || partial[endpoint] === null) return;
+          partial[endpoint] = null;
+          if (partial.start === null && partial.end === null) {
+            draft.drafts.splice(draft.selectedDraft, 1);
+            draft.selectedDraft = -1;
+          }
+        } else {
+          var rows = currentCutRows();
+          if (!rows[draft.selected]) return;
+          var row = rows.splice(draft.selected, 1)[0];
+          var fragment = { start: row[0], end: row[1] };
+          fragment[endpoint] = null;
+          draft.drafts.push(fragment);
+          draft.selectedDraft = draft.drafts.length - 1;
+          draft.selected = -1;
+          writeCutRows(draft, rows, null);
+        }
+        refreshCutDraft();
+      }
+
+      function clearCutMarks() {
+        var draft = currentCutDraft();
+        draft.text = '';
+        draft.pendingStart = null;
+        draft.selected = -1;
+        draft.drafts = [];
+        draft.selectedDraft = -1;
+        refreshCutDraft();
+      }
+
+      function deleteAt(endpoint, index, draftIndex) {
+        var draft = currentCutDraft();
+        if (draftIndex >= 0) {
+          draft.selectedDraft = draftIndex;
+          draft.selected = -1;
+        } else {
+          draft.selected = index;
+          draft.selectedDraft = -1;
+        }
+        deleteEndpoint(endpoint);
+      }
+
+      function openPointMenu(event) {
+        event.preventDefault();
+        var draft = currentCutDraft();
+        var rect = rangeLayer.getBoundingClientRect();
+        var ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        var at = ratio * previewDurationMs;
+        var tolerance = Math.max(350, Math.min(1500, previewDurationMs * 0.005));
+        var entries = [];
+        currentCutRows().forEach(function (row, index) {
+          ['start', 'end'].forEach(function (endpoint, endIndex) {
+            var value = row[endIndex];
+            if (Math.abs(value - at) <= tolerance) entries.push({
+              label: '片段 ' + (index + 1) + ' · 删除' + (endpoint === 'start' ? '起点' : '终点') + ' · ' + videoClock(value),
+              endpoint: endpoint, index: index, draftIndex: -1, value: value
+            });
+          });
+        });
+        draft.drafts.forEach(function (item, index) {
+          ['start', 'end'].forEach(function (endpoint) {
+            var value = item[endpoint];
+            if (value !== null && Math.abs(value - at) <= tolerance) entries.push({
+              label: '待补 ' + (index + 1) + ' · 删除' + (endpoint === 'start' ? '起点' : '终点') + ' · ' + videoClock(value),
+              endpoint: endpoint, index: -1, draftIndex: index, value: value
+            });
+          });
+        });
+        if (!entries.length) { pointMenu.hidden = true; return; }
+        pointMenu.replaceChildren();
+        entries.forEach(function (entry) {
+          pointMenu.appendChild(h('button', {
+            class: 'btn mini', type: 'button', role: 'menuitem',
+            onclick: function () { deleteAt(entry.endpoint, entry.index, entry.draftIndex); }
+          }, entry.label));
+        });
+        var hostRect = previewHost.getBoundingClientRect();
+        pointMenu.style.left = Math.max(8, event.clientX - hostRect.left) + 'px';
+        pointMenu.style.top = Math.max(8, event.clientY - hostRect.top) + 'px';
+        pointMenu.hidden = false;
+        pointMenu.firstChild.focus();
+      }
+
+      rangeLayer.addEventListener('contextmenu', openPointMenu);
+      previewHost.addEventListener('click', function (event) {
+        if (!pointMenu.contains(event.target) && event.target !== rangeLayer) pointMenu.hidden = true;
+      });
 
       seek.addEventListener('input', function () {
         previewVideo.currentTime = Number(seek.value) / 1000;
@@ -5492,46 +5689,29 @@ function renderLivestreamSummary(root) {
       previewVideo.addEventListener('loadedmetadata', updatePreviewDuration);
       previewVideo.addEventListener('durationchange', updatePreviewDuration);
       markStartBtn.addEventListener('click', function () {
-        currentCutDraft().pendingStart = Number(seek.value) || 0;
-        refreshCutDraft();
+        markEndpoint('start');
       });
       markEndBtn.addEventListener('click', function () {
-        var draft = currentCutDraft();
-        var start = draft.pendingStart === null ? 0 : draft.pendingStart;
-        var end = Number(seek.value) || 0;
-        if (end <= start) {
-          toast('结束时间必须大于开始时间，请移动播放指针后重试', 'warning');
-          return;
-        }
-        var rows;
-        try { rows = draft.text.trim() ? parseSegments(draft.text) : []; }
-        catch (error) { toast(error.message, 'warning'); return; }
-        rows.push([start, end]);
-        rows.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
-        draft.selected = rows.findIndex(function (row) { return row[0] === start && row[1] === end; });
-        draft.text = rows.map(function (row) {
-          return videoClock(row[0]) + '-' + videoClock(row[1]);
-        }).join('\n');
-        draft.pendingStart = null;
-        refreshCutDraft();
+        markEndpoint('end');
       });
       removeSegmentBtn.addEventListener('click', function () {
         var draft = currentCutDraft();
+        if (draft.selectedDraft >= 0) {
+          draft.drafts.splice(draft.selectedDraft, 1);
+          draft.selectedDraft = -1;
+          refreshCutDraft();
+          return;
+        }
         var rows = currentCutRows();
         if (!rows[draft.selected]) return;
         rows.splice(draft.selected, 1);
-        draft.selected = Math.min(draft.selected, rows.length - 1);
-        draft.text = rows.map(function (row) {
-          return videoClock(row[0]) + '-' + videoClock(row[1]);
-        }).join('\n');
+        writeCutRows(draft, rows, null);
         refreshCutDraft();
       });
+      deleteStartBtn.addEventListener('click', function () { deleteEndpoint('start'); });
+      deleteEndBtn.addEventListener('click', function () { deleteEndpoint('end'); });
       clearSegmentsBtn.addEventListener('click', function () {
-        var draft = currentCutDraft();
-        draft.text = '';
-        draft.selected = -1;
-        draft.pendingStart = null;
-        refreshCutDraft();
+        clearCutMarks();
       });
       previewHost.addEventListener('keydown', function (event) {
         if (event.ctrlKey || event.altKey || event.metaKey || event.repeat
@@ -5972,9 +6152,10 @@ function renderLivestreamSummary(root) {
             }, String(index + 1) + '. ' + videoClock(row[0]) + '–' + videoClock(row[1]));
             select.addEventListener('click', function () {
               draft.selected = index;
-              segmentList.querySelectorAll('.video-segment').forEach(function (button, rowIndex) {
-                button.classList.toggle('active', rowIndex === index);
-                button.setAttribute('aria-pressed', rowIndex === index ? 'true' : 'false');
+              draft.selectedDraft = -1;
+              segmentList.querySelectorAll('.video-segment, .video-segment-draft').forEach(function (button) {
+                button.classList.toggle('active', button === select);
+                button.setAttribute('aria-pressed', button === select ? 'true' : 'false');
               });
               refreshMarkers();
             });
@@ -5985,12 +6166,42 @@ function renderLivestreamSummary(root) {
             });
             segmentList.appendChild(select);
           });
+          draft.drafts.forEach(function (item, index) {
+            var missing = item.start === null ? '起点' : '终点';
+            var fixed = item.start === null ? item.end : item.start;
+            var select = h('button', {
+              class: 'btn mini video-segment-draft'
+                + (index === draft.selectedDraft ? ' active' : ''),
+              type: 'button', disabled: running,
+              'aria-pressed': index === draft.selectedDraft ? 'true' : 'false',
+              title: '选择后移动指针并标记缺少的端点'
+            }, '待补 ' + (index + 1) + ' · 缺少' + missing
+              + (fixed === null ? '' : ' · ' + videoClock(fixed)));
+            select.addEventListener('click', function () {
+              draft.selected = -1;
+              draft.selectedDraft = index;
+              segmentList.querySelectorAll('.video-segment, .video-segment-draft')
+                .forEach(function (button) {
+                  button.classList.toggle('active', button === select);
+                  button.setAttribute('aria-pressed', button.classList.contains('active') ? 'true' : 'false');
+                });
+              refreshMarkers();
+            });
+            select.addEventListener('dblclick', function () {
+              if (fixed === null) return;
+              seek.value = fixed;
+              previewVideo.currentTime = fixed / 1000;
+              refreshMarkers();
+            });
+            segmentList.appendChild(select);
+          });
         }
         cutEditorRefresh = refreshCutEditor;
         segments.addEventListener('input', function () {
           var draft = currentCutDraft();
           draft.text = segments.value;
           draft.selected = -1;
+          draft.selectedDraft = -1;
           refreshCutDraft();
         });
 
@@ -6113,6 +6324,7 @@ function renderLivestreamSummary(root) {
           draft.text = rows.join('\n');
           draft.pendingStart = null;
           draft.selected = rows.length ? 0 : -1;
+          draft.selectedDraft = -1;
           refreshCutDraft();
           toast('已按切点填入 ' + rows.length + ' 个片段', 'success');
         });
@@ -6178,6 +6390,7 @@ function renderLivestreamSummary(root) {
             draft.text = data.text || '';
             draft.pendingStart = null;
             draft.selected = data.count ? 0 : -1;
+            draft.selectedDraft = -1;
             refreshCutDraft();
             toast('已导入 ' + data.count + ' 个片段', 'success');
           }).catch(function (error) {
@@ -8641,7 +8854,7 @@ function renderLivestreamSummary(root) {
           qqInput, queryBtn),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           exportBtn, avatarsBtn,
-          h('span', { style: 'flex:1' }), refreshBtn),
+          h('span', { style: 'flex:1' }), refreshListBtn),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '分享链接免登录；按群号查询需桌面端已登录 QQ 群。导出为桌面同格式 Excel，'
           + '头像按群目录保存、已有文件复用。'),
@@ -8839,7 +9052,7 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '达人'), select,
           h('span', { class: 'muted small', style: 'margin-left:8px' },
-            '搜索与抓取仍在桌面端'),
+            '上方搜索达人后可抓取并回写已有资产'),
           h('span', { style: 'flex:1' }), refreshBtn)));
       root.appendChild(summary);
       root.appendChild(tabs);
@@ -10703,8 +10916,10 @@ function renderMusicTag(root) {
             var grid = h('div', { class: 'form-grid' });
             [['title', '标题'], ['artist', '艺术家'], ['album', '专辑'],
               ['albumartist', '专辑艺术家'], ['year', '年份'],
-              ['track', '音轨'], ['disc', '碟号'], ['genre', '流派'],
-              ['composer', '作曲'], ['comment', '备注']].forEach(function (pair) {
+              ['track', '音轨'], ['track_count', '总音轨'],
+              ['disc', '碟号'], ['disc_count', '总碟数'], ['genre', '流派'],
+              ['composer', '作曲'], ['lyricist', '作词'],
+              ['comment', '备注']].forEach(function (pair) {
               var key = pair[0];
               var input = h('input', {
                 class: 'input', type: 'text', value: fields[key] || ''
@@ -10719,11 +10934,89 @@ function renderMusicTag(root) {
             });
             lyrics.value = fields.lyrics || '';
             var lyricHost = h('div');
+            var historyHost = h('div');
             var saveBtn = h('button', { class: 'btn primary', type: 'button' },
               '写入标签');
             var lyricBtn = h('button', { class: 'btn', type: 'button' },
               '抓取歌词');
+            var historyBtn = h('button', { class: 'btn', type: 'button' },
+              '标签历史');
             var busy = false;
+            var persistedFields = Object.assign({}, fields);
+
+            function currentFormChanged() {
+              return Object.keys(inputs).some(function (key) {
+                return inputs[key].value !== String(persistedFields[key] || '');
+              }) || lyrics.value !== String(persistedFields.lyrics || '');
+            }
+
+            function showHistory(data) {
+              var rows = data.rows || [];
+              historyHost.replaceChildren();
+              if (!rows.length) {
+                historyHost.appendChild(empty('该文件还没有标签历史。写入标签后会自动记录快照。'));
+                return;
+              }
+              var card = h('div', { class: 'card', style: 'margin-top:8px' });
+              card.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+                '标签历史 · ' + rows.length + ' 条（最多保留 5 条）'));
+              var preview = h('div', { class: 'card', style: 'margin-top:8px' });
+              preview.appendChild(h('div', { class: 'muted small' }, '选择「预览」查看快照内容。'));
+              var list = h('div', { style: 'display:grid;gap:8px' });
+              var labels = {
+                title: '标题', artist: '艺术家', album: '专辑',
+                albumartist: '专辑艺术家', year: '年份', track: '音轨',
+                track_count: '总音轨', disc: '碟号', disc_count: '总碟数',
+                genre: '流派', composer: '作曲', lyricist: '作词',
+                comment: '备注', lyrics: '歌词'
+              };
+              function renderSnapshot(item) {
+                preview.replaceChildren(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
+                  '快照内容 · ' + (item.time || '-')));
+                Object.keys(labels).forEach(function (key) {
+                  var value = String(item[key] || '');
+                  var row = h('div', { class: 'kv' },
+                    h('span', { class: 'muted' }, labels[key]),
+                    h('span', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
+                      value || '-'));
+                  preview.appendChild(row);
+                });
+              }
+              rows.forEach(function (item) {
+                var previewBtn = h('button', { class: 'btn mini', type: 'button' }, '预览');
+                var loadBtn = h('button', { class: 'btn mini', type: 'button' }, '载入编辑器');
+                previewBtn.addEventListener('click', function () {
+                  renderSnapshot(item);
+                });
+                loadBtn.addEventListener('click', function () {
+                  if (currentFormChanged() && !window.confirm(
+                    '载入历史快照将替换当前未保存的修改。继续？')) return;
+                  Object.keys(inputs).forEach(function (key) {
+                    inputs[key].value = String(item[key] || '');
+                  });
+                  lyrics.value = String(item.lyrics || '');
+                  toast('已载入历史快照，请检查后手动写入', 'success');
+                });
+                list.appendChild(h('div', { class: 'toolbar', style: 'min-width:0' },
+                  h('span', { class: 'ellipsis', title: item.time || '',
+                    style: 'flex:1;min-width:0' },
+                    [item.time, item.title, item.artist].filter(Boolean).join(' · ')),
+                  previewBtn, loadBtn));
+              });
+              card.appendChild(list);
+              card.appendChild(preview);
+              historyHost.appendChild(card);
+              renderSnapshot(rows[0]);
+            }
+
+            historyBtn.addEventListener('click', function () {
+              historyBtn.disabled = true;
+              api('/api/music-tag/history?rel=' + encodeURIComponent(row.rel))
+                .then(showHistory)
+                .catch(function (error) {
+                  setError(historyHost, error, function () { historyBtn.click(); });
+                }).then(function () { historyBtn.disabled = false; });
+            });
 
             saveBtn.addEventListener('click', function () {
               if (busy) return;
@@ -10746,6 +11039,7 @@ function renderMusicTag(root) {
                     inputs[key].value = fresh[key] || '';
                   });
                   lyrics.value = fresh.lyrics || '';
+                  persistedFields = Object.assign({}, fresh);
                   var target = files.find(function (item) { return item.rel === row.rel; });
                   if (target) {
                     target.title = fresh.title || '';
@@ -10855,10 +11149,10 @@ function renderMusicTag(root) {
                   '歌词'),
                 lyrics,
                 h('div', { class: 'toolbar', style: 'margin-top:8px' },
-                  saveBtn, lyricBtn,
+                  saveBtn, lyricBtn, historyBtn,
                   h('span', { class: 'muted small' },
                     '写入前会自动记录标签历史。')),
-                lyricHost));
+                lyricHost, historyHost));
             editorHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }).catch(function (error) {
             setError(editorHost, error, function () { openEditor(row); });
@@ -12228,6 +12522,9 @@ function renderMusicTag(root) {
           }, '手动录入');
           var targets = [];
           var maxUpload = 50;
+          var targetsRequest = 0;
+          var compareRequest = 0;
+          var targetsLoading = false;
 
           function targetNow() {
             var key = tableSel.value;
@@ -12262,6 +12559,9 @@ function renderMusicTag(root) {
               tableSel.appendChild(h('option', { value: '' },
                 '本地没有已同步的表格（请先「表格同步」）'));
               tableSel.disabled = true;
+              bridgeState.docKey = '';
+              bridgeState.tabId = '';
+              updateTargetUi();
               return;
             }
             tableSel.disabled = false;
@@ -12313,11 +12613,13 @@ function renderMusicTag(root) {
           }
 
           function runCompare() {
+            if (targetsLoading) return;
             var target = targetNow();
             if (!target) {
               toast('请先选择表格', 'warning');
               return;
             }
+            var request = ++compareRequest;
             busy = true;
             syncButtons();
             setLoading(tableHost, '正在比对本地数据与表格快照…');
@@ -12327,6 +12629,7 @@ function renderMusicTag(root) {
               days: Number(daysSel.value) || 30,
               accounts: accSel.value, dup_mode: dupSel.value
             }).then(function (result) {
+              if (request !== compareRequest) return;
               busy = false;
               lastPreview = result;
               selected.clear();
@@ -12480,6 +12783,7 @@ function renderMusicTag(root) {
                     result.note) : null));
               syncButtons();
             }).catch(function (error) {
+              if (request !== compareRequest) return;
               busy = false;
               syncButtons();
               setError(tableHost, error, runCompare);
@@ -12602,8 +12906,15 @@ function renderMusicTag(root) {
             });
           });
 
-          compareBtn.addEventListener('click', runCompare);
+          compareBtn.addEventListener('click', reloadTargets);
           tableSel.addEventListener('change', function () {
+            compareRequest += 1;
+            busy = false;
+            lastPreview = null;
+            selected.clear();
+            checkboxMap = {};
+            summary.textContent = '';
+            tableHost.replaceChildren();
             updateTargetUi();
           });
           accSel.addEventListener('change', function () {
@@ -12623,7 +12934,7 @@ function renderMusicTag(root) {
                 busy = false;
                 toast('同步前刷新完成，可以上传', 'success');
                 syncButtons();
-                runCompare();
+                reloadTargets();
               }, {
                 onSettled: function (job) {
                   busy = false;
@@ -12783,31 +13094,54 @@ function renderMusicTag(root) {
           box.appendChild(tableHost);
           box.appendChild(jobHost2);
 
-          api('/api/tcdoc/bridge').then(function (data) {
-            targets = data.targets || [];
-            maxUpload = data.max_upload || 50;
-            (data.days || []).forEach(function (item) {
-              daysSel.appendChild(h('option', {
-                value: item.value, selected: item.value === bridgeState.days
-              }, item.label));
+          function reloadTargets() {
+            var request = ++targetsRequest;
+            compareRequest += 1;
+            targetsLoading = true;
+            busy = true;
+            lastPreview = null;
+            selected.clear();
+            checkboxMap = {};
+            summary.textContent = '';
+            tableSel.disabled = true;
+            manualBtn.disabled = true;
+            syncButtons();
+            setLoading(tableHost, '正在读取目标表格…');
+            api('/api/tcdoc/bridge').then(function (data) {
+              if (request !== targetsRequest) return;
+              targetsLoading = false;
+              busy = false;
+              targets = data.targets || [];
+              maxUpload = data.max_upload || 50;
+              daysSel.replaceChildren();
+              (data.days || []).forEach(function (item) {
+                daysSel.appendChild(h('option', {
+                  value: item.value, selected: item.value === bridgeState.days
+                }, item.label));
+              });
+              if (!daysSel.value) daysSel.value = String(bridgeState.days);
+              gateBadge.className = 'badge' + (data.refresh.allowed ? ' ok' : '');
+              gateBadge.textContent = data.refresh.allowed
+                ? '已刷新，可上传' : '需同步前刷新';
+              refreshInfo.textContent = (data.refresh.allowed
+                ? '刷新门禁通过：' : '') + (data.refresh.message || '')
+                + (data.bypass ? '（桌面端已开启免校对模式）' : '');
+              applyTargetOptions();
+              if (targets.length) runCompare();
+              else {
+                tableHost.replaceChildren(empty(
+                  '当前范围没有可用表格，可调整子表范围或先同步表格。'));
+              }
+            }).catch(function (error) {
+              if (request !== targetsRequest) return;
+              targetsLoading = false;
+              busy = false;
+              tableSel.disabled = !targets.length;
+              updateTargetUi();
+              setError(tableHost, error, reloadTargets);
             });
-            if (!daysSel.value) daysSel.value = String(bridgeState.days);
-            gateBadge.className = 'badge' + (data.refresh.allowed ? ' ok' : '');
-            gateBadge.textContent = data.refresh.allowed
-              ? '已刷新，可上传' : '需同步前刷新';
-            refreshInfo.textContent = (data.refresh.allowed
-              ? '刷新门禁通过：' : '') + (data.refresh.message || '')
-              + (data.bypass ? '（桌面端已开启免校对模式）' : '');
-            applyTargetOptions();
-            if (targets.length) runCompare();
-            else {
-              tableHost.replaceChildren(empty(
-                '本地还没有已同步的表格。请先在上方「表格同步」拉取，'
-                + '或到桌面端「腾讯文档」完成同步。'));
-            }
-          }).catch(function (error) {
-            setError(tableHost, error, renderBridgeTab);
-          });
+          }
+          reloadTargets();
         }
 
         function renderBodyTab() {
