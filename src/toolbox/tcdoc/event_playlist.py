@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 
 from music import playlist_link
 
+from . import field_maps
 from .import_local import ImportErrorDetail, LocalImportClient, ManagedAuth
 
 EVENT_DOC = "DRnd3bkhkQUR1aEJr"
@@ -37,6 +38,7 @@ STATUS_LABELS = {
     "unchanged": "已是该链接",
     "conflict": "已有其它链接",
     "missing_column": "缺少目标列",
+    "mapped_off": "映射为不写",
     "unverified": "链接校验未通过",
     "failed": "写入失败",
 }
@@ -184,19 +186,25 @@ def write_results(event, results, *, reader=None, client_factory=None,
 
     written = []
     for link in links:
-        item = {"platform": link["platform"], "column": link["column"],
+        # 字段映射可以把这个本地字段改写到别的列，或设为「不写」
+        column = field_maps.target(EVENT_DOC, EVENT_TAB, link["column"])
+        item = {"platform": link["platform"], "column": column or link["column"],
                 "url": link["url"], "status": "", "message": ""}
         receipt["items"].append(item)
-        kind = _field_type(fields, link["column"])
+        if not column:
+            item["status"] = "mapped_off"
+            item["message"] = "字段映射已把该列设为不写"
+            continue
+        kind = _field_type(fields, column)
         if not kind:
             item["status"] = "missing_column"
-            item["message"] = f"表里没有「{link['column']}」列"
+            item["message"] = f"表里没有「{column}」列"
             continue
         if kind not in (1, 8):
             item["status"] = "missing_column"
-            item["message"] = f"「{link['column']}」不是链接/文本列"
+            item["message"] = f"「{column}」不是链接/文本列"
             continue
-        current = _cell_url(values.get(link["column"]))
+        current = _cell_url(values.get(column))
         if current == link["url"]:
             item["status"] = "unchanged"
             item["message"] = "已是该歌单链接"
@@ -212,7 +220,7 @@ def write_results(event, results, *, reader=None, client_factory=None,
                 item["message"] = f"链接校验未通过：{check[1]}；歌单 ID {link['playlist_id']}"
                 continue
         try:
-            client.update_playlist_link(record_id, link["column"], link["url"],
+            client.update_playlist_link(record_id, column, link["url"],
                                         field_type=kind,
                                         text=link.get("playlist_name") or "")
         except ImportErrorDetail as exc:
