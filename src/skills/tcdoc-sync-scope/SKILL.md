@@ -228,6 +228,28 @@ description: "腾讯文档同步编辑范围强制约束（强制阅读）。仅
 7. 与桌面上传共用 `import_pending` 写入锁，避免桌面批量上传与 Web 编辑并发。
 8. 实现：`src/toolbox/webui_tcdoc_edit.py`（L3 用例）、`import_local.LocalImportClient.update_record / delete_record`（仍每次 `validate_target`）、`src/toolbox/webui/services/tcdoc.py`、路由 `/api/tcdoc/edit/{status,preview,update,delete}`。
 9. 不在本次授权内：批量修改、按条件批量删除、清空整表、改字段结构、新建 / 删除下拉选项、向已有行追加图片。
+
+### 2026-11-26 用户授权：WebUI 中间层「新建下拉选项」
+
+用户要求把「新建下拉选项」接到 WebUI。按上文「下拉选项（唯一允许的结构例外）」实现为**上传内的一次性同意**，不提供独立的建选项入口：
+
+1. 入口只有「腾讯文档 → 中间层同步」：先「检查新下拉选项」（只读，读云端字段并比对本批勾选记录），列出 `{列名: [选项值]}`；用户勾选「允许新建下拉选项（仅本次）」后再点「上传选中」，确认框会再次提示本次会新建哪些值。
+2. 只有勾选该开关时，`make_plan` / `run` 才以 `allow_new_options=True` 传 `[{"text": value}]`，让腾讯按「快速添加」建值；未勾选时保持原行为（判为「没有既有选项」并拒绝写入）。
+3. 仅限「官方动态」（`ss_h2uh2s`）的四个多选列（发布账号 / 发布平台 / 动态类型 / 发布位置）；「直播记录」传该开关直接 400。
+4. 只新增选项**值**：不新增字段、不改字段名与类型、不删选项、不改顺序；同意只在当前这次上传有效，不写配置、不记忆到下次。
+5. 仍受「同步前刷新」门禁与白名单 `validate_target` 约束；上传回执列出实际新建的选项（`created_options`）。
+6. 实现：`webui_tcdoc_bridge.option_preview / ensure_uploadable / _upload_posts`，路由 `POST /api/tcdoc/bridge/options`。
+7. 与中国条目边界：本条只针对「新增选项值」，优先于上一条第 9 点里「新建下拉选项」的排除表述；**删除选项、改选项顺序、改选项以外的一切结构变更仍不在授权内**。
 9. 链接口径（2026-11-26）：QQ 必须把建单的 `dirId` 换成 `GetPlaylistByUin` 返回的 `tid` 再写，禁止把 `dirId` 直接拼成网页链接；酷狗云歌单只有分配 `specialid` 时才写 `special/single/{specialid}.html`，否则回执「平台无网页链接」不得写死链。已有链接经探测确认「已失效」时才允许自动替换；网络异常不视为失效。
 10. 手工覆盖：`write_manual` / WebUI 的「覆盖该列已有的其它链接」是用户当次显式选择，仅对本次填写的平台生效；不改变自动回写「不覆盖」的默认。
+
+### 2026-11-26 用户授权：直播记录自动推送「AI 摘要」
+
+用户要求直播总结由程序自动推送，不再手工粘贴。据此对「直播记录」（`ss_1xgstm`）追加授权：
+
+1. 仅在**新增行**时写入「AI 摘要」文本列；已有行不修改、不覆盖，重复行仍按原去重规则跳过。
+2. 内容只取本地已有总结：统一导出目录「直播总结」下文件名含开播日期的 txt/md，或内置资料库 `src/skills/fengming-livestream-summary/references/database/live/<年-月>.md` 中该场次的「AI 摘要」；两处都没有时留空，禁止生成、拼接或拿别的场次顶替。
+3. 「备注信息」仍按原规则追加「自动推送程序上传+北京时间」；不因 AI 摘要改动备注列。
+4. 字段映射把「AI 摘要」指到别的列时按映射写；指到备注列时摘要保留、自动备注另起一行追加，不覆盖摘要。
+5. 实现：`src/toolbox/livestream_summary/archive.py`（取总结）、`src/toolbox/tcdoc/import_pending.py::make_live_plan`（编码写入）、`field_maps.INTERNAL_FIELDS["lives"]` 增加「AI 摘要」。
 

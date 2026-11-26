@@ -1265,9 +1265,31 @@ def make_live_plan(record: dict, fields: list[dict], available_only=True,
             kinds[title] = kind
             continue
         skipped[name] = "字段类型不匹配"
+    # 自动推送 AI 摘要：按开播日期取本地「直播总结」，只写文本列，找不到就跳过
+    summary_title = field_maps.target(doc_key, tab_id, "AI 摘要")
+    if summary_title and summary_title not in values:
+        from toolbox.livestream_summary.archive import summary_for
+
+        summary = summary_for(record.get("开始时间"))
+        if summary:
+            hits = [f for f in fields
+                    if str(f.get("fieldTitle") or "") == summary_title]
+            if len(hits) == 1 and int(hits[0].get("fieldType") or 1) == 1:
+                values[summary_title] = [{"type": "text", "text": summary}]
+                kinds[summary_title] = 1
+            else:
+                skipped["AI 摘要"] = "目标列不是唯一的文本列"
     remark, remark_kind, remark_title = _remark_plan(record, fields, skipped,
                                                      doc_key, tab_id)
     if remark is not None:
+        if remark_title and remark_title == summary_title and remark_title in values:
+            # 映射把 AI 摘要指到了备注列：保留摘要，备注另起一行追加
+            chunks = values.get(remark_title)
+            existing = (str(chunks[0].get("text") or "")
+                        if isinstance(chunks, list) and chunks
+                        and isinstance(chunks[0], dict) else "")
+            remark = [{"type": "text",
+                       "text": bridge.append_auto_remark(existing)}]
         values[remark_title] = remark
         kinds[remark_title] = remark_kind
     _apply_raw_sources(record, fields, values, kinds, skipped, doc_key, tab_id)
