@@ -3918,11 +3918,15 @@
     Promise.all([
       api('/api/tools/rename/overview'),
       api('/api/tools/rename/preview?limit=300'),
-      api('/api/publish/overview').catch(function () { return null; })
+      api('/api/publish/overview').catch(function () { return null; }),
+      api('/api/publish/templates').catch(function () { return null; }),
+      api('/api/publish/history').catch(function () { return null; })
     ]).then(function (results) {
       var overview = results[0];
       var preview = results[1];
       var publishInfo = results[2] || {};
+      var templateInfo = results[3] || {};
+      var historyInfo = results[4] || {};
       host.replaceChildren();
       if (!overview.has_work_dir) {
         host.appendChild(empty('尚未设置工作目录。请先在桌面端「全局设置」中配置工作目录。'));
@@ -3987,6 +3991,72 @@
         class: 'input', style: 'width:150px', value: pset.date || '',
         placeholder: '日期 YYYYMMDD（可留空）'
       });
+      var coverInput = h('input', {
+        class: 'input grow', value: pset.cover || '',
+        placeholder: '封面图片完整路径（留空自动提取首帧，需要 FFmpeg）'
+      });
+      var templateSel = h('select', { class: 'select' });
+      var tplItems = templateInfo.items || [];
+      if (!tplItems.length) {
+        templateSel.appendChild(h('option', { value: '' }, '（暂无模板）'));
+        templateSel.disabled = true;
+      } else {
+        tplItems.forEach(function (item) {
+          templateSel.appendChild(h('option', {
+            value: item.name,
+            selected: item.name === (templateInfo.active || '')
+          }, item.name));
+        });
+      }
+      function applyTemplate(name) {
+        var found = tplItems.filter(function (item) {
+          return item.name === name;
+        })[0];
+        if (!found) return;
+        var conf = found.settings || {};
+        if (conf.title != null) titleInput.value = conf.title;
+        if (conf.desc != null) descInput.value = conf.desc;
+        if (conf.tags != null) tagsInput.value = conf.tags;
+        if (conf.tid != null) tidInput.value = String(conf.tid);
+        if (conf.creation_statement) statementSel.value = conf.creation_statement;
+        if (conf.season != null) seasonInput.value = conf.season;
+        if (conf.source != null) sourceInput.value = conf.source;
+        if (conf.cover != null) coverInput.value = conf.cover;
+        if (conf.auto_publish != null) autoCheck.checked = !!conf.auto_publish;
+        precheckResult = null;
+        checksHost.replaceChildren();
+        syncPublish();
+        toast('已载入模板：' + name, 'info');
+      }
+      templateSel.addEventListener('change', function () {
+        applyTemplate(templateSel.value);
+      });
+      var saveTplBtn = h('button', { class: 'btn', type: 'button' }, '另存为模板');
+      saveTplBtn.addEventListener('click', function () {
+        var name = window.prompt('模板名称（同名为覆盖）', templateSel.value || '');
+        if (!name || !name.trim()) return;
+        post('/api/publish/templates', {
+          name: name.trim(), action: 'save', settings: currentSettings()
+        }).then(function (result) {
+          toast(result.summary || '模板已保存', 'success');
+          renderRename(host);
+        }).catch(function (error) {
+          toast('模板保存失败：' + error.message, 'error');
+        });
+      });
+      var delTplBtn = h('button', { class: 'btn ghost', type: 'button' }, '删除模板');
+      delTplBtn.addEventListener('click', function () {
+        var name = templateSel.value;
+        if (!name) return;
+        if (!window.confirm('删除投稿模板「' + name + '」？')) return;
+        post('/api/publish/templates', { name: name, action: 'delete' })
+          .then(function (result) {
+            toast(result.summary || '模板已删除', 'success');
+            renderRename(host);
+          }).catch(function (error) {
+            toast('模板删除失败：' + error.message, 'error');
+          });
+      });
       var autoCheck = h('input', {
         type: 'checkbox', checked: pset.auto_publish !== false
       });
@@ -4006,6 +4076,7 @@
           season: seasonInput.value.trim(),
           source: sourceInput.value.trim(),
           date: dateInput.value.trim(),
+          cover: coverInput.value.trim(),
           auto_publish: autoCheck.checked
         };
       }
@@ -4151,7 +4222,68 @@
           h('span', { style: 'flex:1' }), precheckBtn, uploadBtn),
         h('div', { class: 'toolbar', style: 'margin-top:6px' },
           h('span', { class: 'muted small' }, '原直播来源'), sourceInput),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '封面'), coverInput),
+        h('div', { class: 'toolbar', style: 'margin-top:6px' },
+          h('span', { class: 'muted small' }, '投稿模板'), templateSel,
+          saveTplBtn, delTplBtn),
         checksHost, publishJobHost));
+
+      var STATE_LABELS = {
+        published: ['已投稿', 'ok'], uploaded: ['已上传', ''],
+        uploading: ['上传中', 'warn'], submitting: ['提交中', 'warn'],
+        uncertain: ['结果不明', 'warn'], failed: ['失败', 'danger']
+      };
+      var historyHost = h('div');
+      var historyRows = historyInfo.items || [];
+      if (historyRows.length) {
+        var hHead = h('tr', null, h('th', null, '任务'), h('th', null, '状态'),
+          h('th', null, '标题'), h('th', null, '账号'), h('th', null, '操作'));
+        var hBody = h('tbody');
+        historyRows.forEach(function (row) {
+          var badge = STATE_LABELS[row.state]
+            || [row.state || '-', ''];
+          var actionCell = h('td', null);
+          if (row.state !== 'published' && row.state !== 'uploading') {
+            var retryBtn = h('button', {
+              class: 'btn mini', type: 'button'
+            }, '允许重试');
+            retryBtn.addEventListener('click', function () {
+              if (!window.confirm('允许重试该投稿任务？\n\n请先确认 B站投稿管理里'
+                + '没有相同稿件，否则可能重复投稿。')) {
+                return;
+              }
+              retryBtn.disabled = true;
+              post('/api/publish/history/retry', {
+                task: row.task, confirmed: true
+              }).then(function (result) {
+                toast(result.summary || '已允许重试', 'success');
+                renderRename(host);
+              }).catch(function (error) {
+                retryBtn.disabled = false;
+                toast('操作失败：' + error.message, 'error');
+              });
+            });
+            actionCell.appendChild(retryBtn);
+          }
+          hBody.appendChild(h('tr', null,
+            h('td', { class: 'muted small' }, row.task),
+            h('td', null, h('span', { class: 'badge ' + badge[1] }, badge[0])),
+            h('td', { class: 'ellipsis' }, row.title || '-'),
+            h('td', { class: 'muted small' }, row.account || '-'),
+            actionCell));
+        });
+        historyHost.appendChild(h('div', { class: 'table-wrap' },
+          h('table', { class: 'db-table' },
+            h('thead', null, hHead), hBody)));
+      } else {
+        historyHost.appendChild(empty('暂无投稿历史。'));
+      }
+      host.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        h('div', { class: 'row-title' }, '投稿历史'),
+        h('div', { class: 'muted small', style: 'margin:4px 0 6px' },
+          historyInfo.note || '已投稿 / 结果不明的任务不能重复提交。'),
+        historyHost));
 
       function openRenameForm(item) {
         var overlay = h('div', { class: 'preview-overlay' });

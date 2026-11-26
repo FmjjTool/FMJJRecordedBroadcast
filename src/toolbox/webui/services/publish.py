@@ -16,6 +16,18 @@ class PublishService:
     def precheck(self, payload: dict) -> dict:
         return webui_bili_publish.precheck(dict(payload))
 
+    def templates(self) -> dict:
+        return webui_bili_publish.templates()
+
+    def save_template(self, payload: dict) -> dict:
+        return webui_bili_publish.save_template(dict(payload))
+
+    def history(self) -> dict:
+        return webui_bili_publish.history()
+
+    def allow_retry(self, payload: dict) -> dict:
+        return webui_bili_publish.allow_retry(dict(payload))
+
     def start_upload(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

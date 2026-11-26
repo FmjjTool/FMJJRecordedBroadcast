@@ -411,6 +411,19 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return publish.start_upload(dict(req.json or {}))
     server.post("/api/publish/upload", start_publish_upload)
 
+    server.get("/api/publish/templates", lambda req: publish.templates())
+
+    def save_publish_template(req):
+        return publish.save_template(dict(req.json or {}))
+    server.post("/api/publish/templates", save_publish_template)
+
+    server.get("/api/publish/history", lambda req: publish.history())
+
+    def publish_allow_retry(req):
+        return publish.allow_retry(dict(req.json or {}))
+    server.post("/api/publish/history/retry", publish_allow_retry)
+
+
 
     server.get("/api/tools/video/overview",
                lambda req: tool_service.video_overview())

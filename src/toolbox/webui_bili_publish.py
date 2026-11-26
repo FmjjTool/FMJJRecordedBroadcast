@@ -98,6 +98,145 @@ def overview() -> dict:
     }
 
 
+def templates() -> dict:
+    """投稿模板列表（与桌面共用 `BU.load_settings()['upload_templates']`）。"""
+    bu = _bu()
+    try:
+        settings = bu.load_settings()
+    except Exception:  # noqa: BLE001
+        settings = {}
+    raw = settings.get("upload_templates") or {}
+    items = []
+    if isinstance(raw, dict):
+        for name, config in raw.items():
+            if not isinstance(config, dict):
+                continue
+            items.append({"name": str(name),
+                          "settings": {key: config.get(key)
+                                       for key in _SETTING_KEYS
+                                       if key in config}})
+    return {"items": items,
+            "active": str(settings.get("active_upload_template") or "")}
+
+
+def save_template(payload: dict) -> dict:
+    """保存 / 覆盖 / 删除投稿模板。"""
+    bu = _bu()
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > 30:
+        raise ValueError("模板名称需为 1～30 个字符")
+    action = str(payload.get("action") or "save").strip()
+    try:
+        settings = bu.load_settings()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"读取投稿设置失败：{exc}") from exc
+    raw = settings.get("upload_templates")
+    items = dict(raw) if isinstance(raw, dict) else {}
+    if action == "delete":
+        if name not in items:
+            raise ValueError("模板不存在，可能已被删除")
+        items.pop(name, None)
+        settings["upload_templates"] = items
+        settings["active_upload_template"] = next(iter(items), "")
+    elif action == "save":
+        config = _settings(payload)
+        config["date"] = ""
+        items[name] = {key: config.get(key) for key in _SETTING_KEYS}
+        settings["upload_templates"] = items
+        settings["active_upload_template"] = name
+    else:
+        raise ValueError("未知模板操作")
+    try:
+        bu.save_settings(settings)
+    except OSError as exc:
+        raise ValueError(f"模板保存失败：{exc}") from exc
+    data = templates()
+    data["ok"] = True
+    data["summary"] = ("已删除模板：" if action == "delete" else "已保存模板：") + name
+    return data
+
+
+def history() -> dict:
+    """最近投稿任务（桌面上传历史）。"""
+    bu = _bu()
+    try:
+        rows = bu.UploadHistory().recent()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"读取投稿历史失败：{exc}") from exc
+    items = []
+    for key, state, data in rows:
+        items.append({
+            "task": str(key)[:12],
+            "state": str(state),
+            "title": str((data or {}).get("title") or ""),
+            "account": str(((data or {}).get("account") or {}).get("name") or ""),
+        })
+    return {"items": items, "total": len(items),
+            "note": ("已投稿 / 结果不明的任务不能再次提交；"
+                     "确认官方投稿管理里没有相同稿件后，可「允许重试」。")}
+
+
+def allow_retry(payload: dict) -> dict:
+    """把失败任务标记为可重试（需确认；已投稿任务拒绝）。"""
+    bu = _bu()
+    if payload.get("confirmed") is not True:
+        raise ValueError("请确认后再允许重试")
+    task = str(payload.get("task") or "").strip()
+    if not task:
+        raise ValueError("缺少任务标识")
+    store = bu.UploadHistory()
+    target = None
+    for key, state, data in store.recent():
+        if str(key).startswith(task):
+            target = (key, state, data)
+            break
+    if target is None:
+        raise ValueError("任务不存在，可能已被清理")
+    key, state, data = target
+    if state == "published":
+        raise ValueError("已成功投稿的任务不能从这里重试")
+    if state == "uploading":
+        raise ValueError("任务仍在上传中，请先确认已停止")
+    store.save(key, "failed", data)
+    return {"ok": True, "task": str(key)[:12],
+            "summary": "已标记为可重试；请确认没有重复稿件后再上传"}
+
+
+def _cover_check(cover: str, checks_add) -> None:
+    """封面检查：留空时要求有 FFmpeg 提取首帧；填写时校验图片可读。"""
+    text = str(cover or "").strip()
+    if not text:
+        try:
+            from toolbox.live_record import find_ffmpeg
+            exe = find_ffmpeg()
+        except Exception:  # noqa: BLE001
+            exe = None
+        checks_add("cover", "封面", bool(exe),
+                   "未选择封面，将自动提取视频首帧" if exe
+                   else "未选择封面且未找到 FFmpeg，无法自动提取首帧")
+        return
+    path = Path(text)
+    if not path.is_absolute():
+        checks_add("cover", "封面", False, "封面请填写完整路径")
+        return
+    if not path.is_file():
+        checks_add("cover", "封面", False, "封面文件不存在")
+        return
+    if path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+        checks_add("cover", "封面", False, "封面仅支持 JPG / PNG / WEBP / BMP")
+        return
+    try:
+        if path.stat().st_size > 20 * 1024 * 1024:
+            checks_add("cover", "封面", False, "封面超过 20MB")
+            return
+        from PIL import Image
+        with Image.open(path) as image:
+            image.verify()
+        checks_add("cover", "封面", True, f"{path.name}（上传时会转 JPG）")
+    except Exception as exc:  # noqa: BLE001 - 打不开就当作不可用
+        checks_add("cover", "封面", False, f"封面无法读取：{exc}")
+
+
 def precheck(payload: dict) -> dict:
     """投稿预检：命名、日期、分P、标题 / 标签 / 分区、文件状态与账号登录。"""
     bu = _bu()
@@ -125,6 +264,8 @@ def precheck(payload: dict) -> dict:
             f"标题：{metadata['title']}；标签：{metadata['tag']}；分区 {metadata['tid']}")
     except (ValueError, TypeError) as exc:
         add("metadata", "标题 / 简介 / 标签 / 分区", False, str(exc))
+
+    _cover_check(settings.get("cover") or "", add)
 
     problems = []
     total_bytes = 0
