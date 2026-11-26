@@ -94,12 +94,18 @@ def _audio_details(content: bytes, ext: str) -> tuple[str, str]:
         ext = ".ogg"
     elif content.startswith(b"RIFF") and content[8:12] == b"WAVE":
         ext = ".wav"
+    elif len(content) > 1 and content[0] == 255 and content[1] & 246 == 240:
+        ext = ".aac"
     elif content.startswith(b"ID3") or (len(content) > 1 and content[0] == 255 and content[1] & 224 == 224):
         ext = ".mp3"
     elif content[4:8] == b"ftyp":
         ext = ".m4a"
     try:
-        audio = mutagen.File(io.BytesIO(content))
+        if ext == ".aac":
+            from mutagen.aac import AAC
+            audio = AAC(io.BytesIO(content))
+        else:
+            audio = mutagen.File(io.BytesIO(content))
         if audio is not None:
             kinds = {"FLAC": ".flac", "MonkeysAudio": ".ape", "MP3": ".mp3",
                      "MP4": ".m4a", "AAC": ".aac", "ASF": ".wma", "WAVE": ".wav"}
@@ -232,7 +238,8 @@ def _url_kuwo(song: SongInfo, quality: str) -> _UrlResult:
     data = safe_json(resp.text)
     if not isinstance(data, dict):
         return _UrlResult(error="酷我下载接口可能已变化，请稍后重试")
-    url = data.get("url") or ""
+    from .kuwo_download import _safe_audio_url
+    url = _safe_audio_url(data.get("url"))
     if not url:
         return _UrlResult(error="酷我拒绝该歌曲的直链请求（VIP/版权限制）")
     return _UrlResult(url=url, ext=".wma", quality="128kbps")

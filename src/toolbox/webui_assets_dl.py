@@ -431,6 +431,10 @@ def _target_media_files(root: Path, row: dict) -> list[dict]:
     try:
         for folder in root.iterdir():
             if folder.is_dir() and norm_platform_dir(folder.name) == row.get("platform"):
+                try:
+                    folder.resolve().relative_to(root)
+                except ValueError:
+                    continue
                 folders.append(folder)
                 author_dir = (folder / str(row.get("author") or "")).resolve()
                 try:

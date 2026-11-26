@@ -398,7 +398,7 @@ class _StatCard(QFrame):
         self._key = key
         self._clickable = clickable
         self.preview = None
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setObjectName("workbenchStatCard")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_Hover, True)
@@ -528,7 +528,7 @@ class HomePage(BasePage):
                 preview_box.setSpacing(6)
                 for _ in range(3):
                     line = QLabel()
-                    line.setObjectName("workbenchHomeMuted")
+                    line.setObjectName("workbenchStatPreviewLine")
                     line.setTextFormat(Qt.PlainText)
                     line.setWordWrap(True)
                     line.setMinimumWidth(0)
@@ -1416,6 +1416,8 @@ class HomePage(BasePage):
         for grid, cards in self._tool_grids:
             self._arrange_grid(grid, cards, tools)
         self._arrange_grid(self._stats_grid, self._stat_cards, stats)
+        for card in self._stat_cards:
+            self._stats_grid.setAlignment(card, Qt.AlignTop)
         self._arrange_grid(self._charts_grid, self._chart_cards, charts)
         self.body.layout().setContentsMargins(16, 16, 16, 16)
 
@@ -1523,6 +1525,7 @@ class HomePage(BasePage):
             }
             QLabel#workbenchStatValue { color: palette(text); background: transparent; font-family: "Segoe UI", "Microsoft YaHei"; font-size: 27px; font-weight: bold; }
             QLabel#workbenchStatCaption { color: palette(placeholder-text); background: transparent; font-size: 11px; }
+            QLabel#workbenchStatPreviewLine { color: palette(text); background: transparent; font-size: 12px; }
             QLabel#workbenchPanelTitle, QLabel#workbenchSectionTitle { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
             QPushButton#workbenchToolCard {
                 background: palette(base); border: 1px solid palette(shadow); border-radius: 10px;

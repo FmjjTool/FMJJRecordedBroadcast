@@ -81,6 +81,17 @@ if "--info-collect" in sys.argv:
 
     sys.exit(_info_collect_job())
 
+# 内容采集定时入口：超话 / 抖音指数；单次执行，不创建窗口或加载 Qt。
+if "--chaohua-collect" in sys.argv or "--douyin-index-collect" in sys.argv:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from toolbox.content_collect import main as _content_collect_job
+
+    sys.exit(_content_collect_job(
+        "chaohua" if "--chaohua-collect" in sys.argv else "douyin_index"))
+
 # 歌曲合集创建命令行入口：--music-playlist（无窗口，不加载 Qt）。
 if "--music-playlist" in sys.argv:
     if sys.stdout is None:

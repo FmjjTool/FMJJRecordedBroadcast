@@ -1,6 +1,6 @@
 """本软件注册的 Windows 计划任务总览（供「定时任务」管理页使用）。
 
-七类任务各自独立，互不影响：
+九类任务各自独立，互不影响：
 - FengMingTCDocMonitor         腾讯文档监控（每天 / 按间隔）
 - FengMingTrackerMonitor       网媒账号追踪（每天 / 按间隔）
 - FengMingMusicTrackerMonitor  音乐账号追踪（每天 / 按间隔）
@@ -8,6 +8,8 @@
 - FengMingWebwikiAnalytics     本地资料站访问统计（每天）
 - FengMingFanGroupsMonitor     粉丝群 / QQ群人数快照（每天 / 按间隔）
 - FengMingInfoCollect          信息获取作品增量（每天 / 按间隔）
+- FengMingChaohuaCollect       微博超话采集（每天 / 按间隔）
+- FengMingDouyinIndexCollect   抖音指数快照（每天 / 按间隔）
 计划文本取自各页保存的配置，安装状态 / 下次运行取自 schtasks；计划设置统一由
 「定时任务」页读写，功能页不再单独提供定时配置。
 """
@@ -15,6 +17,7 @@
 from __future__ import annotations
 
 from toolbox import account_tracker_task as _acc
+from toolbox import content_collect_task as _content
 from toolbox import fan_groups_task as _fan
 from toolbox import info_collect_task as _info
 from toolbox import quark_backup_task as _quark
@@ -32,6 +35,9 @@ _CFG_KEYS = {
     "fangroups": ("fangroups_schedule_mode", "fangroups_snapshot_time",
                   "fangroups_interval_minutes"),
     "info": ("info_schedule_mode", "info_collect_time", "info_interval_minutes"),
+    "chaohua": ("chaohua_schedule_mode", "chaohua_collect_time", "chaohua_interval_minutes"),
+    "douyin_index": ("douyin_index_schedule_mode", "douyin_index_collect_time",
+                     "douyin_index_interval_minutes"),
 }
 
 # 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
@@ -39,7 +45,9 @@ _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
     "quark": "global_settings", "webwiki": "localwiki", "fangroups": "fan_groups",
     "info": "info_accounts",
+    "chaohua": "weibo_chaohua", "douyin_index": "douyin_index",
 }
+_CONTENT_DEFAULT_TIMES = {"chaohua": "09:30", "douyin_index": "09:45"}
 # 站点访问统计的两个补采时间点（空 = 不启用）
 _WEBWIKI_EXTRA_TIME_KEYS = ("webwiki_analytics_time2", "webwiki_analytics_time3")
 
@@ -58,10 +66,11 @@ def _interval_text(value) -> str:
     return f"每 {minutes // 60} 小时" if minutes % 60 == 0 else f"每 {minutes} 分钟"
 
 
-def _schedule_text(cfg: dict, mode_key: str, time_key: str, interval_key: str) -> str:
+def _schedule_text(cfg: dict, mode_key: str, time_key: str, interval_key: str,
+                   default_time: str = "09:00") -> str:
     if mode_key and str(cfg.get(mode_key) or "daily") == "interval":
         return _interval_text(cfg.get(interval_key))
-    return f"每天 {cfg.get(time_key) or '09:00'}"
+    return f"每天 {cfg.get(time_key) or default_time}"
 
 
 def _next_run(data: dict) -> str:
@@ -86,6 +95,10 @@ def list_tasks() -> list[dict]:
          _fan.TASK_NAME, _fan.info()),
         ("info", "作品增量", "信息获取账号的最新作品定时入库（只入库不下媒体）",
          _info.TASK_NAME, _info.info()),
+        ("chaohua", "微博超话采集", "已订阅超话的最新帖子与互动指标定时入库",
+         _content.TASK_NAMES["chaohua"], _content.info("chaohua")),
+        ("douyin_index", "抖音指数快照", "已订阅达人的趋势与粉丝画像定时保存快照",
+         _content.TASK_NAMES["douyin_index"], _content.info("douyin_index")),
     ]
     out = []
     for tid, label, usage, task_name, data in rows:
@@ -93,7 +106,8 @@ def list_tasks() -> list[dict]:
         if tid == "webwiki":
             schedule = "每天 " + " / ".join(sorted(_webwiki_times(cfg)))
         else:
-            schedule = _schedule_text(cfg, mode_key, time_key, interval_key)
+            schedule = _schedule_text(cfg, mode_key, time_key, interval_key,
+                                      _CONTENT_DEFAULT_TIMES.get(tid, "09:00"))
         out.append({
             "id": tid,
             "label": label,
@@ -118,20 +132,30 @@ def get_schedule(task_id: str) -> dict:
         interval = max(1, min(1439, int(cfg.get(interval_key) or 30)))
     except (TypeError, ValueError):
         interval = 30
-    return {
+    result = {
         "mode": mode if interval_key else "daily",
-        "time": str(cfg.get(time_key) or "09:00"),
+        "time": str(cfg.get(time_key) or _CONTENT_DEFAULT_TIMES.get(task_id, "09:00")),
         "interval": interval,
         "interval_supported": bool(interval_key),
         "extra_times": ([str(cfg.get(key) or "") for key in _WEBWIKI_EXTRA_TIME_KEYS]
                         if task_id == "webwiki" else []),
     }
+    if task_id in _content.TASK_NAMES:
+        from toolbox.content_collect import get_settings
+        result["collection"] = get_settings(task_id)
+    return result
 
 
 def save_schedule(task_id: str, mode: str, time_text: str, interval: int,
-                  extra_times=None) -> None:
+                  extra_times=None, collection=None) -> None:
     """保存计划设置到全局配置（是否安装由 install() 负责）。"""
     mode_key, time_key, interval_key = _CFG_KEYS[task_id]
+    if task_id in _content.TASK_NAMES:
+        from toolbox.content_collect import get_settings, save_settings, validate_settings
+        values = get_settings(task_id)["values"] if collection is None else collection
+        # 在触碰任一设置前验证对象与参数；不把空订阅登记成可执行计划。
+        values = validate_settings(task_id, values)
+        save_settings(task_id, values)
     cfg = load_convert_config()
     if mode_key:
         cfg[mode_key] = "interval" if mode == "interval" and interval_key else "daily"
@@ -149,12 +173,15 @@ def save_schedule(task_id: str, mode: str, time_text: str, interval: int,
 
 
 def install(task_id: str, mode: str, time_text: str, interval: int,
-            extra_times=None) -> tuple[bool, str]:
+            extra_times=None, collection=None) -> tuple[bool, str]:
     """保存并注册 / 更新指定任务的 Windows 计划任务。"""
-    save_schedule(task_id, mode, time_text, interval, extra_times)
+    save_schedule(task_id, mode, time_text, interval, extra_times, collection)
     if task_id == "webwiki":
         return _webwiki.install_daily(time_text, extra_times or [])
     use_interval = mode == "interval" and _CFG_KEYS[task_id][2] is not None
+    if task_id in _content.TASK_NAMES:
+        return (_content.install_interval(task_id, interval) if use_interval
+                else _content.install_daily(task_id, time_text))
     if task_id == "tcdoc":
         return (_tcdoc.install_interval(interval) if use_interval
                 else _tcdoc.install_daily(time_text))
@@ -174,6 +201,8 @@ def install(task_id: str, mode: str, time_text: str, interval: int,
 
 
 def uninstall(task_id: str) -> tuple[bool, str]:
+    if task_id in _content.TASK_NAMES:
+        return _content.uninstall(task_id)
     if task_id == "tcdoc":
         return _tcdoc.uninstall()
     if task_id == "quark":
