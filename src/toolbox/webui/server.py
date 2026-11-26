@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -418,9 +420,26 @@ def _make_handler(app: WebUIServer):
             if data is None:
                 self._send(_error(404, "not found"))
                 return
-            self._headers(200, mime, len(data),
-                          {"Content-Security-Policy": _CSP})
-            self.wfile.write(data)
+            etag = '"' + hashlib.sha1(data).hexdigest()[:20] + '"'
+            if (self.headers.get("If-None-Match") or "").strip() == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            body = data
+            headers = {
+                "Content-Security-Policy": _CSP,
+                "ETag": etag,
+                "Cache-Control": "no-cache",
+            }
+            accept = (self.headers.get("Accept-Encoding") or "").lower()
+            if len(data) > 1024 and "gzip" in accept:
+                body = gzip.compress(data, 6)
+                headers["Content-Encoding"] = "gzip"
+                headers["Vary"] = "Accept-Encoding"
+            self._headers(200, mime, len(body), headers)
+            self.wfile.write(body)
 
         def do_GET(self):
             parsed = urlsplit(self.path)
