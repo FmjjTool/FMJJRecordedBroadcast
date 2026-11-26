@@ -1,7 +1,7 @@
 """购物解析 L3 输入路由：桌面与 WebUI 共用平台范围和派发计划。
 
 只处理输入，不读取凭据、不发请求、不写文件。每次仍只解析首个已勾选
-且识别成功的平台；抖音支持同组多行，淘宝和 B站一次一条。
+且识别成功的平台；抖音支持同组多行，淘宝、B站和闲鱼一次一条。
 """
 
 from __future__ import annotations
@@ -26,7 +26,10 @@ _BILI_RE = re.compile(
 )
 _BILI_UID_RE = re.compile(r"^\d{3,}$")
 _TAOBAO_RE = re.compile(r"(?:taobao\.com|tmall\.com|tb\.cn)", re.I)
-_XIANYU_RE = re.compile(r"https?://(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?://2\.taobao\.com/item", re.I)
+_XIANYU_RE = re.compile(
+    r"https?://(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)"
+    r"|https?://2\.taobao\.com/item"
+    r"|https?://h5\.m\.taobao\.com/app/idleFish-F2e/", re.I)
 
 
 def normalize_shopping_platforms(platforms=None) -> tuple[str, ...]:

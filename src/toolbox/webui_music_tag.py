@@ -235,10 +235,16 @@ def history(payload: dict, limit: int = 5) -> dict:
     except sqlite3.Error as exc:
         raise ValueError("读取标签历史失败，请稍后重试") from exc
     try:
-        columns = ", ".join(("createtime",) + _FIELDS)
-        rows = conn.execute(
-            f"SELECT {columns} FROM tag_history WHERE filepath=? "
-            "ORDER BY serial DESC LIMIT ?", (str(path), limit)).fetchall()
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            ("tag_history",)).fetchone()
+        if not has_table:
+            rows = []
+        else:
+            columns = ", ".join(("createtime",) + _FIELDS)
+            rows = conn.execute(
+                f"SELECT {columns} FROM tag_history WHERE filepath=? "
+                "ORDER BY serial DESC LIMIT ?", (str(path), limit)).fetchall()
     except sqlite3.Error as exc:
         raise ValueError("读取标签历史失败，请稍后重试") from exc
     finally:

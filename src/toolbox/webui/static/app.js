@@ -10912,21 +10912,19 @@ function renderMusicTag(root) {
         api('/api/music-tag/detail?rel=' + encodeURIComponent(row.rel))
           .then(function (detail) {
             var fields = detail.fields || {};
+            var fieldSchema = detail.field_schema || [];
             var inputs = {};
             var grid = h('div', { class: 'form-grid' });
-            [['title', '标题'], ['artist', '艺术家'], ['album', '专辑'],
-              ['albumartist', '专辑艺术家'], ['year', '年份'],
-              ['track', '音轨'], ['track_count', '总音轨'],
-              ['disc', '碟号'], ['disc_count', '总碟数'], ['genre', '流派'],
-              ['composer', '作曲'], ['lyricist', '作词'],
-              ['comment', '备注']].forEach(function (pair) {
-              var key = pair[0];
+            fieldSchema.filter(function (field) {
+              return field.name !== 'lyrics';
+            }).forEach(function (field) {
+              var key = field.name;
               var input = h('input', {
                 class: 'input', type: 'text', value: fields[key] || ''
               });
               inputs[key] = input;
               grid.appendChild(h('label', null,
-                h('span', { class: 'muted small' }, pair[1]), input));
+                h('span', { class: 'muted small' }, field.label || key), input));
             });
             var lyrics = h('textarea', {
               class: 'textarea', rows: '8',
@@ -10963,20 +10961,15 @@ function renderMusicTag(root) {
               var preview = h('div', { class: 'card', style: 'margin-top:8px' });
               preview.appendChild(h('div', { class: 'muted small' }, '选择「预览」查看快照内容。'));
               var list = h('div', { style: 'display:grid;gap:8px' });
-              var labels = {
-                title: '标题', artist: '艺术家', album: '专辑',
-                albumartist: '专辑艺术家', year: '年份', track: '音轨',
-                track_count: '总音轨', disc: '碟号', disc_count: '总碟数',
-                genre: '流派', composer: '作曲', lyricist: '作词',
-                comment: '备注', lyrics: '歌词'
-              };
+              var historyFields = data.field_schema || fieldSchema;
               function renderSnapshot(item) {
                 preview.replaceChildren(h('div', { class: 'row-title', style: 'margin-bottom:8px' },
                   '快照内容 · ' + (item.time || '-')));
-                Object.keys(labels).forEach(function (key) {
+                historyFields.forEach(function (field) {
+                  var key = field.name;
                   var value = String(item[key] || '');
                   var row = h('div', { class: 'kv' },
-                    h('span', { class: 'muted' }, labels[key]),
+                    h('span', { class: 'muted' }, field.label || key),
                     h('span', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
                       value || '-'));
                   preview.appendChild(row);
@@ -12555,6 +12548,7 @@ function renderMusicTag(root) {
             compareBtn.textContent = isSnapshot ? '刷新快照' : '重新比对';
             compareBtn.disabled = busy;
             refreshBtn.disabled = busy;
+            tableSel.disabled = busy || !targets.length;
           }
 
           function applyTargetOptions() {

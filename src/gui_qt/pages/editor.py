@@ -1311,67 +1311,274 @@ class EditorPage(BasePage):
 
     # ==================== 片段 ====================
 
+    def _selected_segment_data(self):
+        item = self.seg_list.currentItem()
+        value = item.data(Qt.UserRole) if item is not None else None
+        return value if isinstance(value, dict) else None
+
+    def _partial_by_id(self, partial_id):
+        if partial_id is None:
+            return None
+        return next((row for row in self.partial_segments
+                     if row.get("id") == partial_id), None)
+
+    def _selected_complete_segment(self, data=None):
+        data = self._selected_segment_data() if data is None else data
+        if not data or data.get("kind") != "segment":
+            return None
+        index = data.get("index")
+        if isinstance(index, int) and 0 <= index < len(self.segments):
+            return self.segments[index]
+        return None
+
+    def _new_partial(self, start=None, end=None):
+        row = {"id": self._next_partial_id, "start": start, "end": end}
+        self._next_partial_id += 1
+        self.partial_segments.append(row)
+        return row
+
+    def _promote_partial(self, row):
+        start, end = row.get("start"), row.get("end")
+        if start is None or end is None:
+            return False
+        if end <= start:
+            self.app.toast("终点需要大于起点", "warning")
+            return False
+        interval = (int(start), int(end))
+        self.segments.append(interval)
+        self.segments.sort()
+        self.partial_segments.remove(row)
+        self._refresh_segments({"kind": "segment", "range": interval})
+        self._log(f"已补齐片段 {_fmt_ms(start)} → {_fmt_ms(end)}")
+        return True
+
     def _set_start(self):
         if not self.current_path or self._duration_ms <= 0:
             return
-        self._pending_start = self.slider.value()
-        self._sync_timeline()
+        position = self.slider.value()
+        data = self._selected_segment_data()
+        if data and data.get("kind") == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row is None:
+                return
+            end = row.get("end")
+            if end is not None and position >= end:
+                self.app.toast("开始时间需要早于保留的终点", "warning")
+                return
+            row["start"] = position
+            if row.get("end") is not None:
+                self._promote_partial(row)
+            else:
+                self._refresh_segments({"kind": "partial", "id": row["id"]})
+                self._log(f"起点已标记: {_fmt_ms(position)} · 待标终点")
+            return
+        self._pending_start = position
+        self._refresh_segments({"kind": "pending"})
         self._log(f"起点: {_fmt_ms(self._pending_start)}")
 
     def _set_end(self):
         if not self.current_path or self._duration_ms <= 0:
             return
         end = self.slider.value()
+        data = self._selected_segment_data()
+        if data and data.get("kind") == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row is None:
+                return
+            start = row.get("start")
+            if start is not None and end <= start:
+                self.app.toast("终点需要晚于保留的起点", "warning")
+                return
+            row["end"] = end
+            if row.get("start") is not None:
+                self._promote_partial(row)
+            else:
+                self._refresh_segments({"kind": "partial", "id": row["id"]})
+                self._log(f"终点已标记: {_fmt_ms(end)} · 待标起点")
+            return
         start = self._pending_start
+        if start is None and self.partial_segments:
+            self.app.toast("先在片段列表选中待补标记，再补另一端", "warning")
+            return
         if start is None:
             start = 0
         if end <= start:
             self.app.toast("终点需要大于起点", "warning")
             return
-        self.segments.append((int(start), int(end)))
+        interval = (int(start), int(end))
+        self.segments.append(interval)
         self.segments.sort()
         self._pending_start = None
-        self._refresh_segments()
-        self.seg_list.setCurrentRow(self.segments.index((int(start), int(end))))
+        self._refresh_segments({"kind": "segment", "range": interval})
         self._log(f"已添加片段 {_fmt_ms(start)} → {_fmt_ms(end)}")
 
-    def _refresh_segments(self):
-        selected = self.seg_list.currentRow()
+    @staticmethod
+    def _same_segment_item(actual, wanted):
+        if not isinstance(actual, dict) or not isinstance(wanted, dict):
+            return False
+        if actual.get("kind") != wanted.get("kind"):
+            return False
+        if actual["kind"] == "segment":
+            if "index" in wanted:
+                return actual.get("index") == wanted.get("index")
+            return actual.get("range") == wanted.get("range")
+        if actual["kind"] == "partial":
+            return actual.get("id") == wanted.get("id")
+        return actual["kind"] == "pending"
+
+    def _refresh_segments(self, selected=None):
+        if selected is None:
+            selected = self._selected_segment_data()
         self.seg_list.blockSignals(True)
         self.seg_list.clear()
-        for idx, (start, end) in enumerate(self.segments, 1):
-            item = QListWidgetItem(
-                f"{idx}. {_fmt_ms(start)} → {_fmt_ms(end)}  ({_fmt_ms(end - start)})")
-            item.setData(Qt.UserRole, (start, end))
-            item.setToolTip("双击定位到片段起点")
+        entries = []
+        for index, (start, end) in enumerate(self.segments):
+            entries.append((min(start, end), 1, {
+                "kind": "segment", "index": index, "range": (start, end),
+                "text": f"{_fmt_ms(start)} → {_fmt_ms(end)}  ({_fmt_ms(end - start)})",
+                "tip": "双击定位到片段起点"}))
+        for row in self.partial_segments:
+            if row.get("start") is not None:
+                order_time = row["start"]
+                label = f"起点 {_fmt_ms(row['start'])} · 待补终点"
+                tip = "选中后用「标记结束」或 O 补齐"
+            else:
+                order_time = row["end"]
+                label = f"待补起点 · 终点 {_fmt_ms(row['end'])}"
+                tip = "选中后用「标记开始」或 I 补齐"
+            entries.append((order_time, 0, {
+                "kind": "partial", "id": row["id"], "text": label, "tip": tip}))
+        if self._pending_start is not None:
+            entries.append((self._pending_start, -1, {
+                "kind": "pending", "text": f"待完成片段 · 起点 {_fmt_ms(self._pending_start)}",
+                "tip": "移动播放指针后标记结束；或选中后删除此起点"}))
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        selected_row = -1
+        for order_time, order_type, data in entries:
+            item = QListWidgetItem(data["text"])
+            item.setData(Qt.UserRole, data)
+            item.setToolTip(data["tip"])
             self.seg_list.addItem(item)
-        if self.segments:
-            self.seg_list.setCurrentRow(max(0, min(selected, len(self.segments) - 1)))
+            if selected and self._same_segment_item(data, selected):
+                selected_row = self.seg_list.count() - 1
+        if selected_row >= 0:
+            self.seg_list.setCurrentRow(selected_row)
+        elif self.seg_list.count():
+            self.seg_list.setCurrentRow(0)
         self.seg_list.blockSignals(False)
         self._sync_timeline()
         self._refresh_action_buttons()
 
     def _sync_timeline(self, _row=None):
-        selected = self.seg_list.currentRow()
-        self.slider.set_segments(self.segments, self._pending_start, selected)
-        if self._pending_start is not None:
+        data = self._selected_segment_data()
+        selected = data.get("index", -1) if data and data.get("kind") == "segment" else -1
+        self.slider.set_segments(self.segments, self._pending_start, selected,
+                                 self.partial_segments)
+        if data and data.get("kind") == "pending" and self._pending_start is not None:
             self.segment_status.setText(
-                f"待完成起点 {_fmt_ms(self._pending_start)} · 移动指针后标记结束（O）")
-        elif 0 <= selected < len(self.segments):
-            start, end = self.segments[selected]
+                f"待完成起点 {_fmt_ms(self._pending_start)} · 移动播放指针后标记结束")
+        elif data and data.get("kind") == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row and row.get("start") is not None:
+                self.segment_status.setText(
+                    f"待补终点 · 保留起点 {_fmt_ms(row['start'])} · 选中后按 O 补齐")
+            elif row:
+                self.segment_status.setText(
+                    f"待补起点 · 保留终点 {_fmt_ms(row['end'])} · 选中后按 I 补齐")
+            else:
+                self.segment_status.setText("待补标记已移除")
+        elif data and data.get("kind") == "segment":
+            start, end = data["range"]
             self.segment_status.setText(
                 f"片段 {selected + 1} / {len(self.segments)} · 起 {_fmt_ms(start)} → 终 {_fmt_ms(end)}")
         else:
-            self.segment_status.setText("未标记片段：移动播放指针后标记开始 / 结束")
+            self.segment_status.setText("移动播放指针并标记开始 / 结束；未选中待补标记时结束从 00:00 开始")
+
+    def _seek_to_segment_item(self, item):
+        data = item.data(Qt.UserRole) if item is not None else None
+        if not isinstance(data, dict):
+            return
+        if data.get("kind") == "segment":
+            self._seek_to(data["range"][0])
+        elif data.get("kind") == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row:
+                point = row.get("start") if row.get("start") is not None else row.get("end")
+                self._seek_to(point)
+        elif data.get("kind") == "pending":
+            self._seek_to(self._pending_start or 0)
+
+    def _remove_start_mark(self):
+        self._remove_mark("start")
+
+    def _remove_end_mark(self):
+        self._remove_mark("end")
+
+    def _remove_mark(self, endpoint, data=None):
+        data = self._selected_segment_data() if data is None else data
+        if not data:
+            return
+        kind = data.get("kind")
+        if kind == "segment":
+            index = data.get("index")
+            if not isinstance(index, int) or not 0 <= index < len(self.segments):
+                return
+            start, end = self.segments.pop(index)
+            partial = self._new_partial(
+                None if endpoint == "start" else start,
+                None if endpoint == "end" else end)
+            self._refresh_segments({"kind": "partial", "id": partial["id"]})
+            self._log(f"已删除所选片段的{'起点' if endpoint == 'start' else '终点'}，保留另一端")
+            return
+        if kind == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row is None or row.get(endpoint) is None:
+                return
+            self.partial_segments.remove(row)
+            self._refresh_segments()
+            self._log(f"已删除待补标记的{'起点' if endpoint == 'start' else '终点'}")
+            return
+        if kind == "pending" and endpoint == "start" and self._pending_start is not None:
+            self._pending_start = None
+            self._refresh_segments()
+            self._log("已删除未完成起点")
 
     def _remove_segment(self):
-        row = self.seg_list.currentRow()
-        if 0 <= row < len(self.segments):
-            self.segments.pop(row)
-            self._refresh_segments()
+        data = self._selected_segment_data()
+        if not data:
+            return
+        kind = data.get("kind")
+        if kind == "segment":
+            index = data.get("index")
+            if isinstance(index, int) and 0 <= index < len(self.segments):
+                self.segments.pop(index)
+        elif kind == "partial":
+            row = self._partial_by_id(data.get("id"))
+            if row is not None:
+                self.partial_segments.remove(row)
+        elif kind == "pending":
+            self._pending_start = None
+        self._refresh_segments()
+
+    def _delete_timeline_marker(self, marker):
+        kind = marker.get("kind")
+        if kind == "segment":
+            index = marker.get("index")
+            if not isinstance(index, int) or not 0 <= index < len(self.segments):
+                return
+            start, end = self.segments[index]
+            data = {"kind": "segment", "index": index, "range": (start, end)}
+        elif kind == "partial":
+            data = {"kind": "partial", "id": marker.get("id")}
+        elif kind == "pending":
+            data = {"kind": "pending"}
+        else:
+            return
+        self._remove_mark(marker.get("endpoint", "start"), data)
 
     def _clear_segments(self):
         self.segments = []
+        self.partial_segments = []
         self._pending_start = None
         self._refresh_segments()
 

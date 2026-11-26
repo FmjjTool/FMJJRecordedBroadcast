@@ -36,7 +36,9 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 | `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 读取/注入须确认不会回写真实状态；快照保存和清除只在隔离虚构环境验证 |
 | `src/toolbox/webwiki/credentials.py`、`auth.py`，`src/gui_qt/cookie_manager.py` | GitHub Token 统一凭据适配与 `_GitHubTokenDialog` | 已迁入统一管理；新文件 `config/github_auth.json`，旧 `config/webwiki_auth.json` 只读兼容；业务不得直接读写凭据文件 |
 
-现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`netease_playlist`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`tcdoc`、`qqgroup`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。QQ 群的登录态用于粉丝群页的群号查询兜底（qinfo / 群搜索），业务只读获取，不在页面保存或展示凭据。
+现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`netease_playlist`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`xianyu`、`tcdoc`、`qqgroup`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。QQ 群的登录态用于粉丝群页的群号查询兜底（qinfo / 群搜索），业务只读获取，不在页面保存或展示凭据。
+
+闲鱼（2026-11-26）：使用独立 `xianyu` 槽位，不复用淘宝账号。统一入口支持官网浏览器登录与输入；`tracker.whoami` 已注册只读验证器，依据官网 `mtop.idle.web.user.page.nav` 返回的 `data.module.base.displayName` 判定账号，禁止仅凭本地账号 ID 判为有效。明确会话失效与网络 / 验证码 / 限流 / 结构变化分开；临时票据缺失时仅在新建内存浏览器上下文中补验，不保存浏览器状态，不回写响应票据。购物业务只通过 `auth.get_cookie("xianyu")` 按总开关读取；任务中账号变化后停止，不能自动换号继续。所有验证仅使用隔离虚构数据，未代用户验证或修改真实登录记录。
 
 网易云按用途分两个槽位（2026-11-26）：`netease` = 会员下载 / 采集，`netease_playlist` = 歌单创建。两者都是统一管理里的独立行、独立扫码登录，存在同一份加密凭据文件的不同键；业务按用途只读对应槽位（`auth.get_netease_cookie()` vs `auth.get_netease_playlist_cookie()`，后者在歌单槽位为空时回落主账号并在日志注明），不得把两处登录态互换或混用。
 

@@ -284,8 +284,11 @@ def save_items(items, on_log=None, is_cancelled=None):
             break  # 认证/风控不继续逐件请求。
         except (ValueError, OSError, httpx.HTTPError):
             failures.append({"item_id": value, "error": "商品保存失败，请检查网络与保存目录后重试"})
+    remaining = max(0, len(ids) - saved - skipped - len(failures))
     summary = f"{'已取消' if cancelled else '已完成'}：闲鱼商品入库 {saved} 件，已存在 {skipped} 件，失败 {len(failures)} 件"
+    if remaining:
+        summary += f"，未处理 {remaining} 件"
     return {"platform": "xianyu", "saved": saved, "skipped": skipped, "failed": len(failures),
             "failures": failures, "items": results, "cancelled": cancelled,
-            "remaining": max(0, len(ids) - saved - skipped - len(failures)),
+            "remaining": remaining,
             "summary": summary + "；资料与图片位于「闲鱼商品」目录"}

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 import shutil
 import sys
@@ -45,9 +44,9 @@ def report_detail(report_id: str) -> dict:
 
 def report_download(report_id: str) -> dict:
     """返回同一份已保存报告的 JSON，不重新采样，也不写导出目录。"""
-    report = report_detail(report_id)
+    from toolbox.performance_reports import read_report_bytes
     return {
-        "data": json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8"),
+        "data": read_report_bytes(report_id),
         "filename": report_id + ".json",
     }
 

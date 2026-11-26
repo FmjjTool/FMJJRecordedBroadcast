@@ -5,9 +5,10 @@
     淘宝      taobao.com / tmall.com / tb.cn / 淘口令
     抖音商城  v.douyin.com / haohuo.jinritemai.com / douyin.com / 【抖音商城】分享文案
     B站小店   b23.tv / mall.bilibili.com / space.bilibili.com / 纯数字 UID
+    闲鱼      goofish.com 商品链接；关键词由「搜索闲鱼」提交
 - 识别后自动切到对应结果面板，并调用该子页原有解析流程；
-  三个子页仍是原来的 BasePage，落盘目录与导出格式不变：
-    download/淘宝商品/ · download/抖音商品/ · download/B站小店/
+  既有三个子页的落盘目录与导出格式不变，闲鱼使用独立结果面板：
+    download/淘宝商品/ · download/抖音商品/ · download/B站小店/ · download/闲鱼商品/
 - 一次只解析一个平台：混合粘贴时按「首个勾选且识别出的平台」解析，其余条数在提示里说明；
   抖音本身就支持一行一条批量解析。
 """
@@ -94,7 +95,7 @@ class ShoppingHubPage(BasePage):
         tv.addLayout(row)
         layout.addWidget(top)
 
-        # 结果区：三个子页原样托管，识别到哪个平台就显示哪个
+        # 结果区：按平台托管，网络与商品保存规则交给各自 L3 用例。
         self.stack = QStackedWidget()
         self.taobao_page = ShoppingPage(app)
         self.douyin_page = DouyinShopPage(app)
@@ -109,7 +110,7 @@ class ShoppingHubPage(BasePage):
             page.embed_input()
             self.stack.addWidget(page)
             self._panels[key] = page
-            # 三个原有子页在解析、详情和导出期间均禁用自己的解析按钮。
+            # 各子页在解析、详情和导出期间均禁用自己的解析按钮。
             # 监听显式禁用状态即可同步外置筛选，不增加第二套任务状态。
             page.parse_btn.installEventFilter(self)
         layout.addWidget(self.stack, 1)
