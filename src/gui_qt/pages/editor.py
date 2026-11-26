@@ -985,6 +985,7 @@ class EditorPage(BasePage):
             self.player.setSource(QUrl())
             self.slider.setRange(0, 0)
             self._update_time_label(0)
+            self.partial_segments = []
             self._refresh_segments()
             self.play_btn.setText("播放")
             self.file_label.setText("未选择文件")
@@ -997,6 +998,7 @@ class EditorPage(BasePage):
             return
         self.current_path = self.files[row]
         self.file_label.setText(self.current_path)
+        self.partial_segments = []
         self._refresh_segments()
         self._load_preview(self.current_path)
         self._refresh_tracks()

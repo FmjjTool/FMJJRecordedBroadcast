@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QScrollArea, QSpinBox, QTableWidget,
+    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gui_qt import table_sort, theme
@@ -129,12 +129,13 @@ class _ScheduleDialog(QDialog):
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         self.buttons.setLayoutDirection(Qt.RightToLeft)
+        self.buttons.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self.buttons.button(QDialogButtonBox.Ok).setText("保存并安装")
         self.buttons.button(QDialogButtonBox.Ok).setProperty("variant", "primary")
         self.buttons.button(QDialogButtonBox.Cancel).setText("取消")
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
-        layout.addWidget(self.buttons, 0, Qt.AlignRight)
+        layout.addWidget(self.buttons, 0, Qt.AlignRight | Qt.AlignAbsolute)
 
         self.mode.setCurrentIndex(max(0, self.mode.findData(self._schedule["mode"])))
         self.mode.currentIndexChanged.connect(self._sync_mode)

@@ -99,6 +99,10 @@ class DiagnosticSession:
                 return False
             return self._save_locked(reason)
 
+    def save_now(self):
+        with self._save_lock:
+            return self._save_locked(self.status if self._closed else "manual_save")
+
     def finish(self, reason="stopped", error_type=None):
         with self._save_lock:
             if self._closed:
@@ -196,6 +200,13 @@ def complete_startup():
 def finish_current(reason="normal_exit", error_type=None):
     session = current_session()
     if session is not None:
+        session.finish(reason, error_type)
+
+
+def finish_failure(error_type):
+    session = current_session()
+    if session is not None:
+        reason = "startup_failure" if session.early and not session.recorder._startup_complete else "uncaught_exception"
         session.finish(reason, error_type)
 
 

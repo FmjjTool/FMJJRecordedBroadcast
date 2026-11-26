@@ -786,6 +786,7 @@ def _remove(kind, identifier, root):
 
 @_public_io_errors
 def remove_runtime(backend, *, root=None):
+    backend = str(backend or "")
     if backend not in _RUNTIMES:
         raise RuntimeErrorBase("未知的运行模块")
     return _remove("runtime", backend, root)

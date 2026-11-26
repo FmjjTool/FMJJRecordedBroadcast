@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""直播总结页（大模型方案）。
+"""直播总结页（模型接口 / 可选本地模型 / 本地规则）。
 
-把直播转录 TXT / SRT 交给 OpenAI 兼容接口，按内置「封茗囧菌直播总结」规则
+把直播转录 TXT / SRT 交给所选推理方式，按内置「封茗囧菌直播总结」规则
 分块提取、合并、生成终稿并做格式校验。
 
 - 规则只读复用 `src/skills/fengming-livestream-summary/`，不在页面里另写一套；
@@ -381,6 +381,8 @@ class LivestreamSummaryPage(BasePage):
         ai = mode == "ai"
         self.model_box.setVisible(ai)
         self.model_box.setEnabled(ai and not self._running)
+        if ai:
+            self._refresh_key_status()
         if hasattr(self, "local_card"):
             self.local_card.setVisible(mode == "local")
             self.local_options.setEnabled(mode == "local" and not self._running)

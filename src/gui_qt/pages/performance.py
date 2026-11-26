@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
     QVBoxLayout, QWidget,
 )
@@ -16,7 +16,7 @@ from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
 from gui_qt.performance_monitor import get_performance_monitor
-from toolbox.performance import auto_start_enabled, save_auto_start
+from toolbox.performance import auto_start_enabled, save_auto_start, saved_reports, saved_report
 
 
 def _mb(value):
@@ -69,6 +69,8 @@ class PerformancePage(BasePage):
         self.monitor = get_performance_monitor(app)
         self._visible = False
         self._snapshot_busy = False
+        self._report_busy = self._save_busy = False
+        self._history_report = self._history_id = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
@@ -106,6 +108,10 @@ class PerformancePage(BasePage):
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.PlainText)
+        self.save_status = QLabel("")
+        self.save_status.setProperty("role", "caption")
+        self.save_status.setWordWrap(True)
+        self.save_status.setTextFormat(Qt.PlainText)
         top = QFrame()
         top.setProperty("variant", "toolbar")
         tv = QVBoxLayout(top)
@@ -114,6 +120,7 @@ class PerformancePage(BasePage):
         tv.addLayout(options)
         tv.addLayout(bar)
         tv.addWidget(self.status)
+        tv.addWidget(self.save_status)
         layout.addWidget(top)
         self.chart = _MemoryChart()
         chart_card = QFrame()
@@ -134,6 +141,38 @@ class PerformancePage(BasePage):
                              (self.event_table, "耗时明细"), (self.memory_table, "Python 分配"),
                              (self.growth_table, "分配增长"), (self.child_table, "子进程")):
             self.tabs.addTab(table, label)
+        self.report_panel = QWidget()
+        report_layout = QVBoxLayout(self.report_panel)
+        report_layout.setContentsMargins(0, 8, 0, 0)
+        report_layout.setSpacing(8)
+        report_bar = QHBoxLayout()
+        report_bar.setSpacing(8)
+        report_bar.addWidget(QLabel("报告"))
+        self.report_combo = QComboBox()
+        self.report_combo.setMinimumWidth(160)
+        self.report_combo.setMinimumContentsLength(12)
+        self.report_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.report_combo.setEditable(True)
+        self.report_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.report_combo.completer().setFilterMode(Qt.MatchContains)
+        self.report_combo.addItem("当前会话", None)
+        self.report_combo.currentIndexChanged.connect(self._select_report)
+        report_bar.addWidget(self.report_combo, 1)
+        self.refresh_reports_btn = QPushButton("刷新报告")
+        self.refresh_reports_btn.clicked.connect(self._refresh_reports)
+        report_bar.addWidget(self.refresh_reports_btn)
+        self.save_now_btn = QPushButton("立即保存")
+        self.save_now_btn.clicked.connect(self._save_now)
+        report_bar.addWidget(self.save_now_btn)
+        report_layout.addLayout(report_bar)
+        self.report_note = QLabel("")
+        self.report_note.setWordWrap(True)
+        self.report_note.setTextFormat(Qt.PlainText)
+        self.report_note.setProperty("role", "caption")
+        report_layout.addWidget(self.report_note)
+        self.startup_table = self._table(("启动阶段", "次数", "耗时 ms", "工作集变化 MB", "私有提交变化 MB", "结果"))
+        report_layout.addWidget(self.startup_table, 1)
+        self.tabs.addTab(self.report_panel, "启动与报告")
         layout.addWidget(self.tabs, 1)
         note = QLabel("工作集与私有提交是不同指标，不能相加；Python 分配不等于进程总内存。"
                       "页面切换增量可能包含同期后台任务。CPU 100% 表示用满一个逻辑核。"
@@ -179,6 +218,7 @@ class PerformancePage(BasePage):
         self._visible = True
         self._timer.start()
         self._render()
+        self._refresh_reports()
 
     def on_hide(self):
         self._visible = False
@@ -238,6 +278,72 @@ class PerformancePage(BasePage):
 
         run_bg(lambda: self.monitor.recorder.memory_snapshot(session), done, owner=self)
 
+    def _refresh_reports(self):
+        if self._report_busy:
+            return
+        self._report_busy = True
+        self.refresh_reports_btn.setEnabled(False)
+
+        def done(result, err):
+            self._report_busy = False
+            self.refresh_reports_btn.setEnabled(True)
+            if err:
+                self.app.toast("读取自动报告失败，请重试", "error")
+                return
+            selected = self._history_id
+            self.report_combo.blockSignals(True)
+            self.report_combo.clear()
+            self.report_combo.addItem("当前会话", None)
+            for item in (result or {}).get("reports", []):
+                label = f"{item.get('started_at') or '未记录时间'} · {item.get('samples', 0)} 次采样"
+                self.report_combo.addItem(label, item["id"])
+                self.report_combo.setItemData(self.report_combo.count() - 1, item["filename"], Qt.ToolTipRole)
+            index = self.report_combo.findData(selected) if selected else 0
+            self.report_combo.setCurrentIndex(max(0, index))
+            self.report_combo.blockSignals(False)
+            if index < 0:
+                self._history_id = self._history_report = None
+            elif selected:
+                self._select_report(index)
+            self._render()
+
+        run_bg(saved_reports, done, owner=self)
+
+    def _select_report(self, _index):
+        report_id = self.report_combo.currentData()
+        self._history_id = report_id
+        self._history_report = None
+        if not report_id:
+            self._render()
+            return
+        self.report_note.setText("正在读取已保存报告…")
+
+        def done(result, err):
+            if self._history_id != report_id:
+                return
+            if err:
+                self.app.toast("读取报告失败，记录可能已轮转，请刷新后重试", "error")
+            else:
+                self._history_report = result
+            self._render()
+
+        run_bg(lambda: saved_report(report_id), done, owner=self)
+
+    def _save_now(self):
+        if self._save_busy:
+            return
+        self._save_busy = True
+        self.save_now_btn.setEnabled(False)
+
+        def done(result, err):
+            self._save_busy = False
+            self.app.toast("自动报告已保存" if result and not err else "保存自动报告失败，请重试",
+                           "success" if result and not err else "error")
+            self._render()
+            self._refresh_reports()
+
+        run_bg(self.monitor.save_now, done, owner=self)
+
     def _render(self, *_args):
         if not self._visible:
             return
@@ -254,7 +360,16 @@ class PerformancePage(BasePage):
         self.stop_btn.setEnabled(recorder.active)
         self.mark_btn.setEnabled(recorder.active)
         self.snapshot_btn.setEnabled(recorder.active and recorder._trace_owned and not self._snapshot_busy)
-        self.export_btn.setEnabled(bool(samples))
+        viewing_history = self.tabs.currentWidget() is self.report_panel and bool(self._history_id)
+        self.export_btn.setEnabled(self._history_report is not None if viewing_history else bool(samples))
+        self.save_now_btn.setEnabled(bool(samples) and not self._history_id and not self._save_busy)
+        autosave = self.monitor.autosave_info()
+        if autosave.get("error"):
+            self.save_status.setText("自动保存失败；数据仍保留，可在启动与报告页重试或手动导出")
+        elif autosave.get("saved_at"):
+            self.save_status.setText(f"自动报告已保存 · {autosave['saved_at']} · logs/performance · 每 15 秒保存，停止与正常退出时保存")
+        else:
+            self.save_status.setText("开启检测后每 15 秒自动保存，停止与正常退出时保存；保留最近 20 份自动报告")
         if recorder.active:
             self.status.setText(f"检测中 · {len(samples)} 次采样 · 工作集 {_mb(latest.get('rss'))} MB"
                                 f" · 私有提交 {_mb(latest.get('private'))} MB · 可切走继续检测")
@@ -266,14 +381,15 @@ class PerformancePage(BasePage):
         current = self.tabs.currentWidget()
         if current is self.sample_table:
             self._fill(current, [(s["seconds"], s["page"], _mb(s["rss"]), _mb(s["private"]),
-                                  _mb(s["python_bytes"]), s["cpu_one_core_percent"], s["ui_lag_ms"],
+                                  _mb(s["python_bytes"]), s["cpu_one_core_percent"],
+                                  "—" if s["ui_lag_ms"] is None else s["ui_lag_ms"],
                                   f"{s['threads']} / {s['tasks']}") for s in reversed(samples[-120:])])
         elif current is self.page_table:
             self._fill(current, [(p["page"], p["state"], p["widgets"], p["table_slots"])
-                                  for p in latest.get("pages", [])])
+                                  for p in latest.get("pages") or []])
         elif current is self.event_table:
             names = {"page_switch": "切换页面", "page_preload": "页面预载", "worker": "后台执行", "callback": "主线程回调",
-                     "ui_delay": "界面延迟", "mark": "手动标记"}
+                     "ui_delay": "界面延迟", "mark": "手动标记", "startup_phase": "启动阶段"}
             self._fill(current, [(e["seconds"], names.get(e["kind"], e["kind"]), e["label"],
                                   e.get("duration_ms", e.get("lag_ms", "—")), _mb(e.get("rss_delta")),
                                   "失败" if e.get("failed") else "—") for e in reversed(report["events"][-200:])])
@@ -285,6 +401,24 @@ class PerformancePage(BasePage):
             self._fill(current, [(p["name"], p["pid"], _mb(p["rss"]), _mb(p["private"]))
                                   for p in latest.get("children", [])])
 
+        elif current is self.report_panel:
+            selected = self._history_report if self._history_id else report
+            if selected is None:
+                return
+            startup = selected.get("startup") or {}
+            rows = startup.get("phases") or []
+            self._fill(self.startup_table, [(row["name"], row.get("count", 1), row.get("total_ms", 0),
+                                            _mb(row.get("rss_delta")), _mb(row.get("private_delta")),
+                                            f"失败 {row['failures']} 次" if row.get("failures") else "已完成")
+                                           for row in rows])
+            if startup.get("origin"):
+                state = "启动与预载已完成" if startup.get("complete") else "启动/预载尚未完成"
+                self.report_note.setText(f"{state} · {len(rows)} 个阶段；耗时与内存变化可能包含嵌套和并发任务，不能直接相加。"
+                                         "起点为 Python 入口；强杀或断电只能保留上次成功保存的记录。")
+            else:
+                self.report_note.setText("此记录未从 Python 入口开始采样；启用自动监控后，下次启动可查看启动阶段。"
+                                         "已保存报告可通过上方导出报告另存。")
+
     def _export(self):
         from toolbox.config_manager import get_export_subdir
         stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
@@ -294,7 +428,8 @@ class PerformancePage(BasePage):
             return
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-            Path(path).write_text(json.dumps(self.monitor.recorder.report(), ensure_ascii=False, indent=2), encoding="utf-8")
+            report = self._history_report if self.tabs.currentWidget() is self.report_panel and self._history_report else self.monitor.recorder.report()
+            Path(path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
             self.app.toast("性能诊断报告已导出", "success")
         except Exception as exc:  # noqa: BLE001
             self.app.toast(f"导出失败：{exc}"[:160], "error")

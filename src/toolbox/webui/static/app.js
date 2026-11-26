@@ -5381,7 +5381,7 @@ function renderLivestreamSummary(root) {
       var previewNote = h('div', { class: 'muted small', style: 'margin-top:6px' },
         '勾选 1 个视频即可预览（拖动进度按需加载）。MKV / AVI 等浏览器不支持的格式可能无法播放，请用桌面端。');
       var previewHost = h('div', {
-        class: 'card', style: 'margin-top:12px;display:none', tabindex: '0',
+        class: 'card video-preview-card', style: 'margin-top:12px;display:none', tabindex: '0',
         'aria-label': '视频预览与片段标记'
       }, previewVideo, previewNote);
       var opHost = h('div', { class: 'card video-operations', style: 'margin-top:12px' });
@@ -11298,6 +11298,10 @@ function renderMusicTag(root) {
       root.appendChild(diskCard);
       root.appendChild(h('div', { class: 'muted small', style: 'margin-top:8px' },
         data.note || ''));
+      var reportHost = h('div');
+      root.appendChild(reportHost);
+      window.PerformanceReports.mount(reportHost, { api: api, withToken: withToken, h: h,
+        fmtBytes: fmtBytes, cycleSort: cycleSort, sortRows: sortRows });
     }).catch(function (error) {
       setError(root, error, function () { renderPerformance(root); });
     });

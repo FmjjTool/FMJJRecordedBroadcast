@@ -35,6 +35,7 @@ _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/performance_reports.js": ("performance_reports.js", "text/javascript; charset=utf-8"),
     "/cover_automation.js": ("cover_automation.js", "text/javascript; charset=utf-8"),
     "/local_llm.js": ("local_llm.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),

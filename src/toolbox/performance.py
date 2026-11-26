@@ -34,6 +34,16 @@ def save_auto_start(enabled: bool) -> bool:
     return enabled
 
 
+def saved_reports(limit=30):
+    from toolbox.performance_reports import list_reports
+    return list_reports(limit)
+
+
+def saved_report(report_id):
+    from toolbox.performance_reports import load_report
+    return load_report(report_id)
+
+
 @lru_cache(maxsize=1)
 def _windows_api():
     import ctypes as c

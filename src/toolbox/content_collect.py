@@ -30,6 +30,7 @@ FIELDS = {
 }
 LABELS = {"chaohua": "微博超话采集", "douyin_index": "抖音指数快照"}
 MAX_TARGETS = 50
+TARGET_INTERVAL = 1.0
 
 
 def _kind(kind: str) -> str:
@@ -115,6 +116,17 @@ def _check_cancel(is_cancelled) -> None:
         raise CollectCancelled("已取消后续采集，已保存结果保留")
 
 
+def _target_cooldown(is_cancelled) -> None:
+    """目标之间保留一秒冷却；短等待使取消无需等完整冷却结束。"""
+    deadline = time.monotonic() + TARGET_INTERVAL
+    while True:
+        _check_cancel(is_cancelled)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.1, remaining))
+
+
 def _collect_topic(identity: str, settings: dict, is_cancelled) -> dict:
     from platforms import weibo_chaohua as wch
     from platforms import weibo_chaohua_store as chs
@@ -193,6 +205,8 @@ def run(kind: str, on_log=None, is_cancelled=None) -> dict:
             say(f"{LABELS[kind]}开始：{len(targets)} 个订阅对象")
             for index, identity in enumerate(targets, 1):
                 _check_cancel(is_cancelled)
+                if index > 1:
+                    _target_cooldown(is_cancelled)
                 say(f"采集对象 {index}/{len(targets)}")
                 try:
                     details = collect(identity, settings, is_cancelled)

@@ -148,7 +148,7 @@ class MusicDownloader:
         "sky": ["jymaster", "jyeffect", "hires", "lossless", "exhigh", "standard"],
     }
 
-    def get_music_info(self, music_id: int, quality: str = "standard") -> MusicInfo:
+    def get_music_info(self, music_id: int, quality: str = "jymaster") -> MusicInfo:
         """获取音乐详细信息（音质无下载链接时自动降级重试）。"""
         chain = [quality] + self._QUALITY_FALLBACK.get(quality, [])
         last_err = ""
@@ -215,7 +215,7 @@ class MusicDownloader:
                 download_url=download_url,
                 file_type=song_data.get('type', 'mp3').lower(),
                 file_size=song_data.get('size', 0),
-                quality=quality,
+                quality=song_data.get('level') or quality,
                 lyric=lyric,
                 tlyric=tlyric
             )
@@ -229,7 +229,7 @@ class MusicDownloader:
         except Exception as e:
             raise DownloadException(f"获取音乐信息时发生错误: {e}")
     
-    def download_music_file(self, music_id: int, quality: str = "standard") -> DownloadResult:
+    def download_music_file(self, music_id: int, quality: str = "jymaster") -> DownloadResult:
         """下载音乐文件到本地
         
         Args:

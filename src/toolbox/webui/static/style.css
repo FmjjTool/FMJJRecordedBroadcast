@@ -613,6 +613,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 
 /* 视频操作：参数自然换行，播放指针与片段共用一条时间轴。 */
 .video-preview { width: 100%; max-height: 320px; background: var(--bg); border-radius: 8px; }
+.video-preview-card { position: relative; }
 .video-operations { min-width: 0; max-width: 100%; }
 .video-operations .toolbar > .input,
 .video-operations .toolbar > .select { max-width: 100%; min-width: 0; }

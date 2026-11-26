@@ -30,6 +30,10 @@ class AuthRequired(XianyuError):
     code = "auth_required"
 
 
+class TicketRequired(AuthRequired):
+    code = "temporary_ticket_required"
+
+
 class Blocked(XianyuError):
     code = "blocked"
 
@@ -120,8 +124,10 @@ def _data(payload):
         raise Blocked("闲鱼暂时拒绝访问或需要人工验证，请稍后重试")
     if any(word in codes for word in ("LIMIT", "FREQUENT", "TRAFFIC")):
         raise RateLimited("闲鱼请求过于频繁，请稍后再试")
-    if any(word in codes for word in ("SESSION", "TOKEN", "LOGIN", "AUTH")):
+    if any(word in codes for word in ("SESSION", "LOGIN", "AUTH")):
         raise AuthRequired("闲鱼需要登录或登录已失效，请登录后重试")
+    if "TOKEN" in codes:
+        raise TicketRequired("闲鱼临时验证尚未完成，请稍后重试")
     if any(word in codes for word in ("NOT_EXIST", "NOT_FOUND", "ITEM_DELETED")):
         raise NotFound("闲鱼商品不存在或已下架")
     if ret and not any(str(code).upper().startswith("SUCCESS") for code in ret):
@@ -279,7 +285,7 @@ def _browser_payload(url, api, parser, cookie, cancel):
                 if result:
                     return result[0]
                 if errors:
-                    raise errors[0]
+                    raise errors[-1]
                 visible = page.locator("body").inner_text(timeout=2000)[:5000]
                 if any(word in visible for word in ("验证码", "滑动验证", "安全验证", "访问受限")):
                     raise Blocked("闲鱼需要人工验证，请稍后重试")
@@ -336,18 +342,23 @@ def fetch_item(text, *, credential=None, on_log=None, is_cancelled=None):
 
 def parse_login(payload):
     """官网导航使用 data.module.base.displayName 判定登录，不把本地ID当成功。"""
-    if isinstance(payload, dict):
+    try:
+        data = _data(payload)
+    except AuthRequired:
         ret = payload.get("ret") or []
         codes = " ".join(str(value).split("::", 1)[0] for value in
                          ([ret] if isinstance(ret, str) else ret)).upper()
         if any(code in codes for code in ("SESSION_EXPIRED", "NEED_LOGIN", "NOT_LOGIN")):
             return {"ok": False, "username": "", "detail": "闲鱼登录已失效"}
-    data = _data(payload)
+        raise
     module = data.get("module")
     base = module.get("base") if isinstance(module, dict) else None
     if not isinstance(base, dict):
         raise ParseChanged("闲鱼登录验证结构已变化，请稍后重试")
-    name = _text(base.get("displayName"), 100)
+    raw_name = base.get("displayName", "")
+    if not isinstance(raw_name, str):
+        raise ParseChanged("闲鱼登录验证字段已变化，请稍后重试")
+    name = raw_name.strip()[:100]
     return {"ok": bool(name), "username": name,
             "detail": "" if name else "闲鱼尚未返回已登录账号"}
 
@@ -359,7 +370,7 @@ def _verify_http(cookie):
     morsel = jar.get("_m_h5_tk")
     token = morsel.value.split("_", 1)[0] if morsel else ""
     if not token:
-        raise AuthRequired("闲鱼需要临时页面验证")
+        raise TicketRequired("闲鱼需要临时页面验证")
     timestamp = str(int(time.time() * 1000))
     data = "{}"
     app_key = "34839810"
@@ -402,6 +413,8 @@ def verify_login(cookie):
             # H5临时票据不等于账号失效，由官网在独立内存会话完成一次只读验证。
             return _browser_payload("https://www.goofish.com/", "mtop.idle.web.user.page.nav",
                                     parse_login, cookie, None)
+    except TicketRequired:
+        return {"ok": None, "username": "", "detail": "闲鱼临时验证尚未完成，请稍后重试"}
     except AuthRequired:
         return {"ok": False, "username": "", "detail": "闲鱼登录已失效"}
     except XianyuError as exc:

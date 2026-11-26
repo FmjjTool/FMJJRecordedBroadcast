@@ -20,9 +20,27 @@ _AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".ape", ".wv",
 _MAX_FILES = 300
 _MAX_HISTORY = 60
 _MAX_SCAN = 500
-_FIELDS = ("title", "artist", "album", "albumartist", "year", "track",
-           "track_count", "disc", "disc_count", "genre", "composer",
-           "lyricist", "comment", "lyrics")
+FIELDS = {
+    "title": {"type": "str", "default": "", "label": "标题"},
+    "artist": {"type": "str", "default": "", "label": "艺术家"},
+    "album": {"type": "str", "default": "", "label": "专辑"},
+    "albumartist": {"type": "str", "default": "", "label": "专辑艺术家"},
+    "year": {"type": "str", "default": "", "label": "年份"},
+    "track": {"type": "str", "default": "", "label": "音轨"},
+    "track_count": {"type": "str", "default": "", "label": "音轨总数"},
+    "disc": {"type": "str", "default": "", "label": "碟号"},
+    "disc_count": {"type": "str", "default": "", "label": "碟数"},
+    "genre": {"type": "str", "default": "", "label": "流派"},
+    "composer": {"type": "str", "default": "", "label": "作曲"},
+    "lyricist": {"type": "str", "default": "", "label": "作词"},
+    "comment": {"type": "str", "default": "", "label": "备注"},
+    "lyrics": {"type": "str", "default": "", "label": "歌词"},
+}
+_FIELDS = tuple(FIELDS)
+
+
+def _field_schema() -> list[dict]:
+    return [{"name": name, **definition} for name, definition in FIELDS.items()]
 
 
 def _ts(value) -> str:
@@ -199,6 +217,7 @@ def detail(payload: dict) -> dict:
         "rel": path.relative_to(_root()).as_posix(),
         "name": path.name,
         "fields": {key: str(tags.get(key) or "") for key in _FIELDS},
+        "field_schema": _field_schema(),
     }
 
 
@@ -230,7 +249,8 @@ def history(payload: dict, limit: int = 5) -> dict:
         item.update({key: str(row[key] or "") for key in _FIELDS})
         result.append(item)
     return {"rel": path.relative_to(_root()).as_posix(),
-            "rows": result, "total": len(result)}
+            "rows": result, "total": len(result),
+            "field_schema": _field_schema()}
 
 
 def write(payload: dict) -> dict:

@@ -26,7 +26,8 @@ def download_quality_options() -> dict:
                       {"value": "320k", "label": "320k 高音质"},
                       {"value": "192k", "label": "192k 高音质"},
                       {"value": "128k", "label": "128k 标准"}]
-    catalog["netease"] = [{"value": "lossless", "label": "无损"},
+    catalog["netease"] = [{"value": "jymaster", "label": "超清母带"},
+                          {"value": "lossless", "label": "无损"},
                           {"value": "exhigh", "label": "320k"},
                           {"value": "higher", "label": "192k"},
                           {"value": "standard", "label": "标准"}]
@@ -131,7 +132,7 @@ def search(payload: dict, on_log: Callable[[str], None] | None = None,
 def download(payload: dict, on_log: Callable[[str], None] | None = None,
              is_cancelled: Callable[[], bool] | None = None) -> dict:
     """下载勾选歌曲到音乐下载目录；失败或仅试听时自动换源。"""
-    from music.downloader import download_song_smart
+    from music.downloader import DownloadResult, _file_is_preview, download_song_smart
     from toolbox.config_manager import get_music_download_dir
 
     log = on_log or (lambda _msg: None)
@@ -159,8 +160,31 @@ def download(payload: dict, on_log: Callable[[str], None] | None = None,
             failures.append({"title": title, "error": "缺少歌曲 ID 或平台"})
             continue
         try:
-            result = download_song_smart(song, out_dir, quality,
-                                         fallback=fallback)
+            if song.platform == "netease":
+                from auth import get_netease_cookie
+                from netease import MusicDownloader
+                level = {"": "jymaster", "default": "jymaster", "highest": "jymaster",
+                         "flac": "lossless", "320k": "exhigh", "192k": "higher",
+                         "128k": "standard"}.get(quality, quality)
+                if level not in {"jymaster", "jyeffect", "sky", "hires", "lossless",
+                                 "exhigh", "higher", "standard"}:
+                    raise ValueError("网易云不支持所选音质")
+                client = MusicDownloader(download_dir=out_dir,
+                                         cookie_string=get_netease_cookie())
+                raw = client.download_music_file(int(song.song_id), level)
+                info = getattr(raw, "music_info", None)
+                actual = getattr(info, "quality", "") or ""
+                labels = {item["value"]: item["label"] for item in
+                          download_quality_options()["platforms"]["netease"]}
+                path = getattr(raw, "file_path", "") or ""
+                result = DownloadResult(
+                    success=bool(raw and raw.success), file_path=path,
+                    error_message=getattr(raw, "error_message", "") or "下载失败",
+                    quality=labels.get(actual, actual),
+                    is_preview=bool(path and _file_is_preview(path, song.duration)))
+            else:
+                result = download_song_smart(song, out_dir, quality,
+                                             fallback=fallback)
         except Exception as exc:  # noqa: BLE001
             failures.append({"title": title, "error": str(exc)[:200]})
             continue

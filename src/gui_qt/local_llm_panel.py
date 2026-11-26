@@ -146,6 +146,7 @@ class LocalLlmComponentsPanel(QWidget):
         self._cancel = None
         self._refreshing = False
         self._snapshot = {}
+        self._operation_error = ""
         self._icons = []
         self._actions = []
         layout = QVBoxLayout(self)
@@ -214,6 +215,7 @@ class LocalLlmComponentsPanel(QWidget):
         self.runtime_combo.currentIndexChanged.connect(self._sync_actions)
         self.catalog_combo.currentIndexChanged.connect(self._sync_actions)
         self.model_combo.currentIndexChanged.connect(self._sync_actions)
+        self.on_theme_changed()
         self.refresh()
 
     def _button(self, text, icon, callback, *, action=True):
@@ -228,8 +230,9 @@ class LocalLlmComponentsPanel(QWidget):
         return button
 
     def on_theme_changed(self):
-        color = theme.current_palette().color(QPalette.ButtonText).name()
         for button, icon in self._icons:
+            role = QPalette.BrightText if button.property("variant") == "danger" else QPalette.ButtonText
+            color = theme.current_palette().color(role).name()
             button.setIcon(line_icon(icon, color, 16))
             button.setIconSize(QSize(16, 16))
 
@@ -271,6 +274,13 @@ class LocalLlmComponentsPanel(QWidget):
                 self._sync_actions()
                 return
             self._snapshot = snapshot or {}
+            for item in self._snapshot.get("runtimes", ()):
+                index = self.runtime_combo.findData(item["id"])
+                if index >= 0:
+                    size = _size(item.get("download_size"))
+                    self.runtime_combo.setItemText(
+                        index, str(item.get("label") or item["id"])
+                        + (" · 下载 " + size if size else ""))
             previous = self.model_combo.currentData()
             self.model_combo.blockSignals(True)
             self.model_combo.clear()
@@ -296,8 +306,10 @@ class LocalLlmComponentsPanel(QWidget):
             states = [str(item.get("label") or item["id"]) + "："
                       + ("已安装" if item.get("installed") else "未安装")
                       for item in self._snapshot.get("runtimes", ())]
-            self.status_label.setText("；".join(states) if self._snapshot.get("supported")
-                                      else str(self._snapshot.get("note") or "仅支持 Windows x64"))
+            status_text = ("；".join(states) if self._snapshot.get("supported")
+                           else str(self._snapshot.get("note") or "仅支持 Windows x64"))
+            self.status_label.setText(status_text + ("\n" + self._operation_error
+                                                     if self._operation_error else ""))
             self._sync_actions()
 
         run_bg(work, done, owner=self)
@@ -307,6 +319,7 @@ class LocalLlmComponentsPanel(QWidget):
             self.app.toast("已有组件操作在进行中，请结束后重试", "warning")
             return
         self._cancel = threading.Event()
+        self._operation_error = ""
         cancel = self._cancel
         self._busy_changed(True)
         self.progress.setValue(0)
@@ -322,9 +335,8 @@ class LocalLlmComponentsPanel(QWidget):
             self._busy_changed(False)
             if error:
                 message = "已取消" if was_cancelled else label + "失败：" + str(error)[:240]
+                self._operation_error = message
                 self.status_label.setText(message)
-                if not was_cancelled:
-                    self.app.toast(message, "error")
             else:
                 self.progress.setValue(100)
                 self.status_label.setText(label + "已完成")

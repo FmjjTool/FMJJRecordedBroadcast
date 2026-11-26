@@ -569,6 +569,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/performance", lambda req: performance.overview())
     server.post("/api/performance/settings",
                 lambda req: performance.save_settings(dict(req.json or {})))
+    server.get("/api/performance/reports",
+               lambda req: performance.reports(req.q_int("limit", 30, 1, 30)))
+    server.get("/api/performance/reports/detail",
+               lambda req: performance.report_detail(req.q("id")))
+
+    def download_performance_report(req):
+        report = performance.report_download(req.q("id"))
+        return AttachmentResponse(report["data"], report["filename"], "application/json; charset=utf-8")
+    server.get("/api/performance/reports/download", download_performance_report)
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

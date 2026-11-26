@@ -518,12 +518,12 @@ class NeteasePage(BasePage):
         self.quality_menu.blockSignals(True)
         self.quality_menu.clear()
         if platform == MERGE_PLATFORM:
-            # 对比模式混合多平台，音质由各平台各自取默认（网易云走无损）
+            # 对比模式混合多平台，网易云优先超清母带，其余取最高可用。
             self.quality_menu.addItem("各平台最高可用", "highest")
             self.quality_menu.setEnabled(False)
         elif platform == "netease":
             self.quality_menu.addItems(list(QUALITY_NAMES.values()))
-            self.quality_menu.setCurrentText(QUALITY_NAMES["lossless"])
+            self.quality_menu.setCurrentText(QUALITY_NAMES["jymaster"])
             self.quality_menu.setEnabled(True)
         else:
             from music.downloader import quality_options
@@ -1935,7 +1935,7 @@ class NeteasePage(BasePage):
                         from netease import MusicDownloader
                         dl = MusicDownloader(download_dir=out_dir,
                                              cookie_string=get_netease_cookie())
-                        r = dl.download_music_file(int(item.get("id")), "lossless")
+                        r = dl.download_music_file(int(item.get("id")), "jymaster")
                         ok = bool(r and r.success)
                         if not ok:
                             err = getattr(r, "error_message", "") or "失败"

@@ -472,7 +472,7 @@ def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest") -> Opti
         return None
     try:
         dl = MusicDownloader(download_dir=out_dir, cookie_string=content)
-        level = {"highest": "lossless", "flac": "lossless", "320k": "exhigh",
+        level = {"highest": "jymaster", "flac": "lossless", "320k": "exhigh",
                  "192k": "higher", "128k": "standard"}[quality]
         r = dl.download_music_file(int(best["id"]), level)
     except Exception:
