@@ -8671,6 +8671,8 @@ function renderLivestreamSummary(root) {
         + (boxes.some(function (item) {
           return item.row.platform === 'kugou' && item.box.checked;
         }) ? '\n\n酷狗云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App 扫码）。' : '')
+        + (kindSel.value === 'event'
+          ? '\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。' : '')
         + '\n\n写入会在各平台创建同名歌单并逐首添加，确认继续？';
       if (!window.confirm(detail)) return;
       busy = true;
@@ -8694,6 +8696,25 @@ function renderLivestreamSummary(root) {
                   + (item.failed || []).length + ' 首，跳过 '
                   + (item.skipped || []).length + ' 首')));
           });
+          var wbLabels = {
+            written: '已写入', unchanged: '已是该链接',
+            conflict: '已有其它链接', missing_column: '缺少目标列',
+            unverified: '链接校验未通过', failed: '写入失败'
+          };
+          if (data.writeback) {
+            var wb = data.writeback;
+            if ((wb.items || []).length) {
+              wb.items.forEach(function (item) {
+                list.appendChild(h('div', { class: 'muted small' },
+                  '· 活动歌单 ' + (item.column || item.platform) + '：'
+                  + (wbLabels[item.status] || item.status || '')
+                  + (item.message ? '（' + item.message + '）' : '')));
+              });
+            } else {
+              list.appendChild(h('div', { class: 'muted small' },
+                '· 活动歌单：' + (wb.message || '未回写')));
+            }
+          }
           if (data.report) {
             list.appendChild(h('div', { class: 'muted small' },
               '执行报告：' + data.report));

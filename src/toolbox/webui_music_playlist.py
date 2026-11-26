@@ -206,6 +206,23 @@ def _rows(plans) -> list[dict]:
     return rows
 
 
+def _event_of(payload: dict) -> dict | None:
+    """来源是线下活动时取回该活动（含 record_id），供写入后回填歌单链接。"""
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    if str(source.get("kind") or "") != "event":
+        return None
+    row_no = source.get("row_no")
+    if row_no is None:
+        return None
+    try:
+        for event in service.load_offline_events():
+            if int(event.get("row_no")) == int(row_no):
+                return event
+    except (TypeError, ValueError, OSError):
+        return None
+    return None
+
+
 def has_preview(preview_id: str) -> bool:
     _prune()
     with _LOCK:
@@ -259,7 +276,8 @@ def preview(payload: dict, on_log=None, is_cancelled=None) -> dict:
     preview_id = uuid.uuid4().hex
     with _LOCK:
         _PLANS[preview_id] = {"created": time.time(), "plans": plans,
-                              "source": label, "name": name}
+                              "source": label, "name": name,
+                              "event": _event_of(payload)}
     report = _write_report({
         "mode": "preview",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -345,11 +363,26 @@ def apply(payload: dict, on_log=None, is_cancelled=None) -> dict:
             f"失败 {len(data.get('failed') or [])} 首，"
             f"跳过 {len(data.get('skipped') or [])} 首")
 
+    writeback = None
+    event = cached.get("event")
+    if event and results:
+        log("正在回写活动歌单链接…")
+        try:
+            from toolbox.tcdoc import event_playlist
+
+            writeback = event_playlist.write_results(event, results)
+            log(event_playlist.summary_text(writeback))
+        except Exception as exc:  # noqa: BLE001 - 回写失败不影响歌单已创建
+            writeback = {"ok": False, "items": [],
+                         "message": f"回写失败：{exc}"}
+            log(f"活动歌单回写失败：{exc}")
+
     report = _write_report({
         "mode": "apply",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": cached.get("source") or "",
         "results": results,
+        "writeback": writeback,
     })
     added = sum(len(item.get("added") or []) for item in results)
     stopped = sum(1 for item in results if item.get("stopped"))
@@ -358,7 +391,8 @@ def apply(payload: dict, on_log=None, is_cancelled=None) -> dict:
     summary = f"已添加 {added} 首"
     if stopped:
         summary += f"，{stopped} 个平台未写入"
-    return {"results": results, "report": report, "summary": summary}
+    return {"results": results, "report": report, "summary": summary,
+            "writeback": writeback}
 
 
 class _CancelFlag:

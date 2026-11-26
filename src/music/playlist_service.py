@@ -320,7 +320,8 @@ def load_offline_events(path: str | Path | None = None) -> list[dict]:
         conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
         try:
             rows = conn.execute(
-                "SELECT row_no, data_json FROM rows WHERE tab_id=? ORDER BY row_no",
+                "SELECT row_no, record_id, data_json FROM rows "
+                "WHERE tab_id=? ORDER BY row_no",
                 (OFFLINE_EVENT_TAB,)).fetchall()
         finally:
             conn.close()
@@ -328,7 +329,7 @@ def load_offline_events(path: str | Path | None = None) -> list[dict]:
         return []
 
     events: list[dict] = []
-    for row_no, payload in rows:
+    for row_no, record_id, payload in rows:
         try:
             values = json.loads(payload or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -339,6 +340,7 @@ def load_offline_events(path: str | Path | None = None) -> list[dict]:
         songs = _parse_event_songs(values)
         events.append({
             "row_no": row_no,
+            "record_id": str(record_id or ""),
             "name": name,
             "date": _text_value(values.get("活动日期"))[:10],
             "city": _text_value(values.get("城市")),

@@ -41,6 +41,9 @@ SONG_TABS = frozenset({"ss_ktwk0t"})
 CANDIDATE_TABS = frozenset({"ss_e1kkm2", "ss_ekd4cz"})
 # 2026-11-24 用户授权：线下活动已存在行只允许追加「宣传图」图片，不改其他字段。
 IMAGE_APPEND_TABS = frozenset({"ss_e1kkm2"})
+# 2026-11-26 用户授权：线下活动「活动歌单_*」三列只允许写入歌单链接，不改其他列。
+PLAYLIST_LINK_TAB = "ss_e1kkm2"
+PLAYLIST_LINK_COLUMNS = frozenset({"活动歌单_网易云", "活动歌单_酷狗", "活动歌单_QQ"})
 TEST_TARGET = ("DRmFHc1dLcnBvbmtB", "ss_q4fwq4")
 BEIJING = timezone(timedelta(hours=8))
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 脚本的内存限额，不代表服务端限额
@@ -309,6 +312,38 @@ class LocalImportClient:
         rows = result.get("records") if isinstance(result, dict) else None
         if not isinstance(rows, list) or len(rows) != 1:
             raise UnknownWriteResult("图片追加结果缺少逐条回执，请按 recordID 读回核对")
+
+    def update_playlist_link(self, record_id: str, field_title: str, url: str,
+                             *, field_type: int = 8, text: str = "") -> None:
+        """线下活动「活动歌单_*」写歌单链接：只改指定行的单个链接/文本列。"""
+        if self.doc_key != OFFICIAL_DOC or self.tab_id != PLAYLIST_LINK_TAB:
+            raise ImportErrorDetail("歌单链接仅授权线下活动表")
+        if field_title not in PLAYLIST_LINK_COLUMNS:
+            raise ImportErrorDetail(f"歌单链接仅授权「活动歌单」三列：{field_title}")
+        if not str(record_id or "").strip():
+            raise ImportErrorDetail("歌单回写缺少目标行 recordID")
+        target = str(url or "").strip()
+        if not re.match(r"^https?://", target):
+            raise ImportErrorDetail("歌单链接必须是 http(s) 地址")
+        if not self.file_id:
+            raise ImportErrorDetail("尚未核对文档身份")
+        if int(field_type) == 8:
+            value = [{"type": "url", "text": str(text or "").strip() or target,
+                      "link": target}]
+        elif int(field_type) == 1:
+            value = [{"type": "text", "text": target}]
+        else:
+            raise ImportErrorDetail(f"「{field_title}」不是链接/文本列，暂不支持写入")
+        path = (f"/smartbook/v2/files/{quote(self.file_id, safe='')}"
+                f"/sheets/{quote(self.tab_id, safe='')}")
+        payload = {"updateRecords": {"records": [{
+            "recordID": str(record_id),
+            "values": {field_title: value}}]}}
+        data = self._request("POST", path, payload, record_write=True)
+        result = data.get("updateRecords")
+        rows = result.get("records") if isinstance(result, dict) else None
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise UnknownWriteResult("歌单链接写入结果缺少逐条回执，请按 recordID 读回核对")
 
 
 def image_mime(content: bytes) -> str:

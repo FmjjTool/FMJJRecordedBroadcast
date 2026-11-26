@@ -47,6 +47,13 @@ _SOURCE_FILE = "file"
 _SOURCE_PLAYLIST = "playlist"
 
 
+def _writeback_text(receipt) -> str:
+    """回写回执 → 界面/log 用的一行说明。"""
+    from toolbox.tcdoc import event_playlist
+
+    return event_playlist.summary_text(receipt)
+
+
 class MusicPlaylistPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
@@ -515,6 +522,8 @@ class MusicPlaylistPage(BasePage):
             detail += ("\n\n酷狗云歌单需要登录酷狗 App："
                        "请先在「账号与登录 → 登录状态 → 酷狗」点「App扫码」；"
                        "未登录时该平台会提示登录，不影响其他平台写入。")
+        if self.source_box.currentData() == _SOURCE_EVENT:
+            detail += "\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。"
         answer = QMessageBox.question(
             self, "确认写入歌单",
             f"歌单名称：{plans[0].playlist_name}\n\n{detail}\n\n"
@@ -529,6 +538,9 @@ class MusicPlaylistPage(BasePage):
         self.status_label.setText("正在写入平台…")
         self._log("开始写入平台…")
         include_uncertain = self.include_uncertain.isChecked()
+        # 来源是线下活动时，写完平台歌单要回填腾讯文档「活动歌单_*」三列
+        event = (dict(self._event) if self.source_box.currentData() == _SOURCE_EVENT
+                 and self._event else None)
 
         def work():
             results = []
@@ -569,14 +581,27 @@ class MusicPlaylistPage(BasePage):
                 data = result.to_dict()
                 data["platform_name"] = plan.platform_name
                 results.append(data)
-            return results
+
+            writeback = None
+            if event and results:
+                post_to_main(self._log, "正在回写活动歌单链接…")
+                try:
+                    from toolbox.tcdoc import event_playlist
+
+                    writeback = event_playlist.write_results(event, results)
+                    post_to_main(self._log, _writeback_text(writeback))
+                except Exception as exc:  # noqa: BLE001 - 回写失败不影响歌单已创建
+                    writeback = {"ok": False, "items": [],
+                                 "message": f"回写失败：{exc}"}
+                    post_to_main(self._log, f"活动歌单回写失败：{exc}")
+            return results, writeback
 
         run_bg(work, self._on_apply_done, owner=self)
 
     def _on_add_progress(self, platform_name: str, done: int, total: int, message: str):
         self.status_label.setText(f"{platform_name} 写入中 {done}/{total}：{message}")
 
-    def _on_apply_done(self, results, err):
+    def _on_apply_done(self, result, err):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self._set_busy(False)
@@ -584,6 +609,7 @@ class MusicPlaylistPage(BasePage):
             self.status_label.setText(err)
             self._log(f"写入失败：{err}")
             return
+        results, writeback = result
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = self._report_dir / f"result_{stamp}.json"
@@ -593,6 +619,7 @@ class MusicPlaylistPage(BasePage):
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "source": self._source_label,
                 "results": results,
+                "writeback": writeback,
             })
             self._report_paths.append(path)
         except OSError as exc:
@@ -608,6 +635,8 @@ class MusicPlaylistPage(BasePage):
                 f"{name}：已添加 {len(item.get('added') or [])} 首，"
                 f"失败 {len(item.get('failed') or [])} 首，"
                 f"跳过 {len(item.get('skipped') or [])} 首")
+        if writeback is not None:
+            lines.append(_writeback_text(writeback))
         text = "\n".join(lines) or "没有写入任何平台"
         self._log(text)
         self.status_label.setText("写入流程结束")
