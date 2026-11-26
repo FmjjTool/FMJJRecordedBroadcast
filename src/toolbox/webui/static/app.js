@@ -7249,28 +7249,106 @@ function renderLivestreamSummary(root) {
           });
       }
 
+      var qqInput = h('input', {
+        class: 'input grow',
+        placeholder: '粘贴 QQ 群号（需桌面端已登录 QQ 群）或群资料分享链接'
+      });
+      var queryBtn = h('button', { class: 'btn primary', type: 'button' },
+        '查询 / 订阅');
+      var exportBtn = h('button', { class: 'btn', type: 'button' },
+        '导出 Excel');
+      var avatarsBtn = h('button', { class: 'btn', type: 'button' },
+        '下载头像');
+      var qqJobHost = h('div');
+      var qqBusy = false;
+
+      queryBtn.addEventListener('click', function () {
+        if (qqBusy) return;
+        if (!qqInput.value.trim()) {
+          toast('请粘贴群号或分享链接', 'warning');
+          return;
+        }
+        qqBusy = true;
+        queryBtn.disabled = true;
+        queryBtn.textContent = '查询中…';
+        post('/api/tools/fangroups/qq/query', { text: qqInput.value })
+          .then(function (result) {
+            watchJob(qqJobHost, result.job, function (job) {
+              var outcome = job.result || {};
+              toast(outcome.summary || '已查询', 'success');
+              qqInput.value = '';
+              renderFanGroups(root);
+            }, {
+              cancelable: true,
+              onSettled: function (job) {
+                qqBusy = false;
+                queryBtn.disabled = false;
+                queryBtn.textContent = '查询 / 订阅';
+                if (job.status === 'error') {
+                  toast('查询失败：' + (job.error || '未知错误'), 'error');
+                }
+              }
+            });
+          }).catch(function (error) {
+            qqBusy = false;
+            queryBtn.disabled = false;
+            queryBtn.textContent = '查询 / 订阅';
+            toast('查询失败：' + error.message, 'error');
+          });
+      });
+
+      exportBtn.addEventListener('click', function () {
+        exportBtn.disabled = true;
+        downloadPost('/api/tools/fangroups/qq/export', {},
+          'QQ群人数.xlsx').then(function () {
+          toast('已导出 QQ 群人数 Excel', 'success');
+        }).catch(function (error) {
+          toast('导出失败：' + error.message, 'error');
+        }).then(function () { exportBtn.disabled = false; });
+      });
+
+      avatarsBtn.addEventListener('click', function () {
+        if (qqBusy) return;
+        qqBusy = true;
+        avatarsBtn.disabled = true;
+        avatarsBtn.textContent = '下载中…';
+        post('/api/tools/fangroups/qq/avatars', {}).then(function (result) {
+          watchJob(qqJobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            toast(outcome.summary || '头像已下载', 'success');
+            renderFanGroups(root);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              qqBusy = false;
+              avatarsBtn.disabled = false;
+              avatarsBtn.textContent = '下载头像';
+              if (job.status === 'error') {
+                toast('下载失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          qqBusy = false;
+          avatarsBtn.disabled = false;
+          avatarsBtn.textContent = '下载头像';
+          toast('下载失败：' + error.message, 'error');
+        });
+      });
+
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '平台'),
           h('select', { class: 'select' },
             h('option', { value: 'qqgroup' }, 'QQ群')),
-          h('input', {
-            class: 'input grow', disabled: true,
-            placeholder: '粘贴群号或分享链接（订阅在桌面端）'
-          }),
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '查询')),
+          qqInput, queryBtn),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '导出 Excel'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '下载头像'),
+          exportBtn, avatarsBtn,
           h('span', { style: 'flex:1' }), refreshBtn),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '可粘贴群号或群资料分享链接（免登录）；订阅、刷新、导出与头像下载仍在桌面端。')));
+          '分享链接免登录；按群号查询需桌面端已登录 QQ 群。导出为桌面同格式 Excel，'
+          + '头像按群目录保存、已有文件复用。'),
+        qqJobHost));
       root.appendChild(tableHost);
       root.appendChild(historyHost);
       draw();

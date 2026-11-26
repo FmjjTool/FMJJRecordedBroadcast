@@ -214,6 +214,21 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return fangroups.start_query(dict(req.json or {}))
     server.post("/api/fangroups/query", start_fangroups_query)
 
+    def export_qq_groups(req):
+        data = fangroups.qq_export()
+        return AttachmentResponse(data["data"], data["filename"],
+                                  "application/vnd.openxmlformats-officedocument"
+                                  ".spreadsheetml.sheet")
+    server.post("/api/tools/fangroups/qq/export", export_qq_groups)
+
+    def start_qq_query(req):
+        return fangroups.start_qq_query(dict(req.json or {}))
+    server.post("/api/tools/fangroups/qq/query", start_qq_query)
+
+    def start_qq_avatars(req):
+        return fangroups.start_qq_avatars(dict(req.json or {}))
+    server.post("/api/tools/fangroups/qq/avatars", start_qq_avatars)
+
 
     server.get("/api/douyin-index", lambda req: douyin_index.overview())
     server.get("/api/douyin-index/report", lambda req: douyin_index.report(

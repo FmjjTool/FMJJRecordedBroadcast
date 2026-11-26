@@ -139,3 +139,64 @@ def query(payload: dict, on_log=None, is_cancelled=None) -> dict:
                     + ("，已加入定时快照" if subscribed else "")),
         "note": "快照已保存到粉丝群导出目录；查询不会修改群资料。",
     }
+
+
+def qq_export() -> dict:
+    """把当前 QQ 群列表导出为 Excel（与桌面同一份格式），供网页直接下载。"""
+    service = _service()
+    rows = service.catalog()
+    if not rows:
+        raise ValueError("还没有群可导出")
+    path = service.export_rows(rows)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"导出文件读取失败：{exc}") from exc
+    return {"data": data, "filename": path.name}
+
+
+def qq_avatars(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """下载 / 刷新已订阅群头像；已有文件默认复用。"""
+    service = _service()
+    log = on_log or (lambda _msg: None)
+    force = bool(payload.get("force"))
+    log("重新下载全部群头像" if force else "补齐缺失的群头像")
+
+    def progress(index, total, label):
+        if is_cancelled and is_cancelled():
+            return
+        log(f"下载群头像 {index}/{total}：{label}")
+
+    result = service.refresh_avatars(force=force, progress=progress)
+    ok, total, errors = result["ok"], result["total"], result["errors"]
+    summary = f"已下载 {ok}/{total} 个群头像"
+    if errors:
+        summary += f"，失败 {len(errors)} 个"
+    return {"ok": ok, "total": total,
+            "errors": [{"name": name, "error": message}
+                       for name, message in errors][:20],
+            "summary": summary}
+
+
+def qq_query(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """粘贴群号或分享链接：读取群资料、保存快照并订阅（分享链接免登录）。"""
+    service = _service()
+    log = on_log or (lambda _msg: None)
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise ValueError("请粘贴群号或群资料分享链接")
+    if is_cancelled and is_cancelled():
+        raise ValueError("任务已取消")
+    log(f"读取群资料：{text[:60]}")
+    try:
+        row = service.save_link(text, str(payload.get("name") or ""))
+    except Exception as exc:  # noqa: BLE001 - 平台异常类型较多
+        raise ValueError(f"查询失败：{exc}") from exc
+    return {
+        "group_no": row.no,
+        "name": row.name,
+        "members": row.member_count,
+        "change": row.delta_text,
+        "status": row.status,
+        "summary": f"{row.name or row.no}：{row.member_count} 人",
+    }

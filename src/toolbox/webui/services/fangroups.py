@@ -32,3 +32,25 @@ class FanGroupService:
                 dict(payload), on_log=task.log,
                 is_cancelled=lambda: bool(task.cancel_requested)))
         return {"job": job.id}
+
+    def qq_export(self) -> dict:
+        return webui_fangroups.qq_export()
+
+    def start_qq_query(self, payload: dict) -> dict:
+        return self._submit("fangroups_qq_query", dict(payload),
+                            webui_fangroups.qq_query)
+
+    def start_qq_avatars(self, payload: dict) -> dict:
+        return self._submit("fangroups_qq_avatars", dict(payload),
+                            webui_fangroups.qq_avatars)
+
+    def _submit(self, kind: str, payload: dict, handler) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        if not str(payload.get("text") or "").strip() and kind == "fangroups_qq_query":
+            raise ValueError("请粘贴群号或群资料分享链接")
+        job = self.jobs.submit(
+            kind,
+            lambda task: handler(payload, on_log=task.log,
+                                 is_cancelled=lambda: bool(task.cancel_requested)))
+        return {"job": job.id}
