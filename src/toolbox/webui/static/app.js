@@ -5562,6 +5562,42 @@ function renderLivestreamSummary(root) {
           if (!paths.length) return;
           runOp('/api/tools/video/convert', { paths: paths }, '转换');
         });
+        var rotationSel = makeSelect([
+          { value: '0', label: '0°' }, { value: '90', label: '90°' },
+          { value: '180', label: '180°' }, { value: '270', label: '270°' }
+        ], '0');
+        rotationSel.setAttribute('aria-label', '旋转角度');
+        var rotateBtn = h('button', { class: 'btn primary', type: 'button' }, '导出旋转');
+        tabHost.appendChild(h('div', { class: 'toolbar video-rotation-row' },
+          h('span', { class: 'muted small' }, '旋转'), rotationSel,
+          h('span', { class: 'grow' }), rotateBtn));
+        tabHost.appendChild(h('div', { class: 'muted small' },
+          '旋转单独导出为新文件（不转码），保留原标签；MP4 显示矩阵可生效，部分播放器可能忽略 MKV 的旋转信息。'));
+        var syncRotation = function () {
+          rotateBtn.disabled = running || selected.size !== 1;
+          rotationSel.disabled = running || selected.size !== 1;
+        };
+        actionRefreshers.push(syncRotation);
+        syncRotation();
+        rotateBtn.addEventListener('click', function () {
+          var paths = selectedPaths();
+          if (paths.length !== 1 || running) return;
+          var path = paths[0];
+          var rotation = Number(rotationSel.value);
+          running = true;
+          updateButtons();
+          api('/api/tools/video/metadata?path=' + encodeURIComponent(path))
+            .then(function (data) {
+              running = false;
+              runOp('/api/tools/video/metadata/write', {
+                path: path, tags: data.tags || {}, rotation: rotation
+              }, '旋转');
+            }).catch(function (error) {
+              running = false;
+              updateButtons();
+              toast('读取原标签失败：' + error.message + '，请重试', 'error');
+            });
+        });
       }
 
       function renderCompressPanel() {
@@ -5600,13 +5636,14 @@ function renderLivestreamSummary(root) {
           return { value: value, label: value };
         }), '.mp4');
         var name = h('input', {
-          class: 'input grow', placeholder: '留空自动命名 合并_日期_时间'
+          class: 'input grow', placeholder: '合并文件名，留空自动命名',
+          'aria-label': '合并文件名', title: '合并文件名，留空自动命名 合并_日期_时间'
         });
         var btn = h('button', { class: 'btn primary', type: 'button' }, '合并选中视频');
         tabHost.appendChild(h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '方式'), mode,
           h('span', { class: 'muted small' }, '格式'), ext,
-          h('span', { class: 'muted small' }, '文件名'), name,
+          name,
           h('span', { style: 'flex:1' }), btn));
         tabHost.appendChild(h('div', { class: 'muted small' },
           '勾选 2 个以上视频，按上方表格当前排序顺序合并（可点表头调整顺序）；输出到工作目录根，不覆盖已有文件。'));
@@ -5672,14 +5709,18 @@ function renderLivestreamSummary(root) {
         var exportSel = makeSelect(overview.cut_exports || [], 'each');
         var modeSel = makeSelect(overview.cut_modes || [], 'copy');
         var nameInput = h('input', {
-          class: 'input grow', placeholder: '合并文件名，留空自动命名'
+          class: 'input grow', placeholder: '合并文件名，留空自动命名',
+          'aria-label': '切割合并文件名', title: '切割合并文件名，留空自动命名'
         });
         var nameRow = h('div', { class: 'toolbar', style: 'display:none' },
-          h('span', { class: 'muted small' }, '文件名'), nameInput);
+          nameInput);
         var segments = h('textarea', {
-          class: 'textarea', rows: '4',
+          class: 'textarea', rows: '4', value: currentCutDraft().text,
+          'aria-label': '切割片段',
           placeholder: '每行一个片段：开始-结束，例如\n00:10-01:20\n01:45-02:30'
         });
+        var segmentList = h('div', { class: 'video-segment-list' });
+        var segmentError = h('div', { class: 'video-segment-error small', role: 'status' });
         var btn = h('button', { class: 'btn primary', type: 'button' }, '切割选中视频');
         var chapterBtn = h('button', { class: 'btn', type: 'button' }, '写入章节');
         var detectKind = makeSelect([
@@ -5725,7 +5766,9 @@ function renderLivestreamSummary(root) {
           h('span', { class: 'muted small' }, '秒'), detBtn,
           fillBtn, clearBtn));
         tabHost.appendChild(detInfo);
+        tabHost.appendChild(segmentList);
         tabHost.appendChild(segments);
+        tabHost.appendChild(segmentError);
         tabHost.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
           h('span', { class: 'muted small' }, '片段清单'),
           expCsvBtn, expEdlBtn, expChapBtn, impCsvBtn, csvInput));
@@ -5749,14 +5792,46 @@ function renderLivestreamSummary(root) {
         detMin.disabled = detectKind.value === 'scene';
 
         function msClock(ms) {
-          var total = Math.max(0, Math.round(ms / 100) / 10);
-          var hours = Math.floor(total / 3600);
-          var minutes = Math.floor((total % 3600) / 60);
-          var seconds = (total % 60).toFixed(1);
-          return (hours < 10 ? '0' : '') + hours + ':'
-            + (minutes < 10 ? '0' : '') + minutes + ':'
-            + (Number(seconds) < 10 ? '0' : '') + seconds;
+          return videoClock(ms);
         }
+
+        function refreshCutEditor() {
+          var draft = currentCutDraft();
+          if (segments.value !== draft.text) segments.value = draft.text;
+          segments.disabled = running || selected.size !== 1;
+          segmentList.replaceChildren();
+          segmentError.textContent = '';
+          var rows = [];
+          if (draft.text.trim()) {
+            try { rows = parseSegments(draft.text); }
+            catch (error) { segmentError.textContent = error.message; }
+          }
+          rows.forEach(function (row, index) {
+            var select = h('button', {
+              class: 'btn mini video-segment' + (index === draft.selected ? ' active' : ''),
+              type: 'button', disabled: running,
+              'aria-pressed': index === draft.selected ? 'true' : 'false',
+              title: '单击选中片段，双击定位到开始'
+            }, String(index + 1) + '. ' + videoClock(row[0]) + '–' + videoClock(row[1]));
+            select.addEventListener('click', function () {
+              draft.selected = index;
+              refreshCutDraft();
+            });
+            select.addEventListener('dblclick', function () {
+              seek.value = row[0];
+              previewVideo.currentTime = row[0] / 1000;
+              refreshMarkers();
+            });
+            segmentList.appendChild(select);
+          });
+        }
+        cutEditorRefresh = refreshCutEditor;
+        segments.addEventListener('input', function () {
+          var draft = currentCutDraft();
+          draft.text = segments.value;
+          draft.selected = -1;
+          refreshCutDraft();
+        });
 
         function resetDetect() {
           detectPoints = [];
@@ -5782,6 +5857,7 @@ function renderLivestreamSummary(root) {
           btn.textContent = running ? '处理中…' : '切割选中视频';
           chapterBtn.textContent = running ? '处理中…' : '写入章节';
           detBtn.textContent = running ? '处理中…' : '检测';
+          refreshCutEditor();
         };
         actionRefreshers.push(sync);
         sync();
@@ -5872,7 +5948,11 @@ function renderLivestreamSummary(root) {
             toast('切点间隔太短，未生成片段', 'warning');
             return;
           }
-          segments.value = rows.join('\n');
+          var draft = currentCutDraft();
+          draft.text = rows.join('\n');
+          draft.pendingStart = null;
+          draft.selected = rows.length ? 0 : -1;
+          refreshCutDraft();
           toast('已按切点填入 ' + rows.length + ' 个片段', 'success');
         });
         clearBtn.addEventListener('click', function () {
@@ -5933,7 +6013,11 @@ function renderLivestreamSummary(root) {
           file.text().then(function (text) {
             return post('/api/tools/video/segments/import', { csv: text });
           }).then(function (data) {
-            segments.value = data.text || '';
+            var draft = currentCutDraft();
+            draft.text = data.text || '';
+            draft.pendingStart = null;
+            draft.selected = data.count ? 0 : -1;
+            refreshCutDraft();
             toast('已导入 ' + data.count + ' 个片段', 'success');
           }).catch(function (error) {
             toast('导入失败：' + error.message, 'error');

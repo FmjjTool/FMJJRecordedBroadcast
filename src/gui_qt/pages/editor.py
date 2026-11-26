@@ -867,7 +867,6 @@ class EditorPage(BasePage):
         self.segments = []
         self.detect_points = []
         self.points_list.clear()
-        self._refresh_segments()
         if row < 0 or row >= len(self.files):
             self.current_path = None
             self._duration_ms = 0
@@ -875,6 +874,7 @@ class EditorPage(BasePage):
             self.player.setSource(QUrl())
             self.slider.setRange(0, 0)
             self._update_time_label(0)
+            self._refresh_segments()
             self.play_btn.setText("▶ 播放")
             self.file_label.setText("未选择文件")
             self.track_table.setRowCount(0)
@@ -886,6 +886,7 @@ class EditorPage(BasePage):
             return
         self.current_path = self.files[row]
         self.file_label.setText(self.current_path)
+        self._refresh_segments()
         self._load_preview(self.current_path)
         self._refresh_tracks()
         self._refresh_meta()
