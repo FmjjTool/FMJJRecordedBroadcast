@@ -1,7 +1,9 @@
-"""证书历史记录（L4 存储）：只保留字段数据，不保存图片。
+"""证书历史记录（L4 存储）：字段数据及可选附件引用的唯一写入方。
 
 需求：历史生成过的证书要能回填数据，但图片只属于当次作品，不随历史保存。
-因此每条记录只存 `CertificateData.to_dict()`，页面重新打开时图片列表为空。
+字段存 `CertificateData.to_dict()`，页面重新打开时不从历史恢复当前图片列表。
+可选 evidence v1 只记录当次导出产物的路径、大小、哈希和捕获时间，不复制文件；
+导出证据包前必须重新核验。旧记录只读兼容，不做自动迁移；本模块不导出加密包。
 
 存储位置：配置目录下 `certificate_history.json`，按认证号 / 证书编号去重，
 最新的排在最前，最多保留 `MAX_RECORDS` 条。
@@ -9,7 +11,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -85,8 +89,12 @@ def _same_certificate(record: dict[str, Any], data: engine.CertificateData) -> b
     return bool(archive_no) and str(record.get("archive_no") or "").strip() == archive_no
 
 
-def save_record(data: engine.CertificateData, path: Path | None = None) -> dict[str, Any]:
-    """新增或更新（同认证号视为同一张证书）一条记录，返回该记录。"""
+def save_record(data: engine.CertificateData, path: Path | None = None, *,
+                evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    """保存字段及可选 evidence v1；同字段合并引用，字段变化不沿用旧附件。"""
+    if evidence is not None and (not isinstance(evidence, dict)
+            or evidence.get("version") != 1 or not isinstance(evidence.get("files"), list)):
+        raise ValueError("证书附件引用格式无效")
     records = _read(path)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = {
@@ -101,13 +109,35 @@ def save_record(data: engine.CertificateData, path: Path | None = None) -> dict[
     }
     for record in records:
         if _same_certificate(record, data):
+            previous_revision = int(record.get("revision") or 1)
+            unchanged = record.get("data") == payload["data"]
+            previous = record.get("evidence") if unchanged else None
             record.update(payload)
             record["id"] = str(record.get("id") or uuid.uuid4().hex[:12])
-            record["revision"] = int(record.get("revision") or 1) + 1
+            record["revision"] = previous_revision + 1
+            if evidence is not None:
+                merged = copy.deepcopy(evidence)
+                refs = {}
+                for ref in ((previous or {}).get("files") or []) + merged["files"]:
+                    if isinstance(ref, dict) and isinstance(ref.get("path"), str):
+                        refs[os.path.normcase(os.path.normpath(ref["path"]))] = copy.deepcopy(ref)
+                merged["files"] = list(refs.values())
+                merged["revision"] = record["revision"]
+                record["evidence"] = merged
+                record.pop("evidence_previous_revision", None)
+            elif unchanged and isinstance(previous, dict):
+                record["evidence"] = copy.deepcopy(previous)
+                record["evidence"]["revision"] = record["revision"]
+            else:
+                if record.pop("evidence", None) is not None:
+                    record["evidence_previous_revision"] = previous_revision
             _write(records, path)
             return record
     payload["id"] = uuid.uuid4().hex[:12]
     payload["revision"] = 1
+    if evidence is not None:
+        payload["evidence"] = copy.deepcopy(evidence)
+        payload["evidence"]["revision"] = 1
     records.insert(0, payload)
     _write(records, path)
     return payload

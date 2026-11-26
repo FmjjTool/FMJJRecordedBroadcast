@@ -447,6 +447,7 @@ _SOURCES_JS = r"""({selectors, max, position}) => {
             if (!lazy && width <= 2 && height <= 2) continue;
             if (!explicit && ((width <= 64 && height <= 64) || (rect.width <= 64 && rect.height <= 64))) continue;
             if (/\.(?:docx?|xlsx?|pptx?|pdf|zip|rar|7z)(?:\s|$)/i.test(element.alt || '')) continue;
+            try { src = new URL(src, location.href).href; } catch (_) { continue; }
             items.push({src: src.length <= 28000000 ? src : 'unsupported:large', node, classification: 'body-image-v2'});
             continue;
         }

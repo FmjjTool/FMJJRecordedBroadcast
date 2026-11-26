@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer, QUrl
@@ -24,16 +25,16 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMenu,
-    QMessageBox, QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSplitter,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QScrollArea, QSplitter,
     QTabWidget, QVBoxLayout, QWidget,
 )
 from PIL import Image as PILImage
 
 from gui_qt import theme
-from gui_qt.common import run_bg
+from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
 from toolbox import certificate_engine as engine
-from toolbox import certificate_history
+from toolbox import certificate_evidence, certificate_history
 from toolbox.config_manager import get_config_dir, get_export_dir
 
 _CONFIG_SECTION = "certificate_maker"
@@ -211,6 +212,86 @@ class TextPasteDialog(QDialog):
 
     def text(self) -> str:
         return self.editor.toPlainText()
+
+
+class EvidenceExportDialog(QDialog):
+    """一次性证据导出口令与补充材料，不保存口令或更改历史。"""
+
+    def __init__(self, record: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("加密导出证据")
+        self.resize(720, 520)
+        self.setMinimumSize(420, 300)
+        self.extra_files: list[str] = []
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        label = QLabel(f"{record.get('title') or '未命名作品'}\n"
+                       f"{record.get('archive_no') or '未编号'} · 修订 {record.get('revision') or 1}")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        layout.addWidget(_hint("导出所选记录的字段、可用文件和校验清单。旧记录未留存的材料会标为缺失；"
+                               "本次补选材料会单独注明来源，不使用当前表单中的图片。"))
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_edit.setMaxLength(128)
+        self.password_edit.setPlaceholderText("设置导出密码（12–128 位）")
+        self.confirm_edit = QLineEdit()
+        self.confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_edit.setMaxLength(128)
+        self.confirm_edit.setPlaceholderText("再次输入导出密码")
+        layout.addWidget(QLabel("导出密码"))
+        layout.addWidget(self.password_edit)
+        layout.addWidget(QLabel("确认密码"))
+        layout.addWidget(self.confirm_edit)
+        self.validation_label = _hint("请妥善保管密码；软件不保存，也无法找回。")
+        layout.addWidget(self.validation_label)
+        self.files_label = _hint("未补选材料")
+        layout.addWidget(self.files_label)
+        actions = QHBoxLayout()
+        add_btn = QPushButton("补充材料")
+        add_btn.clicked.connect(self._pick_files)
+        actions.addWidget(add_btn)
+        clear_btn = QPushButton("清除补选")
+        clear_btn.clicked.connect(self._clear_files)
+        actions.addWidget(clear_btn)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        layout.addWidget(_hint("文件内容使用 AES-256 ZIP 加密；包内只显示通用文件名。"
+                               "支持 PDF、Word、表格、常见图片及文本，总计不超过 64 MiB。"))
+        layout.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel
+                                   | QDialogButtonBox.StandardButton.Save)
+        self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        self.save_button.setText("加密导出")
+        self.save_button.setProperty("variant", "primary")
+        self.save_button.setEnabled(False)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.password_edit.textChanged.connect(self._validate)
+        self.confirm_edit.textChanged.connect(self._validate)
+
+    def _validate(self):
+        password = self.password_edit.text()
+        valid = 12 <= len(password) <= 128 and bool(password.strip())
+        matched = password == self.confirm_edit.text()
+        self.save_button.setEnabled(valid and matched)
+        self.validation_label.setText(
+            "请妥善保管密码；软件不保存，也无法找回。" if valid and matched else
+            "密码需为 12–128 位且不能全为空格" if not valid else "两次输入的密码不一致")
+
+    def _pick_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "补充证据材料", "",
+            "证据材料 (*.pdf *.docx *.xlsx *.png *.jpg *.jpeg *.webp *.gif *.bmp *.tif *.tiff *.txt *.md)")
+        self.extra_files = list(dict.fromkeys(self.extra_files + paths))
+        self.files_label.setText(f"已补选 {len(self.extra_files)} 个文件，标记为本次补充")
+        self.files_label.setToolTip("\n".join(Path(path).name for path in self.extra_files))
+
+    def _clear_files(self):
+        self.extra_files.clear()
+        self.files_label.setText("未补选材料")
+        self.files_label.setToolTip("")
 
 
 class CertificateMakerPage(BasePage):
@@ -755,8 +836,17 @@ class CertificateMakerPage(BasePage):
         clear_btn.clicked.connect(self._on_history_clear)
         row.addWidget(clear_btn)
         row.addStretch(1)
+        self.history_export_btn = QPushButton("加密导出")
+        self.history_export_btn.setToolTip("将所选证书记录与可用证据文件导出为密码加密 ZIP")
+        self.history_export_btn.clicked.connect(self._on_history_export)
+        row.addWidget(self.history_export_btn)
         layout.addLayout(row)
+        self.evidence_progress = QProgressBar()
+        self.evidence_progress.setRange(0, 100)
+        self.evidence_progress.hide()
+        layout.addWidget(self.evidence_progress)
         layout.addWidget(_hint("历史只保存字段数据，不保存图片；同一认证号重复生成会合并为一条。"
+                               "加密导出可包含已关联产物或本次补充材料；旧记录可能仅含字段。"
                                "右键记录可删除，并选择保留或作废该序号。"))
         return body
 
@@ -1516,6 +1606,73 @@ class CertificateMakerPage(BasePage):
             return
         self._delete_history_record(record)
 
+    def _on_history_export(self) -> None:
+        active = getattr(self, "_evidence_cancel", None)
+        if active is not None:
+            active.set()
+            self.history_export_btn.setEnabled(False)
+            self.history_export_btn.setText("正在取消")
+            return
+        record = self._current_record()
+        if record is None:
+            self.app.toast("先选中一条证书记录", "warning")
+            return
+        dialog = EvidenceExportDialog(record, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            dialog.password_edit.clear()
+            dialog.confirm_edit.clear()
+            return
+        password = dialog.password_edit.text()
+        extras = tuple(dialog.extra_files)
+        dialog.password_edit.clear()
+        dialog.confirm_edit.clear()
+        target, _ = QFileDialog.getSaveFileName(
+            self, "保存加密证据包", str(self._out_dir / "certificate-evidence.zip"),
+            "加密 ZIP (*.zip)", options=QFileDialog.Option.DontConfirmOverwrite)
+        if not target:
+            return
+        if not target.lower().endswith(".zip"):
+            target += ".zip"
+        if Path(target).exists():
+            self.app.toast("同名文件已存在，请使用新的文件名", "warning")
+            return
+        record_id = str(record["id"])
+        output_root = self._out_dir
+        cancel = threading.Event()
+        self._evidence_cancel = cancel
+        self.history_export_btn.setText("取消导出")
+        self.evidence_progress.setValue(0)
+        self.evidence_progress.show()
+
+        def progress(done, total):
+            post_to_main(self.evidence_progress.setValue,
+                         min(100, int(done / total * 100)) if total else 0)
+
+        def work():
+            return certificate_evidence.export_bundle(
+                record_id, password, target, output_root=output_root,
+                extra_files=extras, is_cancelled=cancel.is_set, on_progress=progress)
+
+        def done(result, error):
+            self._evidence_cancel = None
+            self.history_export_btn.setText("加密导出")
+            self.history_export_btn.setEnabled(True)
+            self.evidence_progress.hide()
+            if error:
+                self.app.toast("已取消证据导出" if cancel.is_set() else f"证据导出失败：{error}",
+                               "info" if cancel.is_set() else "error")
+                return
+            warnings = result.get("warnings") or []
+            if warnings:
+                QMessageBox.information(
+                    self, "证据包已导出",
+                    f"已导出 {result.get('file_count', 0)} 个材料文件及记录快照。\n\n"
+                    + "\n".join(warnings) + "\n\n请保管好导出密码。")
+            else:
+                self.app.toast("加密证据包已导出", "success")
+
+        run_bg(work, done, owner=self)
+
     def _on_history_menu(self, pos) -> None:
         """历史列表右键：载入 / 删除并保留序号 / 删除并作废序号。"""
         item = self.history_list.itemAt(pos)
@@ -1673,13 +1830,20 @@ class CertificateMakerPage(BasePage):
         self.app.toast("正在生成证书…")
 
         def work():
-            return engine.export_certificate(data, images, out_dir)
+            result = engine.export_certificate(data, images, out_dir)
+            paths = list(result.png_paths) + [result.pdf_path] + list(result.watermarked_paths)
+            try:
+                evidence = certificate_evidence.capture_evidence(paths)
+            except (OSError, ValueError):
+                evidence = None
+            return result, evidence
 
         def done(result, error):
             self.export_btn.setEnabled(True)
             if error or result is None:
                 self.app.toast(f"生成失败：{error}", "error")
                 return
+            result, evidence = result
             folder = Path(result.folder_path or out_dir)
             self.app.toast(
                 f"已生成 {result.page_count} 页 PNG + PDF，并打包 zip"
@@ -1687,7 +1851,7 @@ class CertificateMakerPage(BasePage):
                    if result.watermarked_paths else "")
             )
             try:
-                certificate_history.save_record(data)
+                certificate_history.save_record(data, evidence=evidence)
             except OSError:
                 pass
             self._refresh_history()
@@ -1720,10 +1884,13 @@ class CertificateMakerPage(BasePage):
         try:
             self._out_dir.mkdir(parents=True, exist_ok=True)
             path = engine.export_docx(data, self._out_dir)
+            evidence = certificate_evidence.capture_evidence([path])
+            certificate_history.save_record(data, evidence=evidence)
         except Exception as exc:  # noqa: BLE001 - 导出失败直接提示
             self.app.toast(f"导出 Word 失败：{exc}", "error")
             return
         self.app.toast(f"已导出 Word 到证书文件夹：{Path(path).name}", "success")
+        self._refresh_history()
         self._save_config()
     def _on_export_docx_sample(self) -> None:
         """导出授权协议样本 Word：内置示意内容，单独一个 .docx 便于转发。"""
