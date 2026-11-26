@@ -1,4 +1,4 @@
-"""B站资源 · 聚合页：5 个功能 tab 平铺（表情包 / 直播表情 / 装扮收藏集 / 收藏集 / 空间）。
+"""B站资源 · 聚合页：5 个功能 tab 平铺（表情包 / 直播表情 / 装扮与收藏集 / 收藏集活动 / 用户空间）。
 
 三个子页实例只作为逻辑宿主（控件属性与网络回调挂在其上），内层 tab
 被平铺提升到本页顶部一级；搜索、按 ID 详情、装扮表情包等重合功能已在
@@ -18,9 +18,9 @@ from gui_qt.pages.bili_info import BiliInfoPage
 _FLAT = [
     ("emoji", 0, "表情包"),
     ("emoji", 1, "直播表情"),
-    ("garb", 0, "装扮 / 收藏集"),
+    ("garb", 0, "装扮与收藏集"),
     ("garb", 1, "收藏集活动"),
-    ("info", 0, "空间"),
+    ("info", 0, "用户空间"),
 ]
 
 
@@ -39,7 +39,7 @@ class BiliResourcePage(BasePage):
         self.info_page = BiliInfoPage(app)
         subs = {"emoji": self.emoji_page, "garb": self.garb_page, "info": self.info_page}
         for sub in subs.values():
-            # 子页需要切回本页的「收藏集」tab，嵌入 tab 容器后 app.pages 里没有本页，
+            # 子页需要切回本页的「收藏集活动」tab，嵌入 tab 容器后 app.pages 里没有本页，
             # 因此保留一个宿主引用供子页回跳。
             sub._resource_host = self
         widgets = {}
@@ -61,7 +61,7 @@ class BiliResourcePage(BasePage):
             sub._tab_map = tab_map[key]
 
     def show_garb(self, act_id: str):
-        """表情包 tab 命中收藏集 ID 时切到「收藏集」tab 并加载活动。"""
+        """表情包 tab 命中收藏集 ID 时切到「收藏集活动」tab 并加载活动。"""
         self.garb_page.open_act(act_id)
 
     def on_hide(self):

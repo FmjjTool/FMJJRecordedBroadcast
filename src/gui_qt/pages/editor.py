@@ -54,7 +54,7 @@ from toolbox.edit_engine import (
 from toolbox.utils import format_size, is_video_file
 
 from gui_qt import table_sort, theme
-from gui_qt.common import post_to_main, run_bg
+from gui_qt.common import FlowLayout, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 
@@ -85,17 +85,23 @@ def _fmt_ms(ms: int) -> str:
 class _OptionGrid(QWidget):
     """参数组按可用宽度切换网格列数，窄窗口只纵向滚动。"""
 
-    def __init__(self, widgets, columns=2, cell_width=210):
+    def __init__(self, widgets, columns=2, cell_width=210, *, compact=False):
         super().__init__()
         self._widgets = widgets
+        self._compact = compact
         self._max_columns = columns
         self._cell_width = cell_width
         self._columns = 0
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        if compact:
+            self._grid = FlowLayout(self, spacing=8, center_items=True)
+            for widget in widgets:
+                self._grid.addWidget(widget)
+            return
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(8)
         self._grid.setSizeConstraint(QLayout.SetNoConstraint)
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._arrange(1)
 
     def minimumSizeHint(self):  # noqa: N802
@@ -103,6 +109,8 @@ class _OptionGrid(QWidget):
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
+        if self._compact:
+            return
         cell = max(self._cell_width,
                    max((w.minimumSizeHint().width() for w in self._widgets), default=0))
         self._arrange(min(self._max_columns, max(1, (self.width() + 8) // (cell + 8))))
@@ -605,13 +613,15 @@ class EditorPage(BasePage):
     @staticmethod
     def _field(label, control):
         group = QWidget()
+        group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row = QHBoxLayout(group)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         text = QLabel(label)
         text.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         row.addWidget(text)
-        row.addWidget(control, 1)
+        control.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        row.addWidget(control)
         control.setAccessibleName(label.rstrip(":"))
         return group
 
@@ -1075,7 +1085,7 @@ class EditorPage(BasePage):
             checkbox.toggled.connect(lambda checked, k=key: self._save(**{k: checked}))
             self.convert_options[key] = checkbox
         self.convert_options["delete_source_after_success"].setToolTip("转换成功后删除原始视频。")
-        v.addWidget(_OptionGrid(list(self.convert_options.values()), columns=3, cell_width=130))
+        v.addWidget(_OptionGrid(list(self.convert_options.values()), compact=True))
         self.convert_hint = QLabel()
         self.convert_hint.setWordWrap(True)
         self.convert_hint.setMinimumWidth(0)
@@ -1088,7 +1098,7 @@ class EditorPage(BasePage):
         self.rotate_btn = self._btn("导出旋转", self._write_rotation, small=True)
         self.rotate_btn.setToolTip("只旋转当前视频，独立导出新文件；不修改画质与已有元数据")
         v.addWidget(_OptionGrid([
-            self._field("旋转:", self.meta_rotation), self.rotate_btn], columns=2))
+            self._field("旋转:", self.meta_rotation), self.rotate_btn], compact=True))
         rotation_hint = QLabel("旋转仅处理当前视频的显示方向，不参与批量转换；MP4 支持显示矩阵，MKV 可能忽略。")
         rotation_hint.setWordWrap(True)
         rotation_hint.setProperty("role", "caption")
@@ -1294,7 +1304,7 @@ class EditorPage(BasePage):
         self.merge_ext.setCurrentText(cfg.get("merge_out_ext", ".mp4"))
         self.merge_ext.currentTextChanged.connect(lambda t: self._save(merge_out_ext=t))
         v.addWidget(_OptionGrid([
-            self._field("合并方式:", self.merge_mode), self._field("输出:", self.merge_ext)]))
+            self._field("合并方式:", self.merge_mode), self._field("输出:", self.merge_ext)], compact=True))
 
         name_row = QHBoxLayout()
         self.merge_name = QLineEdit()
@@ -1335,7 +1345,7 @@ class EditorPage(BasePage):
         self.cut_mode.currentIndexChanged.connect(
             lambda _i: self._save(editor_cut_mode=self.cut_mode.currentData()))
         v.addWidget(_OptionGrid([
-            self._field("导出方式:", self.cut_export), self._field("切割方式:", self.cut_mode)]))
+            self._field("导出方式:", self.cut_export), self._field("切割方式:", self.cut_mode)], compact=True))
 
         row2 = QHBoxLayout()
         self.cut_name = QLineEdit()
@@ -1376,7 +1386,7 @@ class EditorPage(BasePage):
         self.det_min.setSuffix(" 秒")
         v.addWidget(_OptionGrid([
             self._field("自动检测:", self.det_type), self._field("阈值:", self.det_thresh),
-            self._field("最短:", self.det_min)]))
+            self._field("最短:", self.det_min)], compact=True))
         v.addWidget(_OptionGrid([
             self._btn("清空切点", self._clear_points, small=True),
             self._btn("生成片段", self._segments_from_points, small=True),
@@ -1413,7 +1423,7 @@ class EditorPage(BasePage):
         self.cmp_res.setCurrentText(cfg.get("editor_compress_res", "保持原始"))
         self.cmp_res.currentTextChanged.connect(lambda t: self._save(editor_compress_res=t))
         v.addWidget(_OptionGrid([
-            self._field("预设:", self.cmp_preset), self._field("分辨率:", self.cmp_res)]))
+            self._field("预设:", self.cmp_preset), self._field("分辨率:", self.cmp_res)], compact=True))
         self.cmp_clean = QCheckBox("清除元数据")
         self.cmp_clean.setChecked(bool(cfg.get("editor_compress_clean", True)))
         self.cmp_clean.toggled.connect(lambda c: self._save(editor_compress_clean=c))
@@ -1540,7 +1550,7 @@ class EditorPage(BasePage):
             lambda val: self._save(editor_shot_interval=val))
         self.shot_interval.setSuffix(" 秒")
         v.addWidget(_OptionGrid([
-            self._field("帧格式:", self.shot_fmt), self._field("抽帧间隔:", self.shot_interval)]))
+            self._field("帧格式:", self.shot_fmt), self._field("抽帧间隔:", self.shot_interval)], compact=True))
         self.shot_copy_cb = QCheckBox("截图后自动复制")
         self.shot_copy_cb.setChecked(bool(cfg.get("editor_shot_copy", True)))
         self.shot_copy_cb.setToolTip("截完图顺手进剪贴板，可直接粘到微信 / PS / PR")

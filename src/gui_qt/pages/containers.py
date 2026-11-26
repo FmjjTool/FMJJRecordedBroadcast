@@ -170,7 +170,7 @@ class TabbedPage(BasePage):
 class InfoToolsPage(TabbedPage):
     """信息工具：原侧栏独立信息页合并为一个页签容器。
 
-    页签：视频评论区 / B站资源 / 公众号解析 / 抖音表情包。
+    页签：视频评论 / B站资源 / 公众号文章 / 抖音表情。
     """
 
     TAB_KEYS = [

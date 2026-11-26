@@ -392,7 +392,7 @@ class BiliGarbPage(BasePage):
                 return
             if result["acts"]:  # 命中收藏集 → 自动跳转
                 iid, t = result["acts"][0]
-                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」（装扮接口无数据），已自动跳「收藏集」tab")
+                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」（装扮接口无数据），已自动跳「收藏集活动」tab")
                 self.open_act(iid)
                 return
             self._current = result

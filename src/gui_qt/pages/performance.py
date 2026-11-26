@@ -130,8 +130,8 @@ class PerformancePage(BasePage):
         self.memory_table = self._table(("分配位置", "当前 KB", "块数"))
         self.growth_table = self._table(("相对上次快照的新增位置", "新增 KB", "新增块数"))
         self.child_table = self._table(("子进程", "PID", "工作集 MB", "私有提交 MB"))
-        for table, label in ((self.sample_table, "采样"), (self.page_table, "页面控件"),
-                             (self.event_table, "页面 / 任务耗时"), (self.memory_table, "Python 分配"),
+        for table, label in ((self.sample_table, "采样记录"), (self.page_table, "页面控件"),
+                             (self.event_table, "耗时明细"), (self.memory_table, "Python 分配"),
                              (self.growth_table, "分配增长"), (self.child_table, "子进程")):
             self.tabs.addTab(table, label)
         layout.addWidget(self.tabs, 1)

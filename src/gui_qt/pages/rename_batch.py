@@ -1,7 +1,7 @@
 """实用工具 · 批量重命名页（zRenamer 风格）：8 标签规则 + 时间修改 + 双列预览 + 撤销。
 
-标签：整体 / 替换 / 添加 / 删除 / 序号 / 模板 / 文本模式 / 选项 / 时间修改
-规则叠加生效：所有规则标签按 整体→替换→添加→删除→序号→模板 顺序依次应用到文件名，
+标签：整体规则 / 文本替换 / 文本添加 / 文本删除 / 序号规则 / 命名模板 / 逐行命名 / 处理选项 / 时间修改
+规则叠加生效：所有规则标签按 整体规则→文本替换→文本添加→文本删除→序号规则→命名模板 顺序依次应用到文件名，
 最后统一预览（原文件名 → 新文件名），确认后执行；自动记录改名历史支持一键撤销。
 最后的「时间修改」标签内嵌文件时间修改页，与改名规则互不影响。
 """
@@ -106,7 +106,7 @@ class RenameBatchPage(BasePage):
         h.addWidget(add_file_btn)
 
         add_dir_btn = self._icon_button("添加文件夹", "folder")
-        add_dir_btn.setToolTip("把文件夹内的文件加入列表（是否含子文件夹由「选项」页签决定）")
+        add_dir_btn.setToolTip("把文件夹内的文件加入列表（是否含子文件夹由「处理选项」页签决定）")
         add_dir_btn.clicked.connect(lambda: self._add(True))
         h.addWidget(add_dir_btn)
 
@@ -139,14 +139,14 @@ class RenameBatchPage(BasePage):
 
         # 规则标签（高度跟随当前标签页，短表单不再被「时间修改」撑高留白）
         self.tabs = AutoFitTabWidget(card)
-        self.tabs.addTab(self._tab_whole(), "整体")
-        self.tabs.addTab(self._tab_replace(), "替换")
-        self.tabs.addTab(self._tab_add(), "添加")
-        self.tabs.addTab(self._tab_del(), "删除")
-        self.tabs.addTab(self._tab_num(), "序号")
-        self.tabs.addTab(self._tab_template(), "模板")
-        self.tabs.addTab(self._tab_textmode(), "文本模式")
-        self.tabs.addTab(self._tab_options(), "选项")
+        self.tabs.addTab(self._tab_whole(), "整体规则")
+        self.tabs.addTab(self._tab_replace(), "文本替换")
+        self.tabs.addTab(self._tab_add(), "文本添加")
+        self.tabs.addTab(self._tab_del(), "文本删除")
+        self.tabs.addTab(self._tab_num(), "序号规则")
+        self.tabs.addTab(self._tab_template(), "命名模板")
+        self.tabs.addTab(self._tab_textmode(), "逐行命名")
+        self.tabs.addTab(self._tab_options(), "处理选项")
         self.tabs.addTab(FileTimePage(self.app), "时间修改")
         v.addWidget(self.tabs)
         return card
@@ -663,7 +663,7 @@ class RenameBatchPage(BasePage):
             except OSError:
                 size_txt = "?"
             self.table.setItem(i, 5, QTableWidgetItem(size_txt))
-        # 排序只改显示顺序（不动 self.files，序号/文本模式顺序保持不变）
+        # 排序只改显示顺序（不动 self.files，序号规则/逐行命名顺序保持不变）
         self._sorter.attach(shown).apply()
         self._shown = shown
         n_changed = sum(1 for x in items if x.get("new") and x["new"] != os.path.basename(x["path"]))
@@ -697,7 +697,7 @@ class RenameBatchPage(BasePage):
                 stem, ext = split_name(os.path.basename(p), True)
                 self.files.append({"path": p, "stem": stem, "ext": ext, "new": None, "status": ""})
         self._collect()
-        # 文本模式带入当前预览
+        # 逐行命名带入当前预览
         self._fill_textmode()
 
     def _fill_textmode(self):

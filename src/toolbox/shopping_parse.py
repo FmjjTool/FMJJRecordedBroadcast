@@ -12,6 +12,7 @@ SHOPPING_PLATFORM_OPTIONS = (
     ("taobao", "淘宝"),
     ("douyin", "抖音商城"),
     ("bili", "B站小店"),
+    ("xianyu", "闲鱼"),
 )
 PLATFORM_LABELS = dict(SHOPPING_PLATFORM_OPTIONS)
 
@@ -25,6 +26,7 @@ _BILI_RE = re.compile(
 )
 _BILI_UID_RE = re.compile(r"^\d{3,}$")
 _TAOBAO_RE = re.compile(r"(?:taobao\.com|tmall\.com|tb\.cn)", re.I)
+_XIANYU_RE = re.compile(r"https?://(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?://2\.taobao\.com/item", re.I)
 
 
 def normalize_shopping_platforms(platforms=None) -> tuple[str, ...]:
@@ -37,13 +39,15 @@ def normalize_shopping_platforms(platforms=None) -> tuple[str, ...]:
         raise ValueError("请至少勾选一个平台")
     if any(not isinstance(key, str) or key not in PLATFORM_LABELS
            for key in platforms):
-        raise ValueError("平台范围只支持淘宝 / 抖音商城 / B站小店")
+        raise ValueError("平台范围只支持淘宝 / 抖音商城 / B站小店 / 闲鱼")
     return tuple(key for key in PLATFORM_LABELS if key in platforms)
 
 
 def detect_platform(line: str) -> str:
     """按链接头识别平台；不为未知文本猜测平台或展开短链。"""
     text = (line or "").strip()
+    if _XIANYU_RE.search(text):
+        return "xianyu"
     if _DOUYIN_RE.search(text):
         return "douyin"
     if _BILI_RE.search(text) or _BILI_UID_RE.fullmatch(text):
@@ -100,7 +104,7 @@ def plan_shopping_parse(text: str, platforms=None) -> dict:
     if deferred:
         parts.append("本次未处理：" + "、".join(
             f"{PLATFORM_LABELS[key]} {count} 条" for key, count in deferred.items())
-            + "（一次解析一个平台；淘宝和 B站一次一条）")
+            + "（一次解析一个平台；淘宝、B站和闲鱼一次一条）")
     if analysis["unknown"]:
         parts.append(f"未识别 {analysis['unknown']} 条，已跳过")
     return {"platform": platform, "text": "\n".join(chosen),

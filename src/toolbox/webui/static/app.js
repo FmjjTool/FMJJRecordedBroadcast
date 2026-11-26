@@ -416,7 +416,7 @@
         ['music_playlist', '歌单', '本地预览与执行报告'],
         ['music_download', '下载', '本地音乐文件列表'],
         ['music_tag', '标签', '标签快照与历史'],
-        ['assets', '资产库', '已获取资源与本地扫描'],
+        ['assets', '资产库', '资源归档与本地文件'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
         ['subtitle', '字幕转换', '字幕与歌词格式转换'],
@@ -730,8 +730,8 @@
 
   function renderInfoTools(root) {
     root.replaceChildren();
-    var TABS = [['comments', '视频评论区'], ['bili', 'B站资源'],
-      ['wechat', '公众号解析'], ['emoji', '抖音表情包']];
+    var TABS = [['comments', '视频评论'], ['bili', 'B站资源'],
+      ['wechat', '公众号文章'], ['emoji', '抖音表情']];
     var tabs = h('div', { class: 'tabs' });
     var host = h('div');
     TABS.forEach(function (item) {
@@ -749,8 +749,8 @@
     });
     root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
       h('div', { class: 'muted small' },
-        '视频评论区与公众号解析可直接抓取并导出到本地产物目录；'
-        + 'B站资源（表情包 / 装扮 / UP 信息）与抖音表情包抓取仍在桌面端。'
+        '视频评论与公众号文章可直接抓取并导出到本地产物目录；'
+        + 'B站资源（表情包 / 装扮 / 用户空间）与抖音表情抓取仍在桌面端。'
         + '下方列表读取桌面端与 Web 端导出的本地产物。')));
     root.appendChild(tabs);
     root.appendChild(host);
@@ -976,7 +976,7 @@
       var modeSel = h('select', { class: 'select' },
         h('option', { value: 'emote' }, '表情包'),
         h('option', { value: 'garb' }, '装扮'),
-        h('option', { value: 'up' }, 'UP 信息'));
+        h('option', { value: 'up' }, '用户空间'));
       var modeHost = h('div', { style: 'margin-top:8px' });
       var jobHost = h('div');
 
@@ -1189,7 +1189,7 @@
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           room, fetchBtn, dlBtn),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '拉取直播间的「会员表情栏」（需要抖音登录 Cookie），下载到「抖音表情包」导出目录。'),
+          '抓取直播间的「会员表情栏」（需要登录），下载到「抖音表情包」导出目录。'),
         info, listHost, jobHost);
     }
 
@@ -2676,7 +2676,7 @@
         h('div', {
           class: 'toolbar', style: 'margin-top:8px;margin-bottom:6px'
         },
-          h('span', { class: 'row-title' }, '文本模式'),
+          h('span', { class: 'row-title' }, '逐行命名'),
           h('span', { class: 'muted small' },
             '每行一个完整新文件名，优先于上面的规则'),
           h('span', { style: 'flex:1' }),
@@ -3497,7 +3497,7 @@ function renderLivestreamSummary(root) {
     api('/api/assets/summary').then(function (summary) {
       var tabs = h('div', { class: 'tabs' });
       var host = h('div');
-      [['entries', '已获取资源'], ['db', '数据库浏览'], ['local', '本地资源'], ['offline', '线下现场视频']].forEach(function (pair) {
+      [['entries', '资源归档'], ['db', '采集记录'], ['local', '本地文件'], ['offline', '活动视频']].forEach(function (pair) {
         tabs.appendChild(h('button', {
           class: 'tab' + (state.assets.tab === pair[0] ? ' active' : ''),
           type: 'button', dataset: { tab: pair[0] },
@@ -3665,7 +3665,7 @@ function renderLivestreamSummary(root) {
       loading = true;
       updateButtons();
       tableHost.setAttribute('aria-busy', 'true');
-      if (!tableBody) setLoading(tableHost, '正在读取已获取资源…');
+      if (!tableBody) setLoading(tableHost, '正在读取资源归档…');
       var url = '/api/assets/entries-status?page=' + state.assets.page
         + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
         + '&platform=' + encodeURIComponent(state.assets.platform)
@@ -3776,7 +3776,7 @@ function renderLivestreamSummary(root) {
         tableHost.replaceChildren();
         if (data.truncated) {
           tableHost.appendChild(h('div', { class: 'muted small', style: 'margin:6px 2px' },
-            '已获取资源仅展示前 2000 条 JSON 概览。'));
+            '资源归档仅展示前 2000 条 JSON 概览。'));
         }
         tableHost.appendChild(h('div', { class: 'table-wrap' },
             h('table', null,
@@ -7282,6 +7282,16 @@ function renderLivestreamSummary(root) {
         }
         function onKey(event) {
           if (event.key === 'Escape') { event.preventDefault(); close(false); }
+          if (event.key === 'Tab') {
+            var focusable = Array.from(box.querySelectorAll('button,input,select,[tabindex="0"]'))
+              .filter(function (element) { return !element.disabled && element.getClientRects().length; });
+            var first = focusable[0], last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault(); first.focus();
+            }
+          }
         }
         box.appendChild(caption);
         box.appendChild(form);
@@ -7329,7 +7339,7 @@ function renderLivestreamSummary(root) {
                   ? collection.values[field.name] : field.default;
                 var row = h('div', { style: 'margin-top:12px;min-width:0' });
                 var label = h('div', { class: 'small', style: 'margin-bottom:4px' },
-                  (field.label || field.name) + (field.name === 'targets' ? ' *' : ''));
+                  (field.label || field.name) + (field.required ? ' *' : ''));
                 row.appendChild(label);
                 if (field.type === 'multiselect') {
                   var selected = new Set((Array.isArray(current) ? current : []).map(String));
@@ -7392,8 +7402,8 @@ function renderLivestreamSummary(root) {
                 if (entry.inputs) {
                   value = entry.inputs.filter(function (input) { return input.checked; })
                     .map(function (input) { return input.value; });
-                  if (field.name === 'targets' && !value.length) {
-                    error = '请至少勾选一个采集对象';
+                  if (field.required && !value.length) {
+                    error = '请至少勾选一个' + (field.label || '采集对象');
                   }
                 } else if (field.type === 'int') {
                   value = Number(entry.control.value);
@@ -7438,11 +7448,57 @@ function renderLivestreamSummary(root) {
             var deleteBtn = item.installed
               ? h('button', { class: 'btn danger', type: 'button' }, '删除任务')
               : null;
-            var status = h('div', { class: 'muted small', style: 'margin-top:8px' });
-            var busy = false;
+            var cancelBtn = h('button', { class: 'btn', type: 'button' }, '取消');
+            cancelBtn.addEventListener('click', function () { close(false); });
+            var status = h('div', {
+              class: 'small', role: 'alert', style: 'margin-top:8px;color:var(--danger)'
+            });
+            function syncControls() {
+              var reading = readCollection();
+              var count = (reading.values.targets || []).length;
+              if (collection) {
+                collectionStatus.textContent = reading.error ||
+                  ('已勾选 ' + count + ' 个采集对象 · * 为必填');
+              }
+              installBtn.disabled = busy || !!reading.error;
+              installBtn.title = reading.error || '';
+              if (deleteBtn) deleteBtn.disabled = busy;
+              cancelBtn.disabled = busy;
+              closeBtn.disabled = busy;
+              modeSel.disabled = busy || !schedule.interval_supported;
+              timeInput.disabled = busy || modeSel.value !== 'daily';
+              intervalInput.disabled = busy || modeSel.value !== 'interval';
+              collectionInputs.forEach(function (entry) {
+                (entry.inputs || (entry.control ? [entry.control] : [])).forEach(function (input) {
+                  input.disabled = busy;
+                });
+              });
+              extraInputs.forEach(function (entry) {
+                entry.enabled.disabled = busy;
+                entry.input.disabled = busy || !entry.enabled.checked;
+              });
+            }
+            function setBusy(value) {
+              busy = value;
+              installBtn.textContent = value ? '保存中…' : (item.installed ? '更新计划' : '安装计划');
+              syncControls();
+            }
+            function edited() {
+              dirty = true;
+              status.textContent = '';
+              syncControls();
+            }
+            form.addEventListener('input', edited);
+            form.addEventListener('change', edited);
 
             function submitInstall() {
               if (busy) return;
+              var reading = readCollection();
+              if (reading.error) {
+                status.textContent = reading.error;
+                syncControls();
+                return;
+              }
               var mode = modeSel.value;
               var timeText = String(timeInput.value || '').trim();
               if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(timeText)) {
@@ -7451,8 +7507,18 @@ function renderLivestreamSummary(root) {
               }
               var interval = Number(intervalInput.value);
               if (mode === 'interval' &&
-                  (!isFinite(interval) || interval < 1 || interval > 1439)) {
+                  (!Number.isInteger(interval) || interval < 1 || interval > 1439)) {
                 status.textContent = '间隔需在 1–1439 分钟之间';
+                return;
+              }
+              var extraTimes = extraInputs.map(function (entry) {
+                return entry.enabled.checked ? String(entry.input.value || '').trim() : '';
+              });
+              if (extraTimes.some(function (value, index) {
+                return extraInputs[index].enabled.checked &&
+                  !/^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+              })) {
+                status.textContent = '请填写已启用补采的时间，例如 13:00';
                 return;
               }
               var planText = mode === 'daily'
@@ -7461,24 +7527,24 @@ function renderLivestreamSummary(root) {
               if (!window.confirm(
                 '将在运行 WebUI 的电脑上' + (item.installed ? '更新' : '安装') +
                 '计划任务「' + (item.label || '') + '」：' + planText + '。\n'
+                + (collection ? ('采集对象：' + (reading.values.targets || []).length + ' 个。\n') : '')
                 + '与桌面端共用同一 Windows 计划任务。确定吗？')) {
                 return;
               }
-              busy = true;
-              installBtn.disabled = true;
-              if (deleteBtn) deleteBtn.disabled = true;
-              post('/api/tasks/install', {
+              var payload = {
                 id: item.id, mode: mode, time: timeText,
                 interval: interval, confirmed: true
-              }).then(function (result) {
+              };
+              if (collection) payload.collection = reading.values;
+              if (extraInputs.length) payload.extra_times = extraTimes;
+              setBusy(true);
+              post('/api/tasks/install', payload).then(function (result) {
                 toast((result && result.message) || '计划已保存', 'success');
-                overlay.remove();
+                close(true);
                 renderTasks(host);
               }).catch(function (error) {
-                busy = false;
-                installBtn.disabled = false;
-                if (deleteBtn) deleteBtn.disabled = false;
-                status.textContent = '操作失败：' + error.message;
+                setBusy(false);
+                status.textContent = '保存计划失败：' + error.message + '，请检查设置后重试';
               });
             }
 
@@ -7489,20 +7555,16 @@ function renderLivestreamSummary(root) {
                 '」，之后不再自动执行。\n确定吗？')) {
                 return;
               }
-              busy = true;
-              installBtn.disabled = true;
-              if (deleteBtn) deleteBtn.disabled = true;
+              setBusy(true);
               post('/api/tasks/uninstall', {
                 id: item.id, confirmed: true
               }).then(function (result) {
                 toast((result && result.message) || '已删除', 'success');
-                overlay.remove();
+                close(true);
                 renderTasks(host);
               }).catch(function (error) {
-                busy = false;
-                installBtn.disabled = false;
-                if (deleteBtn) deleteBtn.disabled = false;
-                status.textContent = '操作失败：' + error.message;
+                setBusy(false);
+                status.textContent = '删除计划失败：' + error.message + '，请重试';
               });
             }
 
@@ -7511,18 +7573,27 @@ function renderLivestreamSummary(root) {
             syncMode();
             form.replaceChildren(
               h('div', { class: 'muted small' }, item.usage || ''),
+              h('div', { class: 'muted small', style: 'margin-top:8px' }, '执行方式'),
               modeSel,
               timeRow,
               intervalRow,
+              extraRows,
+              collectionRows,
               h('div', { class: 'muted small', style: 'margin-top:10px' },
                 '操作在运行 WebUI 的电脑上执行；安装 / 更新会同时保存计划设置。'),
-              status,
-              h('div', { style: 'margin-top:12px; display:flex; gap:8px; justify-content:flex-end' },
-                deleteBtn, h('span', { style: 'flex:1' }), installBtn));
+              status);
+            footer.replaceChildren.apply(footer,
+              [deleteBtn, h('span', { style: 'flex:1' }), cancelBtn, installBtn].filter(Boolean));
+            syncControls();
+            modeSel.focus();
           })
           .catch(function (error) {
+            if (!overlay.isConnected) return;
             form.replaceChildren(h('div', { class: 'error' },
-              '读取计划设置失败：' + error.message));
+              '读取计划设置失败：' + error.message),
+            h('button', {
+              class: 'btn', type: 'button', onclick: function () { close(true); openTaskForm(item); }
+            }, '重试'));
           });
       }
     }).catch(function (error) {
@@ -9444,7 +9515,7 @@ function renderLivestreamSummary(root) {
   function renderShoppingHub(root) {
     root.replaceChildren();
     var TABS = [['taobao', '淘宝商品'], ['douyin_shop', '抖音商城'],
-      ['bili_shop', 'B站小店']];
+      ['bili_shop', 'B站小店'], ['xianyu', '闲鱼商品']];
     var tabs = h('div', { class: 'tabs' });
     var host = h('div');
     TABS.forEach(function (item) {
@@ -9460,10 +9531,6 @@ function renderLivestreamSummary(root) {
         }
       }, item[1]));
     });
-    root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
-      h('div', { class: 'muted small' },
-        '可直接解析淘宝店铺 / 商品、抖音商品分享文案与 B站小店；'
-        + '下方列表浏览已保存的商品目录（主图 / SKU / 详情图）。')));
     root.appendChild(buildShoppingParse(load));
     root.appendChild(tabs);
     root.appendChild(host);
@@ -9475,20 +9542,37 @@ function renderLivestreamSummary(root) {
         '正在读取平台范围…');
       var input = h('textarea', {
         class: 'textarea', rows: '3',
-        placeholder: '店铺 / 商品链接或分享文案（抖音可一次多行/多条分享）'
+        id: 'shopping-input',
+        placeholder: '店铺 / 商品链接或分享文案；搜索闲鱼时输入关键词，如「封茗囧菌 周边」'
       });
       var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
+      var searchBtn = h('button', { class: 'btn', type: 'button' }, '搜索闲鱼');
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
+      var saveBtn = null;
+      var selectionCount = null;
+      var xianyuRows = [];
+      var selected = new Set();
+      var rowBoxes = [];
+      var selectionButtons = [];
+      var resultSort = { order: '', asc: true };
       function sync() {
-        var hasSelection = platformPicker && platformPicker.selected().length;
+        var platforms = platformPicker ? platformPicker.selected() : [];
+        var hasSelection = platforms.length;
+        var hasXianyu = platforms.indexOf('xianyu') !== -1;
         btn.disabled = running || !hasSelection;
+        searchBtn.disabled = running || !hasXianyu;
         btn.textContent = running ? '解析中…' : '开始解析';
+        input.disabled = running;
+        if (saveBtn) saveBtn.disabled = running || !hasXianyu || !selected.size;
+        if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' / ' + xianyuRows.length + ' 件';
+        rowBoxes.forEach(function (entry) { entry.disabled = running || !hasXianyu; });
+        selectionButtons.forEach(function (button) { button.disabled = running || !hasXianyu; });
         if (platformPicker) {
           platformPicker.setBusy(running);
           platformHint.textContent = hasSelection
-            ? '在勾选平台内自动识别；混合输入一次解析首个匹配平台'
+            ? '链接按勾选平台自动识别；关键词可点「搜索闲鱼」'
             : '请至少勾选一个平台';
         }
       }
@@ -9501,33 +9585,56 @@ function renderLivestreamSummary(root) {
         platformHint.textContent = '读取平台范围失败：' + error.message + '，请刷新后重试';
       });
       sync();
-      btn.addEventListener('click', function () {
-        if (running) return;
-        if (!platformPicker || !platformPicker.selected().length) { sync(); return; }
-        if (!input.value.trim()) {
-          toast('请粘贴链接或分享文案', 'warning');
-          return;
-        }
+
+      function runShoppingJob(path, payload, action, done) {
         running = true;
         sync();
-        post('/api/tools/shopping/parse', {
-          platforms: platformPicker.selected(), text: input.value
-        }).then(function (result) {
+        post(path, payload).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
             running = false;
-            sync();
             var outcome = job.result || {};
-            toast(outcome.summary || '解析完成',
-              outcome.failures && outcome.failures.length ? 'warning' : 'success');
-            var items = outcome.items || [];
-            if (!items.length) {
-              resultHost.replaceChildren(empty('没有解析到商品。'));
-              reload();
-              return;
+            done(outcome);
+            sync();
+          }, {
+            cancelable: true,
+            indeterminate: true,
+            onSettled: function (job) {
+              running = false;
+              sync();
+              if (job.status === 'error') {
+                toast(action + '失败：' + (job.error || '请重试'), 'error');
+              }
             }
-            var head = h('tr', null, h('th', null, '商品'),
-              h('th', null, '价格'), h('th', { class: 'num' }, '销量'),
-              h('th', null, '链接'));
+          });
+        }).catch(function (error) {
+          running = false;
+          sync();
+          toast(action + '失败：' + error.message, 'error');
+        });
+      }
+
+      function showResult(outcome) {
+        var items = outcome.items || [];
+        selected.clear();
+        rowBoxes = [];
+        selectionButtons = [];
+        saveBtn = null;
+        selectionCount = null;
+        toast(outcome.summary || '已完成',
+          outcome.failures && outcome.failures.length ? 'warning' : 'success');
+        if (outcome.platform === 'xianyu') {
+          xianyuRows = items.map(function (item) {
+            var price = Number(String(item.price || '').replace(/[^0-9.]/g, ''));
+            return Object.assign({}, item, {
+              _price: item.price && Number.isFinite(price) ? price : null
+            });
+          });
+          drawXianyuResults();
+        } else {
+          xianyuRows = [];
+          if (!items.length) {
+            resultHost.replaceChildren(empty('没有解析到商品，请检查链接后重试。'));
+          } else {
             var body = h('tbody');
             items.forEach(function (item) {
               body.appendChild(h('tr', null,
@@ -9539,38 +9646,174 @@ function renderLivestreamSummary(root) {
                     rel: 'noopener noreferrer' }, item.url) : '-')));
             });
             resultHost.replaceChildren(
-              h('div', { class: 'muted small', style: 'margin-bottom:6px' },
-                outcome.selection_note || ''),
-              h('div', { class: 'muted small', style: 'margin-bottom:6px' },
-                (outcome.shop && outcome.shop.name
-                  ? outcome.shop.name + ' · ' : '') + items.length + ' 件商品'),
+              h('div', { class: 'muted small', style: 'margin-bottom:6px' }, outcome.selection_note || ''),
               h('div', { class: 'table-wrap' },
-                h('table', { class: 'db-table' },
-                  h('thead', null, head), body)));
-            reload();
-          }, {
-            cancelable: true,
-            onSettled: function (job) {
-              running = false;
-              sync();
-              if (job.status === 'error') {
-                toast('解析失败：' + (job.error || '未知错误'), 'error');
-              }
-            }
+                h('table', { class: 'db-table' }, h('thead', null,
+                  h('tr', null, h('th', null, '商品'), h('th', null, '价格'),
+                    h('th', null, '销量'), h('th', null, '链接'))), body)));
+          }
+        }
+        reload();
+      }
+
+      function drawXianyuResults() {
+        rowBoxes = [];
+        selectionButtons = [];
+        if (!xianyuRows.length) {
+          resultHost.replaceChildren(empty('闲鱼没有匹配商品，可换关键词重新搜索。'));
+          return;
+        }
+        var columns = [
+          { label: '选择', width: 48 }, { key: 'title', label: '商品', width: 300 },
+          { key: '_price', label: '价格', width: 85 },
+          { key: 'seller', label: '卖家', width: 110 },
+          { key: 'location', label: '地区', width: 100 },
+          { label: '资料', width: 72 }, { label: '链接', width: 70 }
+        ];
+        var defaults = columns.map(function (column) { return column.width; });
+        var widths = defaults.slice();
+        var table = h('table', { class: 'db-table fg-table' });
+        var tableHost = h('div');
+        var headers = [];
+        function setWidths(values) {
+          var total = values.reduce(function (sum, value) { return sum + value; }, 0);
+          headers.forEach(function (header, index) { header.style.width = (values[index] / total * 100) + '%'; });
+        }
+        function fitWidths() {
+          var canvas = document.createElement('canvas');
+          var context = canvas.getContext('2d');
+          context.font = getComputedStyle(table).font;
+          widths = columns.map(function (column) {
+            if (!column.key) return column.width;
+            var longest = context.measureText(column.label).width;
+            xianyuRows.forEach(function (item) {
+              var value = column.key === '_price' ? item.price : item[column.key];
+              longest = Math.max(longest, context.measureText(String(value || '')).width);
+            });
+            return Math.max(60, Math.min(360, longest + 24));
           });
-        }).catch(function (error) {
-          running = false;
-          sync();
-          toast('解析失败：' + error.message, 'error');
+          setWidths(widths);
+        }
+        function resetWidths() { widths = defaults.slice(); setWidths(widths); }
+        function drawTable() {
+          rowBoxes = [];
+          headers = [];
+          var head = h('tr');
+          columns.forEach(function (column) {
+            var active = column.key && resultSort.order === column.key;
+            var header = h('th', {
+              class: column.key ? 'sortable' : '',
+              'aria-sort': active ? (resultSort.asc ? 'ascending' : 'descending') : 'none'
+            }, column.label + (active ? (resultSort.asc ? ' ↑' : ' ↓') : ''));
+            if (column.key) {
+              header.tabIndex = 0;
+              function changeSort() { cycleSort(resultSort, column.key); drawTable(); sync(); }
+              header.addEventListener('click', changeSort);
+              header.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); changeSort(); }
+              });
+            }
+            headers.push(header);
+            head.appendChild(header);
+          });
+          var body = h('tbody');
+          sortRows(xianyuRows, columns, resultSort).forEach(function (item) {
+            var key = String(item.item_id || item.url);
+            var box = h('input', { type: 'checkbox', 'aria-label': '勾选 ' + (item.title || '商品') });
+            box.checked = selected.has(key);
+            box.addEventListener('change', function () {
+              if (box.checked) selected.add(key); else selected.delete(key);
+              sync();
+            });
+            rowBoxes.push(box);
+            body.appendChild(h('tr', null, h('td', null, box),
+              h('td', { title: item.title || '' }, item.title || '-'),
+              h('td', null, item.price || '-'),
+              h('td', { title: item.seller || '' }, item.seller || '-'),
+              h('td', null, item.location || '-'),
+              h('td', null, item.saved ? '已入库' : '待入库'),
+              h('td', null, item.url ? h('a', { href: item.url, target: '_blank',
+                rel: 'noopener noreferrer' }, '打开') : '-')));
+          });
+          table.replaceChildren(h('thead', null, head), body);
+          setWidths(widths);
+        }
+        var allBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
+          xianyuRows.forEach(function (item) { selected.add(String(item.item_id || item.url)); });
+          drawTable(); sync();
+        } }, '全选');
+        var clearBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
+          selected.clear(); drawTable(); sync();
+        } }, '清除');
+        selectionButtons = [allBtn, clearBtn];
+        selectionCount = h('span', { class: 'muted small' });
+        saveBtn = h('button', { class: 'btn primary', type: 'button' }, '入库并下载');
+        saveBtn.addEventListener('click', function () {
+          if (running || saveBtn.disabled) return;
+          var items = xianyuRows.filter(function (item) { return selected.has(String(item.item_id || item.url)); });
+          if (!window.confirm('入库并下载 ' + items.length + ' 件闲鱼商品？\n\n将保存商品资料与图片到「闲鱼商品」目录；相同商品按编号去重。')) return;
+          runShoppingJob('/api/tools/shopping/xianyu/save', {
+            platforms: platformPicker.selected(),
+            items: items.map(function (item) { return { item_id: item.item_id || '', url: item.url || '' }; })
+          }, '入库下载', function (outcome) {
+            (outcome.items || []).forEach(function (saved) {
+              xianyuRows.forEach(function (item) {
+                if (item.item_id === saved.item_id && saved.saved !== false) item.saved = true;
+              });
+            });
+            drawTable();
+            toast(outcome.summary || '已保存到闲鱼商品目录', outcome.failed || outcome.cancelled ? 'warning' : 'success');
+            state.shopping.tab = 'xianyu';
+            tabs.querySelectorAll('.tab').forEach(function (button, index) { button.classList.toggle('active', TABS[index][0] === 'xianyu'); });
+            reload();
+          });
         });
+        table.addEventListener('contextmenu', function (event) {
+          if (!event.target.closest('th')) return;
+          event.preventDefault();
+          var old = tableHost.querySelector('.fg-column-menu');
+          if (old) old.remove();
+          var menu = h('div', { class: 'fg-column-menu', role: 'menu' });
+          [['列宽自适应', fitWidths], ['重置列宽', resetWidths]].forEach(function (action) {
+            menu.appendChild(h('button', { class: 'btn', type: 'button', role: 'menuitem',
+              onclick: function () { action[1](); menu.remove(); } }, action[0]));
+          });
+          menu.style.left = Math.max(8, Math.min(event.clientX, innerWidth - 180)) + 'px';
+          menu.style.top = Math.max(8, Math.min(event.clientY, innerHeight - 90)) + 'px';
+          tableHost.appendChild(menu); menu.firstChild.focus();
+          menu.addEventListener('keydown', function (keyEvent) { if (keyEvent.key === 'Escape') menu.remove(); });
+          menu.addEventListener('focusout', function (focusEvent) { if (!menu.contains(focusEvent.relatedTarget)) menu.remove(); });
+        });
+        drawTable();
+        tableHost.appendChild(h('div', { class: 'table-wrap' }, table));
+        resultHost.replaceChildren(
+          h('div', { class: 'row-title' }, '闲鱼商品 · ' + xianyuRows.length + ' 件'), tableHost,
+          h('div', { class: 'toolbar', style: 'margin-top:8px' }, allBtn, clearBtn, selectionCount,
+            h('span', { style: 'flex:1' }),
+            h('button', { class: 'btn mini', type: 'button', onclick: fitWidths }, '自适应'),
+            h('button', { class: 'btn mini', type: 'button', onclick: resetWidths }, '重置'), saveBtn));
+        sync();
+      }
+
+      btn.addEventListener('click', function () {
+        if (running || !platformPicker || !platformPicker.selected().length) return;
+        if (!input.value.trim()) { toast('请粘贴链接或分享文案', 'warning'); return; }
+        runShoppingJob('/api/tools/shopping/parse', {
+          platforms: platformPicker.selected(), text: input.value
+        }, '解析', showResult);
+      });
+      searchBtn.addEventListener('click', function () {
+        if (running || searchBtn.disabled) return;
+        if (!input.value.trim()) { toast('请先输入闲鱼搜索关键词', 'warning'); return; }
+        runShoppingJob('/api/tools/shopping/xianyu/search', {
+          platforms: platformPicker.selected(), text: input.value, limit: 30
+        }, '搜索闲鱼', showResult);
       });
       return h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '解析商品'),
+        h('label', { class: 'row-title', for: 'shopping-input' }, '链接 / 闲鱼关键词'),
         input, platformHost, platformHint,
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' },
-            '淘宝需要登录态；抖音 / B站按公开接口解析。'),
-          h('span', { style: 'flex:1' }), btn),
+          h('span', { style: 'flex:1' }), searchBtn, btn),
         resultHost, jobHost);
     }
 
@@ -11424,7 +11667,7 @@ function renderMusicTag(root) {
     }
 
     function load() {
-      setLoading(listHost, '正在读取本地资源…');
+      setLoading(listHost, '正在读取本地文件…');
       api('/api/assets/local/groups?cat=' + encodeURIComponent(state.assets.cat) +
         '&page=' + state.assets.localPage + '&page_size=40')
         .then(function (data) {
@@ -11826,7 +12069,7 @@ function renderMusicTag(root) {
         var tabHost = h('div');
         var TABS = [
           ['bridge', '中间层同步'], ['sync', isTableDoc ? '表格同步' : '正文预览'],
-          ['daily', '历史记录'], ['snapshot', '采集明细'],
+          ['daily', '指标历史'], ['snapshot', '采集明细'],
           ['revision', '修订记录'], ['members', '成员名单'],
           ['docs', '文档管理'], ['writeback', '映射回写'],
           ['edit', '修改 / 删除'], ['promo', '宣传图追加']

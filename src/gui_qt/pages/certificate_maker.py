@@ -3,8 +3,8 @@
 交互分五步：
 1. 导入协议文档（txt / md / docx / pdf）或 xlsx 填写表，也可直接粘贴正文；
 2. 自动匹配编号、作品、署名、期限、双方确认等字段，以及文档里的「□」勾选状态；
-3. 在「复选框复核」区人工核对勾选（自动匹配到的项带「已匹配」标记）；
-4. 在「图片」区导入作品图，默认自动合成水印；「历史」区可回填以往证书数据；
+3. 在「选项复核」区人工核对勾选（自动匹配到的项带「已匹配」标记）；
+4. 在「作品图片」区导入作品图，默认自动合成水印；「证书记录」区可回填以往证书数据；
 5. 生成两页证书（证书页 + 图片页），导出 PNG 300dpi 与合并 PDF。
 
 界面只做表单、预览与调用；解析、渲染、导出在 `toolbox/certificate_engine.py`，
@@ -388,10 +388,10 @@ class CertificateMakerPage(BasePage):
             self._build_period_card(),
             self._build_sign_card(),
             self._build_usage_card(),
-        ]), "字段")
-        self.left_tabs.addTab(self._scroll_page([self._build_check_card()]), "复选框复核")
-        self.left_tabs.addTab(self._build_image_tab(), "图片")
-        self.left_tabs.addTab(self._build_history_tab(), "历史")
+        ]), "证书信息")
+        self.left_tabs.addTab(self._scroll_page([self._build_check_card()]), "选项复核")
+        self.left_tabs.addTab(self._build_image_tab(), "作品图片")
+        self.left_tabs.addTab(self._build_history_tab(), "证书记录")
         layout.addWidget(self.left_tabs, 1)
         return container
 
@@ -418,7 +418,7 @@ class CertificateMakerPage(BasePage):
         layout.addWidget(self._build_image_card())
         self.auto_watermark_check = QCheckBox("自动生成水印（导出时合成到作品图上）")
         self.auto_watermark_check.setToolTip(
-            "按「复选框复核 → 水印内容核对」的勾选项，把署名与认证号斜向平铺到作品图，\n"
+            "按「选项复核 → 水印内容核对」的勾选项，把署名与认证号斜向平铺到作品图，\n"
             "并另存到输出目录的「水印件」文件夹。")
         self.auto_watermark_check.toggled.connect(self._on_field_changed)
         layout.addWidget(self.auto_watermark_check)
@@ -540,7 +540,7 @@ class CertificateMakerPage(BasePage):
 
     def _build_watermark_card(self) -> QWidget:
         frame, layout = _card("附件一 · 图片内署名（自动水印）")
-        layout.addWidget(_hint("留空自动跟随正文；哪些内容进图片水印，由「复选框复核」里"
+        layout.addWidget(_hint("留空自动跟随正文；哪些内容进图片水印，由「选项复核」里"
                                "「水印内容核对」的勾选决定。"))
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -979,7 +979,7 @@ class CertificateMakerPage(BasePage):
         self.date_edits["renew_until"].setEnabled(self._selected("cert_status") == "已续签")
         matched_groups = sum(1 for group in engine.CHECK_GROUPS if checks.get(group["key"]))
         self.left_tabs.setTabText(
-            1, f"复选框复核 {matched_groups}/{len(engine.CHECK_GROUPS)}")
+            1, f"选项复核 {matched_groups}/{len(engine.CHECK_GROUPS)}")
 
     def _apply_parse(self, result: engine.ParseResult) -> None:
         self._suspend_signals = True

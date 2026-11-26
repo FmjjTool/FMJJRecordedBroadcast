@@ -499,6 +499,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return shopping.start_parse(dict(req.json or {}))
     server.post("/api/tools/shopping/parse", start_shopping_parse)
 
+    def search_xianyu_shopping(req):
+        return shopping.start_xianyu_search(dict(req.json or {}))
+    server.post("/api/tools/shopping/xianyu/search", search_xianyu_shopping)
+
+    def save_xianyu_shopping(req):
+        return shopping.start_xianyu_save(dict(req.json or {}))
+    server.post("/api/tools/shopping/xianyu/save", save_xianyu_shopping)
+
 
 
     server.get("/api/music-playlist", lambda req: music_playlist.overview())

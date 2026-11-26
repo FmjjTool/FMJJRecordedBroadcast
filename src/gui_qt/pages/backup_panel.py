@@ -15,7 +15,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog,
+    QFileDialog, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressDialog,
     QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -73,17 +73,17 @@ class BackupPanel(QWidget):
         layout.addLayout(config_row)
         self.config_status = self._status(layout)
 
-        assets_row = QHBoxLayout()
+        assets_row = QGridLayout()
         assets_row.setSpacing(6)
         assets_row.addWidget(self._btn("导出资产（zip 包）…", self._backup_assets_zip,
-                                       "资产数据库与统一导出目录打包成一个 zip"))
+                                       "资产数据库与统一导出目录打包成一个 zip"), 0, 0)
         assets_row.addWidget(self._btn("导出资产（文件夹）…", self._backup_assets_folder,
-                                       "导出到新建的「资产备份_时间戳」文件夹"))
+                                       "导出到新建的「资产备份_时间戳」文件夹"), 0, 1)
         assets_row.addWidget(self._btn("导入资产（zip 包）…", self._import_backup_zip,
-                                       "从 zip 环境还原资产，文件不覆盖、数据库按去重键合并"))
+                                       "从 zip 环境还原资产，文件不覆盖、数据库按去重键合并"), 1, 0)
         assets_row.addWidget(self._btn("导入资产（文件夹）…", self._import_backup_folder,
-                                       "从备份文件夹还原资产"))
-        assets_row.addStretch(1)
+                                       "从备份文件夹还原资产"), 1, 1)
+        assets_row.setColumnStretch(2, 1)
         layout.addLayout(assets_row)
         self.assets_status = self._status(layout)
 

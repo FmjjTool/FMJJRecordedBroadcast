@@ -238,7 +238,7 @@ class TcDocMappingPanel(QWidget):
         row.addWidget(self.execute_btn)
         diff_layout.addLayout(row)
 
-        content_tabs.addTab(remote_page, "腾讯表格（只读）")
+        content_tabs.addTab(remote_page, "只读表格")
         content_tabs.addTab(diff_page, "差异预览")
         self.content_tabs = content_tabs
 

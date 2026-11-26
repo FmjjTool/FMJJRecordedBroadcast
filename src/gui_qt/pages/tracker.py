@@ -396,13 +396,13 @@ class TrackerPage(BasePage):
         if not is_douyin:
             v.addWidget(metrics_w, 1)
         else:
-            # 抖音账号固定显示「直播历史」二级页签：即使 0 场也能在页签内一键获取
+            # 抖音账号固定显示「直播记录」二级页签：即使 0 场也能在页签内一键获取
             tabs = QTabWidget()
-            tabs.addTab(metrics_w, f"指标数据（{len(history)}）")
+            tabs.addTab(metrics_w, f"指标记录 {len(history)}")
             live_w = self._history_live_widget(
                 live, acc,
-                on_count=lambda n: tabs.setTabText(1, f"直播历史（{n}）"))
-            tabs.addTab(live_w, f"直播历史（{len(live)}）")
+                on_count=lambda n: tabs.setTabText(1, f"直播记录 {n}"))
+            tabs.addTab(live_w, f"直播记录 {len(live)}")
             v.addWidget(tabs, 1)
         win.exec()
 

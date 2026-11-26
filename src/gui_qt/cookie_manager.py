@@ -44,6 +44,7 @@ COOKIE_PLATFORMS = [
     ("xiaohongshu", "小红书", False, True),
     ("kuaishou", "快手", False, True),
     ("taobao", "淘宝", False, True),
+    ("xianyu", "闲鱼", False, True),
     ("tcdoc", "腾讯文档", False, True),
     ("qqgroup", "QQ群", False, True),
     ("quark", "夸克网盘", False, True),
@@ -89,6 +90,8 @@ BROWSER_LOGIN_CONFIGS = {
     "taobao": ("https://www.taobao.com/", "淘宝登录（软件内）",
                ("cookie2", "unb", "sg"),
                "点击顶部「登录」→ 扫码或手机号登录（商品列表采集用）"),
+    "xianyu": ("https://www.goofish.com/", "闲鱼登录",
+               ("cookie2", "unb"), "在闲鱼官网完成登录，仅用于商品搜索与详情读取"),
     # 腾讯文档：浏览器登录后除 Cookie 外还要存 localStorage（文档页的登录信息也存这里），
     # 所以登录完成时额外落一份 Playwright storage_state（见 _do_save 的 tcdoc 分支）
     "tcdoc": ("https://docs.qq.com/desktop", "腾讯文档登录（软件内）",

@@ -414,7 +414,7 @@ class BiliEmojiPage(BasePage):
         return card
 
     def _goto_garb(self, act_id: str):
-        """切换到本页「收藏集」tab 加载收藏集活动（B站资源聚合页内切换）。"""
+        """切换到本页「收藏集活动」tab 加载收藏集活动（B站资源聚合页内切换）。"""
         page = getattr(self, "_resource_host", None) or self.app.pages.get("bili_resource")
         if page is not None:
             page.show_garb(act_id)
@@ -474,7 +474,7 @@ class BiliEmojiPage(BasePage):
                     if not pkgs:  # 普通包查不到 → 可能是失效装扮/收藏集 ID，逐级回退
                         try:
                             api.act_basic(idx)
-                            hints.append(f"{idx} 是收藏集活动ID，正在跳「收藏集」tab")
+                            hints.append(f"{idx} 是收藏集活动ID，正在跳「收藏集活动」tab")
                             return {"files": [], "title": idx, "act_id": idx, "hints": hints}
                         except api.BiliApiError:
                             pass

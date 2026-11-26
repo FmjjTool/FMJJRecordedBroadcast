@@ -49,8 +49,9 @@ PAGE_INDEX = {
         module="gui_qt.pages.containers", cls="InfoToolsPage",
         aliases="信息工具"),
     "video_comments": PageMeta(
-        "视频评论区", "信息工具",
+        "视频评论", "信息工具",
         module="gui_qt.pages.video_comments", cls="VideoCommentsPage",
+        aliases="视频评论区",
         preload=False, tab_of="info_tools", card_note="三平台评论抓取与长图"),
     "douyin_index": PageMeta(
         "抖音指数", "账户追踪",
@@ -61,19 +62,20 @@ PAGE_INDEX = {
         module="gui_qt.pages.bili_resource", cls="BiliResourcePage",
         preload=False, tab_of="info_tools", card_note="表情包、收藏集、空间资源"),
     "wechat_article": PageMeta(
-        "公众号解析", "信息工具",
+        "公众号文章", "信息工具",
         module="gui_qt.pages.wechat_article", cls="WechatArticlePage",
+        aliases="公众号解析",
         preload=False, tab_of="info_tools", card_note="文章导出 HTML / PDF / Word"),
     "douyin_emoji": PageMeta(
-        "抖音表情包", "信息工具",
+        "抖音表情", "信息工具",
         module="gui_qt.pages.douyin_emoji_page", cls="DouyinEmojiPage",
-        aliases="表情收集 会员表情",
+        aliases="抖音表情包 表情收集 会员表情",
         preload=False, tab_of="info_tools", card_note="会员表情、直播收集与导出"),
 
     # ---- 资产管理 ----
     "asset": PageMeta(
         "资产库", "资产管理", module="gui_qt.pages.asset", cls="AssetPage",
-        aliases="资产管理", card_note="已获取资源与本地扫描"),
+        aliases="资产管理", card_note="资源归档与本地文件"),
     "netdisk": PageMeta(
         "网络库", "资产管理", module="gui_qt.pages.netdisk", cls="NetdiskPage",
         aliases="网盘"),

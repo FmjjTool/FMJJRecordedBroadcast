@@ -1700,6 +1700,7 @@ class RecordingRepairDialog(QDialog):
         lay = QVBoxLayout(self)
 
         row = QHBoxLayout()
+        row.addWidget(QLabel("录制文件"))
         self.ed_file = QLineEdit()
         self.ed_file.setReadOnly(True)
         self.ed_file.setPlaceholderText("选择已停止录制的 .flv / .ts 文件")
@@ -1737,6 +1738,8 @@ class RecordingRepairDialog(QDialog):
         lay.addWidget(self.log, 1)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        btns.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         self.btn_cancel = btns.addButton("取消修复", QDialogButtonBox.ButtonRole.ActionRole)
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._request_cancel)

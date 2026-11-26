@@ -32,7 +32,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QProgressBar, QPushButton, QSplitter, QStackedWidget, QTableWidget,
     QTextBrowser,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -427,7 +427,7 @@ class _DocPreviewPanel(QWidget):
             elif not (item.get("text") or "").strip() and not item.get("images"):
                 note = "空白页"
             else:
-                note = f"{len(body)} 字"
+                note = f"{len(item.get('text') or '')} 字"
             self.status.setText(f"第 {idx + 1}/{len(self._pages)} 篇 · {note} · "
                                 + preview_content.image_summary([item]))
         self._render_current()
@@ -670,7 +670,7 @@ class TcDocPage(BasePage):
             self._build_revision_tab, self._build_members_tab,
             self._build_doc_tab, self._build_mapping_panel,
         )
-        for title in ("中间层同步", "表格同步", "历史记录", "采集明细",
+        for title in ("中间层同步", "表格同步", "指标历史", "采集明细",
                       "修订记录", "成员名单", "文档管理", "映射回写"):
             stack = QStackedWidget()
             skeleton = LoadingSkeleton(text="正在准备页面…")
@@ -921,7 +921,7 @@ class TcDocPage(BasePage):
         btns.addWidget(self.rebuild_btn)
         v.addLayout(btns)
 
-        hint = QLabel("添加文档后可立即采集；切换文档在「历史记录」里查看各自曲线，"
+        hint = QLabel("添加文档后可立即采集；切换文档在「指标历史」里查看各自曲线，"
                       "每个文档一份独立 Excel。")
         hint.setStyleSheet("color: #888;")
         v.addWidget(hint)

@@ -544,14 +544,14 @@ class AssetPage(BasePage):
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(0)
 
-        # 顺序：已获取资源 | 数据库浏览（中间） | 本地资源
+        # 顺序：资源归档 | 采集记录 | 本地文件 | 活动视频
         self.tabs = QTabWidget()
         self.tabs.setObjectName("assetTabs")
         layout.addWidget(self.tabs)
-        self.tabs.addTab(self._build_collected_tab(), "已获取资源")
-        self.tabs.addTab(self._build_db_tab(), "数据库浏览")
-        self.tabs.addTab(self._build_local_tab(), "本地资源")
-        self.tabs.addTab(self._build_offline_video_tab(), "线下现场视频")
+        self.tabs.addTab(self._build_collected_tab(), "资源归档")
+        self.tabs.addTab(self._build_db_tab(), "采集记录")
+        self.tabs.addTab(self._build_local_tab(), "本地文件")
+        self.tabs.addTab(self._build_offline_video_tab(), "活动视频")
         # 切到数据库浏览 Tab 时刷新（采集后无需切页面，直接切 Tab 即可见新数据）
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -569,11 +569,11 @@ class AssetPage(BasePage):
 
     def _on_tab_changed(self, idx: int):
         name = self.tabs.tabText(idx) if 0 <= idx < self.tabs.count() else ""
-        if name == "数据库浏览":
+        if name == "采集记录":
             self._db_reload_tables()
-        elif name == "本地资源":
+        elif name == "本地文件":
             self._auto_scan_local()
-        elif name == "线下现场视频":
+        elif name == "活动视频":
             self._ov_ensure_events()
 
     # ==================== 本地资源 ====================
@@ -1692,7 +1692,7 @@ class AssetPage(BasePage):
         actions.addWidget(_asset_action("刷新", self._refresh_collected, tip="重新核对文件变化并更新清单"))
         actions.addWidget(_asset_action(
             "图识别", self._open_image_search,
-            tip="用一张图片在已获取资源中查找视觉最接近的图片与对应条目"))
+            tip="用一张图片在资源归档中查找视觉最接近的图片与对应条目"))
         actions.addStretch(1)
         self.select_all_cb = QCheckBox("全选")
         self.select_all_cb.stateChanged.connect(self._toggle_select_all)
@@ -4442,7 +4442,7 @@ class AssetPage(BasePage):
         if time.monotonic() - getattr(self, "_db_refreshed_at", 0) > 30:
             self._db_reload_tables()
         if 0 <= self.tabs.currentIndex() < self.tabs.count() \
-                and self.tabs.tabText(self.tabs.currentIndex()) == "本地资源":
+                and self.tabs.tabText(self.tabs.currentIndex()) == "本地文件":
             self._auto_scan_local()
 
     def preload_tasks(self):

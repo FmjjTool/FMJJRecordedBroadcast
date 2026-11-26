@@ -88,6 +88,7 @@ COOKIE_TTL_DAYS = {
     "xiaohongshu": 0,
     "kuaishou": 0,
     "taobao": 0,
+    "xianyu": 0,
     "tcdoc": 0,
     # QQ群网页登录：skey/p_skey 长期有效，失效只能重新登录
     "qqgroup": 0,
@@ -118,6 +119,7 @@ PLATFORM_NAMES = {
     "xiaohongshu": "小红书",
     "kuaishou": "快手",
     "taobao": "淘宝",
+    "xianyu": "闲鱼",
     "tcdoc": "腾讯文档",
     "qqgroup": "QQ群",
     "quark": "夸克网盘",

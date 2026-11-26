@@ -2320,7 +2320,7 @@ class FileInfoPanel(QWidget):
         rename_layout.addWidget(self.rename_btn)
 
         rename_layout.addStretch()
-        self.tab_widget.addTab(self.rename_tab, "重命名")
+        self.tab_widget.addTab(self.rename_tab, "文件改名")
 
         self._refresh_template_combo()
         self._refresh_tag_buttons()
