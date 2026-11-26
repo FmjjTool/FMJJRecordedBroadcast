@@ -11,23 +11,25 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from toolbox.config_manager import (
     get_config_dir, load_convert_config, save_convert_config,
 )
+from .local_options import defaults as local_defaults, normalize_options
 
 CFG_BASE_URL = "livestream_summary_base_url"
 CFG_MODEL = "livestream_summary_model"
 CFG_CHUNK_CHARS = "livestream_summary_chunk_chars"
 CFG_OUTPUT_DIR = "livestream_summary_output_dir"
 CFG_MODE = "livestream_summary_mode"
+CFG_LOCAL = "livestream_summary_local"
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_CHUNK_CHARS = 6000
-MODES = {"ai": "大模型总结", "rule": "本地规则保底"}
+MODES = {"ai": "模型接口", "local": "本地模型（CPU / GPU）", "rule": "本地规则保底"}
 
 
 @dataclass
@@ -37,6 +39,7 @@ class Settings:
     chunk_chars: int = DEFAULT_CHUNK_CHARS
     output_dir: str = ""
     mode: str = "ai"
+    local: dict = field(default_factory=local_defaults)
 
 
 def load_settings() -> Settings:
@@ -52,16 +55,19 @@ def load_settings() -> Settings:
         chunk_chars=max(2000, min(20000, chunk_chars)),
         output_dir=str(cfg.get(CFG_OUTPUT_DIR) or "").strip(),
         mode=mode if mode in MODES else "ai",
+        local=normalize_options(cfg.get(CFG_LOCAL), strict=False),
     )
 
 
 def save_settings(settings: Settings) -> None:
+    local = normalize_options(settings.local)
     cfg = load_convert_config()
     cfg[CFG_BASE_URL] = settings.base_url.strip() or DEFAULT_BASE_URL
     cfg[CFG_MODEL] = settings.model.strip()
     cfg[CFG_CHUNK_CHARS] = max(2000, min(20000, int(settings.chunk_chars)))
     cfg[CFG_OUTPUT_DIR] = settings.output_dir.strip()
     cfg[CFG_MODE] = settings.mode if settings.mode in MODES else "ai"
+    cfg[CFG_LOCAL] = local
     save_convert_config(cfg)
 
 

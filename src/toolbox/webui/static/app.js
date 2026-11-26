@@ -7307,7 +7307,9 @@ function renderLivestreamSummary(root) {
         api('/api/tasks/schedule?id=' + encodeURIComponent(item.id))
           .then(function (schedule) {
             if (!overlay.isConnected) return;
-            var modeSel = h('select', { class: 'select', style: 'width:100%' },
+            var modeSel = h('select', {
+              class: 'select', style: 'width:100%', 'aria-label': '执行方式'
+            },
               h('option', { value: 'daily', selected: schedule.mode === 'daily' }, '每天'),
               h('option', {
                 value: 'interval',
@@ -7315,11 +7317,13 @@ function renderLivestreamSummary(root) {
                 disabled: !schedule.interval_supported
               }, '按间隔'));
             var timeInput = h('input', {
-              class: 'input', style: 'width:100%', value: schedule.time || '09:00'
+              class: 'input', style: 'width:100%', value: schedule.time || '09:00',
+              'aria-label': '每天时间'
             });
             var intervalInput = h('input', {
               class: 'input', style: 'width:100%', type: 'number',
-              min: '1', max: '1439', value: String(schedule.interval || 30)
+              min: '1', max: '1439', value: String(schedule.interval || 30),
+              'aria-label': '间隔（分钟）'
             });
             var timeRow = h('div', null,
               h('div', { class: 'muted small', style: 'margin-top:10px' }, '每天时间（HH:MM）'),
@@ -9624,9 +9628,10 @@ function renderLivestreamSummary(root) {
           outcome.failures && outcome.failures.length ? 'warning' : 'success');
         if (outcome.platform === 'xianyu') {
           xianyuRows = items.map(function (item) {
-            var price = Number(String(item.price || '').replace(/[^0-9.]/g, ''));
+            var match = String(item.price || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+            var price = match ? Number(match[0]) : null;
             return Object.assign({}, item, {
-              _price: item.price && Number.isFinite(price) ? price : null
+              _price: price !== null && Number.isFinite(price) ? price : null
             });
           });
           drawXianyuResults();

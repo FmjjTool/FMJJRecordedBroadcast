@@ -7,6 +7,7 @@ AI 总结走 `toolbox/livestream_summary` 的同一套流水线（分块提取 �
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 
 from toolbox import livestream_summary_rule as rule
@@ -14,6 +15,8 @@ from toolbox.config_manager import get_export_subdir, load_convert_config
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import pipeline
 from toolbox.livestream_summary.client import ChatClient, is_local_base_url
+from toolbox.livestream_summary.local_options import FIELD_SPECS, defaults, normalize_options
+from toolbox.livestream_summary.session import client_session
 
 _MAX_TEXT = 512 * 1024
 
@@ -73,16 +76,21 @@ def overview() -> dict:
         model = settings.model
         chunk_chars = settings.chunk_chars
         has_key = bool(ls_config.has_api_key())
+        local = settings.local
     except Exception:
         mode, base_url, model, chunk_chars, has_key = "ai", "", "", 6000, False
+        local = defaults()
+    from toolbox.livestream_summary import optional_runtime
     return {
         "work_dir": work,
         "transcripts": transcripts,
         "saved": saved,
         "settings": {"mode": mode, "base_url": base_url, "model": model,
-                     "chunk_chars": chunk_chars, "has_key": has_key},
+                     "chunk_chars": chunk_chars, "has_key": has_key, "local": local},
+        "local_fields": FIELD_SPECS,
+        "local_runtime": optional_runtime.status(),
         "output_dir": str(out_dir),
-        "note": "可保存设置、测试连接并生成总结；模型下载与另存为仍在桌面端。",
+        "note": "本地推理模块与模型在全局设置中按需准备，标准版与 FULL 版均不内置。",
     }
 
 
@@ -114,6 +122,8 @@ def settings_snapshot() -> dict:
         "base_url": settings.base_url,
         "model": settings.model,
         "chunk_chars": settings.chunk_chars,
+        "local": settings.local,
+        "local_fields": FIELD_SPECS,
         "has_key": bool(ls_config.has_api_key()),
         "modes": ls_config.MODES,
         "default_base_url": ls_config.DEFAULT_BASE_URL,
@@ -124,7 +134,7 @@ def save_settings(payload: dict) -> dict:
     """保存模型设置；api_key 仅在提交非空时覆盖，永不回显。"""
     current = ls_config.load_settings()
     base_url = str(payload.get("base_url") or current.base_url).strip()
-    model = str(payload.get("model") or "").strip()
+    model = str(payload.get("model", current.model) or "").strip()
     mode = str(payload.get("mode") or current.mode)
     try:
         chunk_chars = int(payload.get("chunk_chars") or current.chunk_chars)
@@ -132,14 +142,16 @@ def save_settings(payload: dict) -> dict:
         raise ValueError("每块字数必须是数字") from None
     if mode not in ls_config.MODES:
         raise ValueError("未知的总结模式")
-    if not model:
+    if mode == "ai" and not model:
         raise ValueError("请填写模型名称")
+    local = normalize_options(payload.get("local", current.local))
     ls_config.save_settings(ls_config.Settings(
         base_url=base_url or ls_config.DEFAULT_BASE_URL,
         model=model,
         chunk_chars=max(2000, min(20000, chunk_chars)),
-        output_dir="",
+        output_dir=current.output_dir,
         mode=mode,
+        local=local,
     ))
     api_key = str(payload.get("api_key") or "").strip()
     if api_key:
@@ -160,12 +172,19 @@ def _client(settings: ls_config.Settings) -> ChatClient:
                       allow_empty_key=allow_empty)
 
 
-def test_connection() -> dict:
+def test_connection(on_log=None, is_cancelled=None, on_progress=None) -> dict:
     settings = ls_config.load_settings()
-    client = _client(settings)
-    message = client.test_connection()
+    log = on_log or (lambda _message: None)
+    cancel = _CancelFlag(is_cancelled or (lambda: False))
+    def progress(percent, message):
+        log(message)
+        if on_progress:
+            on_progress(percent, message)
+    with client_session(settings, cancel=cancel, progress=progress) as client:
+        message = client.test_connection(cancel=cancel)
     return {"message": str(message or "连接正常"),
-            "summary": f"连接正常 · {settings.model}"}
+            "summary": "本地模型连接正常" if settings.mode == "local"
+            else f"连接正常 · {settings.model}"}
 
 
 def _transcript_path(rel: str) -> Path:
@@ -191,12 +210,13 @@ def check_transcript(rel: str) -> None:
     _transcript_path(rel)
 
 
-def run_summary(payload: dict, on_log=None, is_cancelled=None) -> dict:
+def run_summary(payload: dict, on_log=None, is_cancelled=None, on_progress=None) -> dict:
     log = on_log or (lambda _msg: None)
     settings = ls_config.load_settings()
     mode = str(payload.get("mode") or settings.mode)
     if mode not in ls_config.MODES:
         raise ValueError("未知的总结模式")
+    settings = replace(settings, mode=mode)
     source = _transcript_path(str(payload.get("rel") or ""))
     log(f"开始总结（{ls_config.MODES[mode]}）：{source.name}")
 
@@ -206,16 +226,21 @@ def run_summary(payload: dict, on_log=None, is_cancelled=None) -> dict:
 
     def progress(stage: str, percent: int, message: str) -> None:
         log(f"{message}")
+        if on_progress:
+            on_progress(percent, message)
 
     if mode == "rule":
         result = pipeline.run_rule(text, source.name, folder=folder)
     else:
-        client = _client(settings)
-        log(f"模型 {settings.model} · 每块 {settings.chunk_chars} 字")
-        result = pipeline.run(
-            text, source.name, client,
-            progress=progress, cancel=_CancelFlag(cancel),
-            chunk_chars=settings.chunk_chars, folder=folder)
+        flag = _CancelFlag(cancel)
+        with client_session(settings, cancel=flag,
+                            progress=lambda percent, message: progress(
+                                "load", percent, message)) as client:
+            log(f"每块 {settings.chunk_chars} 字")
+            result = pipeline.run(
+                text, source.name, client,
+                progress=progress, cancel=flag,
+                chunk_chars=settings.chunk_chars, folder=folder)
 
     target = pipeline.default_output_path(
         result.text, source, str(get_export_subdir("livestream_summary")))
@@ -225,7 +250,7 @@ def run_summary(payload: dict, on_log=None, is_cancelled=None) -> dict:
 
     stats = result.stats or {}
     summary = (f"完成：{stats.get('chunks', 0)} 块 · {stats.get('requests', 0)} 次请求"
-               if mode == "ai" else f"完成：本地规则 · {stats.get('chars', 0)} 字")
+               if mode != "rule" else f"完成：本地规则 · {stats.get('chars', 0)} 字")
     return {
         "name": target.name,
         "path": str(target),

@@ -24,13 +24,14 @@ from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_shop_page import BiliShopPage
 from gui_qt.pages.douyin_shop_page import DouyinShopPage
 from gui_qt.pages.shopping_page import ShoppingPage
+from gui_qt.pages.xianyu_shop_page import XianyuShopPage
 from gui_qt.table_columns import configure_table_columns
 from toolbox.shopping_parse import (
     PLATFORM_LABELS, SHOPPING_PLATFORM_OPTIONS, detect_platform,
     plan_shopping_parse,
 )
 
-_TAB_INDEX = {"taobao": 0, "douyin": 1, "bili": 2}
+_TAB_INDEX = {"taobao": 0, "douyin": 1, "bili": 2, "xianyu": 3}
 
 
 class ShoppingHubPage(BasePage):
@@ -56,7 +57,8 @@ class ShoppingHubPage(BasePage):
         self.input_edit.setPlaceholderText(
             "粘贴链接或分享文案，自动识别平台（抖音可一行一条批量）：\n"
             "淘宝 taobao.com / tmall.com · 抖音商城 v.douyin.com 分享文案 · "
-            "B站小店 b23.tv / mall.bilibili.com / UP主 UID")
+            "B站小店 b23.tv / UP主 UID · 闲鱼 goofish.com/item?id=…\n"
+            "输入周边关键词后点「搜索闲鱼」")
         self.input_edit.setFixedHeight(60)
         self.input_edit.textChanged.connect(self._update_hint)
         tv.addWidget(self.input_edit)
@@ -77,6 +79,8 @@ class ShoppingHubPage(BasePage):
 
         row = QHBoxLayout()
         row.setSpacing(8)
+        self.search_btn = QPushButton("搜索闲鱼")
+        self.search_btn.clicked.connect(self._search_xianyu)
         self.parse_btn = QPushButton("解析")
         self.parse_btn.setProperty("variant", "primary")
         self.parse_btn.clicked.connect(self._parse)
@@ -85,6 +89,7 @@ class ShoppingHubPage(BasePage):
         self.hint_label.setStyleSheet("color: palette(placeholder-text);")
         self.hint_label.setWordWrap(True)
         row.addWidget(self.hint_label, 1)
+        row.addWidget(self.search_btn)
         row.addWidget(self.parse_btn)
         tv.addLayout(row)
         layout.addWidget(top)
@@ -94,11 +99,13 @@ class ShoppingHubPage(BasePage):
         self.taobao_page = ShoppingPage(app)
         self.douyin_page = DouyinShopPage(app)
         self.bili_page = BiliShopPage(app)
+        self.xianyu_page = XianyuShopPage(app)
         configure_table_columns(self.taobao_page.table, fixed={0: 36},
                                 minimums={1: 100}, stretch=(1,), auto_fit=True)
         for key, page in (("taobao", self.taobao_page),
                           ("douyin", self.douyin_page),
-                          ("bili", self.bili_page)):
+                          ("bili", self.bili_page),
+                          ("xianyu", self.xianyu_page)):
             page.embed_input()
             self.stack.addWidget(page)
             self._panels[key] = page
@@ -110,6 +117,19 @@ class ShoppingHubPage(BasePage):
         self._update_hint()
 
     # ==================== 入口 ====================
+
+    def _search_xianyu(self):
+        if ("xianyu" not in self._selected_platforms()
+                or any(self._panel_busy(page) for page in self._panels.values())):
+            return
+        keyword = self.input_edit.toPlainText().strip()
+        if not keyword or len(keyword) > 100 or "://" in keyword:
+            self._set_hint("请输入 1–100 字的闲鱼搜索关键词，商品链接请点「解析」", warn=True)
+            return
+        self.stack.setCurrentIndex(_TAB_INDEX["xianyu"])
+        self._set_hint("搜索闲鱼首批商品，勾选后可入库并下载图片")
+        self.xianyu_page.submit_search(keyword)
+        self._sync_platform_controls()
 
     def _parse(self):
         if any(self._panel_busy(page) for page in self._panels.values()):
@@ -139,7 +159,10 @@ class ShoppingHubPage(BasePage):
             plan = plan_shopping_parse(text, selected)
             self._set_hint(plan["summary"])
         except ValueError as exc:
-            self._set_hint(str(exc), warn=True)
+            if "xianyu" in selected and "://" not in text and len(text) <= 100:
+                self._set_hint("可点「搜索闲鱼」按关键词查找周边")
+            else:
+                self._set_hint(str(exc), warn=True)
 
     def _selected_platforms(self):
         return [key for key, check in self.platform_checks.items() if check.isChecked()]
@@ -160,6 +183,7 @@ class ShoppingHubPage(BasePage):
             selected = self._selected_platforms()
             busy = any(self._panel_busy(page) for page in self._panels.values())
             self.parse_btn.setEnabled(not busy and bool(selected))
+            self.search_btn.setEnabled(not busy and "xianyu" in selected)
             for check in self.platform_checks.values():
                 check.setEnabled(not busy)
             for key, page in self._panels.items():

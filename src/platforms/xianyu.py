@@ -225,11 +225,11 @@ def _public_payload(url, parser, cancel):
 
 
 def _browser_payload(url, api, parser, cookie, cancel):
-    from playwright.sync_api import sync_playwright
-    from toolbox.browser import launch
     check_cancel(cancel)
     result, errors = [], []
     try:
+        from playwright.sync_api import sync_playwright
+        from toolbox.browser import launch
         with sync_playwright() as playwright:
             browser = launch(playwright, headless=True)
             try:
@@ -252,6 +252,11 @@ def _browser_payload(url, api, parser, cookie, cancel):
                             raise RateLimited("闲鱼请求过于频繁，请稍后再试")
                         if response.status == 403:
                             raise Blocked("闲鱼暂时拒绝访问，请稍后重试")
+                        size = response.headers.get("content-length", "")
+                        if size.isdigit() and int(size) > MAX_BODY:
+                            raise ParseChanged("闲鱼返回内容过大，已停止读取")
+                        if "json" not in response.headers.get("content-type", "").lower():
+                            raise ParseChanged("闲鱼未返回商品数据，请稍后重试")
                         raw = response.body()
                         if len(raw) > MAX_BODY:
                             raise ParseChanged("闲鱼返回内容过大，已停止读取")
@@ -264,8 +269,11 @@ def _browser_payload(url, api, parser, cookie, cancel):
                 page.on("response", capture)
                 page.goto(url, wait_until="domcontentloaded", timeout=25000)
                 deadline = time.monotonic() + 18
-                while not result and not errors and time.monotonic() < deadline:
+                # 首个请求可能只建立内存游客票据，官网随后自动重试；不自行刷新登录态。
+                while not result and time.monotonic() < deadline:
                     check_cancel(cancel)
+                    if errors and not isinstance(errors[-1], AuthRequired):
+                        raise errors[-1]
                     page.wait_for_timeout(200)
                 if result:
                     return result[0]
@@ -290,7 +298,10 @@ def _browser_payload(url, api, parser, cookie, cancel):
 def _fetch(url, api, parser, credential, on_log, is_cancelled):
     if on_log:
         on_log("读取闲鱼公开页面")
-    result = _public_payload(url, parser, is_cancelled)
+    try:
+        result = _public_payload(url, parser, is_cancelled)
+    except AuthRequired:
+        result = None
     if result is not None:
         return result
     try:

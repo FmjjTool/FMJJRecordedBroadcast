@@ -308,7 +308,7 @@ def fetch(payload: dict, on_progress=None, on_log=None,
         "days": days,
         "fetched_at": fetched_at,
         "writeback": outcome,
-        "warning": bool(outcome.get("errors") or outcome.get("cancelled")),
+        "warning": bool(outcome.get("errors") or outcome.get("invalid") or outcome.get("cancelled")),
         "summary": f"「{name}」指数快照已保存（{videos} 个视频 · 近 {days} 天）；{outcome['summary']}",
         "note": "在资产库刷新查看；仅更新精确匹配的视频指标，保留作品内容与本地文件。",
     }

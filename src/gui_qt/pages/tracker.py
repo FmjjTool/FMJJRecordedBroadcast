@@ -367,7 +367,7 @@ class TrackerPage(BasePage):
 
     def _open_history(self, acc):
         """打开二级窗口：完整历史数据（指标当列、时间点当行、可横向滚动）。
-        抖音账号额外带「直播历史」页签（直播场次记录）。"""
+        抖音账号额外带「直播记录」页签（直播场次记录）。"""
         from tracker.accounts import load_history, parse_url
         from tracker.douyin_live import load_live_history
         history = load_history(acc.get("name", ""))

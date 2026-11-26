@@ -29,7 +29,7 @@ _HEADER_BYTES = 8192
 _TIMEZONE = timezone(timedelta(hours=8))
 _ID_RE = re.compile(r"performance_\d{8}_\d{6}_\d{1,10}_[0-9a-f]{12}\Z")
 _REASON_RE = re.compile(r"[a-z][a-z0-9_]{0,39}\Z")
-_STATUSES = {"running", "stopped", "exited", "failed", "startup_failed", "completed"}
+_STATUSES = {"running", "stopped", "normal_exit", "startup_failure", "uncaught_exception", "process_exit"}
 _WRITE_LOCK = threading.RLock()
 
 
@@ -97,13 +97,13 @@ def _time_text(value) -> str | None:
 
 def _status(report: dict, reason: str) -> str:
     status = report.get("status")
-    if status in _STATUSES:
+    if isinstance(status, str) and status in _STATUSES:
         return status
-    if reason in {"failed", "startup_failed"}:
+    if reason in {"startup_failure", "uncaught_exception"}:
         return reason
     if report.get("active") is True:
         return "running"
-    return "exited" if reason in {"exit", "shutdown"} else "stopped"
+    return reason if reason in {"normal_exit", "process_exit"} else "stopped"
 
 
 def _metadata(report_id: str, report: dict, reason: str) -> dict:
@@ -162,9 +162,13 @@ def _open_checked(report_id: str):
 
 
 def _validate_metadata(value, report_id: str) -> dict:
-    if (not isinstance(value, dict) or value.get("storage_schema_version") != STORAGE_SCHEMA_VERSION
-            or value.get("id") != report_id or value.get("status") not in _STATUSES
-            or _time_text(value.get("saved_at")) is None):
+    if (not isinstance(value, dict) or type(value.get("storage_schema_version")) is not int
+            or value.get("storage_schema_version") != STORAGE_SCHEMA_VERSION
+            or value.get("id") != report_id or not isinstance(value.get("status"), str)
+            or value.get("status") not in _STATUSES
+            or _time_text(value.get("saved_at")) is None
+            or type(value.get("active")) is not bool or type(value.get("startup_complete")) is not bool
+            or any(type(value.get(key)) is not int or value[key] < 0 for key in ("samples", "events"))):
         raise ValueError("报告格式无效")
     return value
 
@@ -206,7 +210,6 @@ def _entries() -> list[tuple[str, dict, int, int]]:
 def _prune_locked(current_id: str) -> tuple[int, bool]:
     entries = _entries()
     keep = {current_id}
-    keep.update(row[0] for row in entries if row[0] != current_id and len(keep) < 1)
     # 总数最多 20；当前保存的会话必留，避免文件系统时间精度影响本次报告。
     for report_id, _meta, _size, _modified in entries:
         if len(keep) >= RETENTION_LIMIT:
@@ -279,9 +282,16 @@ def list_reports(limit: int = 30) -> dict:
 
 def load_report(report_id: str) -> dict:
     """受控读取完整报告；不接受文件路径或扩展名，不回显磁盘位置。"""
-    raw = read_report_bytes(report_id)
+    return _decode_report(_read_bytes(report_id), report_id)
+
+
+def _reject_constant(_value):
+    raise ValueError("报告内容无效")
+
+
+def _decode_report(raw: bytes, report_id: str) -> dict:
     try:
-        report = json.loads(raw)
+        report = json.loads(raw, parse_constant=_reject_constant)
     except (ValueError, UnicodeDecodeError, RecursionError):
         raise ValueError("报告内容无效") from None
     if not isinstance(report, dict):
@@ -290,8 +300,7 @@ def load_report(report_id: str) -> dict:
     return report
 
 
-def read_report_bytes(report_id: str) -> bytes:
-    """读取大小受限的 JSON 附件，供上层统一响应工具下载。"""
+def _read_bytes(report_id: str) -> bytes:
     report_id = _validate_id(report_id)
     try:
         with _WRITE_LOCK, _open_checked(report_id) as stream:
@@ -309,4 +318,11 @@ def read_report_bytes(report_id: str) -> bytes:
     except (ValueError, UnicodeDecodeError, RecursionError):
         header = None
     _validate_metadata(header.get("autosave") if isinstance(header, dict) else None, report_id)
+    return raw
+
+
+def read_report_bytes(report_id: str) -> bytes:
+    """读取大小受限且格式有效的 JSON 附件，供上层统一响应工具下载。"""
+    raw = _read_bytes(report_id)
+    _decode_report(raw, report_id)
     return raw

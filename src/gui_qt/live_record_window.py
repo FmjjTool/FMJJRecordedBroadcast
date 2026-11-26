@@ -1747,7 +1747,7 @@ class RecordingRepairDialog(QDialog):
         self.btn_run.setProperty("variant", "primary")
         self.btn_run.clicked.connect(self._run)
         btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
+        lay.addWidget(btns, 0, Qt.AlignmentFlag.AlignRight)
 
     def _pick_file(self):
         p, _ = QFileDialog.getOpenFileName(

@@ -212,7 +212,8 @@ class RenamePage(BasePage):
             " border: 1px solid palette(mid); border-radius: 6px; }")
         self.type_grid = FlowLayout(self.type_box, spacing=8, center_items=True)
         self.type_grid.setContentsMargins(10, 8, 10, 8)
-        c2.addWidget(self.type_box, 1)
+        self.type_box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        c2.addWidget(self.type_box)
         self.type_checks = {}
         clear_btn = QPushButton("清除所有选择")
         clear_btn.clicked.connect(self._clear_all_types)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from toolbox import webui_livestream_summary
+from toolbox.livestream_summary.client import CancelledError
+from toolbox.webui.jobs import JobCancelled
 
 
 class LivestreamSummaryService:
@@ -19,7 +21,18 @@ class LivestreamSummaryService:
         return webui_livestream_summary.save_settings(dict(payload))
 
     def test_connection(self) -> dict:
-        return webui_livestream_summary.test_connection()
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        def work(task):
+            try:
+                return webui_livestream_summary.test_connection(
+                    on_log=task.log,
+                    is_cancelled=lambda: bool(task.cancel_requested),
+                    on_progress=lambda percent, message: task.update(
+                        progress=percent / 100.0))
+            except CancelledError as exc:
+                raise JobCancelled(str(exc)) from exc
+        return {"job": self.jobs.submit("local_model_test", work).id}
 
     def start_summary(self, payload: dict) -> dict:
         if self.jobs is None:
@@ -29,11 +42,17 @@ class LivestreamSummaryService:
             raise ValueError("请选择转录文件")
         webui_livestream_summary.check_transcript(str(payload["rel"]))
         mode = str(payload.get("mode") or "ai")
-        if mode not in ("ai", "rule"):
+        if mode not in ("ai", "local", "rule"):
             raise ValueError("未知的总结模式")
+        def work(task):
+            try:
+                return webui_livestream_summary.run_summary(
+                    payload, on_log=task.log,
+                    is_cancelled=lambda: bool(task.cancel_requested),
+                    on_progress=lambda percent, message: task.update(
+                        progress=percent / 100.0))
+            except CancelledError as exc:
+                raise JobCancelled(str(exc)) from exc
         job = self.jobs.submit(
-            "livestream_summary",
-            lambda task: webui_livestream_summary.run_summary(
-                payload, on_log=task.log,
-                is_cancelled=lambda: bool(task.cancel_requested)))
+            "livestream_summary", work)
         return {"job": job.id}

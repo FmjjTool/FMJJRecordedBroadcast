@@ -1,11 +1,12 @@
-"""WebUI 性能诊断：本机只读读数与桌面启动自动监控选项。
+"""WebUI 性能诊断：本机只读读数、桌面启动选项与已保存报告。
 
-桌面端「性能诊断」的采样、快照、导出与子进程明细仍只在桌面端。
+不依赖桌面进程或 Qt；历史报告只通过 performance_reports owner 读取。
 """
 
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import shutil
 import sys
@@ -24,6 +25,31 @@ def save_settings(payload: dict) -> dict:
     if set(payload) != set(FIELDS):
         raise ValueError("请提供自动监控选项")
     return {"auto_start": save_auto_start(payload["auto_start"])}
+
+
+def reports(limit: int = 30) -> dict:
+    """读取已落盘的性能会话，不启动或控制桌面监控。"""
+    from toolbox import performance_reports
+
+    if type(limit) is not int or not 1 <= limit <= 30:
+        raise ValueError("报告条数需在 1–30 之间")
+    return performance_reports.list_reports(limit=limit)
+
+
+def report_detail(report_id: str) -> dict:
+    """报告标识和读取边界由唯一存储 owner 校验。"""
+    from toolbox import performance_reports
+
+    return performance_reports.load_report(report_id)
+
+
+def report_download(report_id: str) -> dict:
+    """返回同一份已保存报告的 JSON，不重新采样，也不写导出目录。"""
+    report = report_detail(report_id)
+    return {
+        "data": json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8"),
+        "filename": report_id + ".json",
+    }
 
 
 def _cpu_percent() -> float | None:
@@ -145,7 +171,7 @@ def overview() -> dict:
         percent = memory.get("percent")
     process = process_memory()
     note = ("本机读数只读；自动监控选项将在下次启动桌面软件时生效，不控制当前桌面进程。"
-            "桌面端采样曲线、Python 分配快照、页面耗时与导出报告仍在桌面端。")
+            "已自动保存的报告可在下方查看和下载；实时采样、标记与 Python 快照仍在桌面端。")
     return {
         "fields": FIELDS,
         "settings": {"auto_start": auto_start_enabled()},

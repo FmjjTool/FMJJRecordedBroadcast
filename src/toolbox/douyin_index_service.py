@@ -148,7 +148,7 @@ def writeback_snapshot(snapshot: dict, *, collected_path=None, increment_path=No
     result.update(matched=len(matched), updated=len(updated),
                   unmatched=len(set(patches) - matched),
                   stale=len(stale - updated),
-                  invalid=invalid + len(invalid_ids - updated),
+                  invalid=invalid + len(invalid_ids),
                   unchanged=len(matched - updated - stale - invalid_ids))
     result["summary"] = writeback_summary(result)
     return result
@@ -161,7 +161,7 @@ def writeback_summary(result: dict) -> str:
     if result.get("stale"):
         text += f" · 旧快照跳过 {result['stale']} 条"
     if result.get("invalid"):
-        text += f" · 无效数据跳过 {result['invalid']} 条"
+        text += f" · 数据校验跳过 {result['invalid']} 处"
     if result.get("errors"):
         text += f" · {len(result['errors'])} 处未成功，请重试"
     if result.get("cancelled"):
@@ -209,6 +209,11 @@ def search_daren(keyword: str, total: int = 20):
 def fmt_count(value):
     from platforms import douyin_index as dxi
     return dxi.fmt_count(value)
+
+
+def fmt_pct(value):
+    from platforms import douyin_index as dxi
+    return dxi.fmt_pct(value)
 
 
 def index_dir():

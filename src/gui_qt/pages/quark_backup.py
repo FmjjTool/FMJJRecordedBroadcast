@@ -20,7 +20,7 @@ from datetime import datetime
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QGuiApplication, QPalette
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QBoxLayout, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -199,13 +199,23 @@ class QuarkBackupPage(BasePage):
         root.setSpacing(12)
 
         root.addWidget(self._build_toolbar())
-        root.addLayout(self._build_body(), 1)
+        self._body_layout = self._build_body()
+        root.addLayout(self._body_layout, 1)
+        self.setMinimumHeight(420)
 
         self.reload()
 
     def has_active_tasks(self):
         """切离设置时保留正在执行备份的面板。"""
         return self._running
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        narrow = self.width() < 760
+        direction = QBoxLayout.TopToBottom if narrow else QBoxLayout.LeftToRight
+        if self._body_layout.direction() != direction:
+            self._body_layout.setDirection(direction)
+            self.setMinimumHeight(680 if narrow else 420)
 
     # ==================== 图标（主题切换后重生成） ====================
 

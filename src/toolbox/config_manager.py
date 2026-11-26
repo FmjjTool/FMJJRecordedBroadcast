@@ -39,6 +39,47 @@ def get_config_dir() -> Path:
         cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir
 
+
+def get_config_dir_readonly() -> Path:
+    """启动诊断仅读现有设置，不创建目录或探写文件；路径优先级由配置 owner 维护。"""
+    cfg_dir = get_app_root() / "config"
+    probe = cfg_dir
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    writable = os.access(probe, os.W_OK)
+    if sys.platform == "win32" and probe.is_dir():
+        # 请求目录的创建权限但不创建任何文件，兼容 Program Files 的 ACL；
+        # os.access 在 Windows 上仅靠只读属性不足以判断安装目录权限。
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            create = kernel.CreateFileW
+            create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                               ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            create.restype = wintypes.HANDLE
+            close = kernel.CloseHandle
+            close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+            access = 2 if probe == cfg_dir else 4  # FILE_ADD_FILE / FILE_ADD_SUBDIRECTORY
+            handle = create(str(probe), access, 7, None, 3, 0x02000000, None)
+            writable = handle not in (None, ctypes.c_void_p(-1).value)
+            if writable:
+                close(handle)
+        except (AttributeError, OSError):
+            writable = False
+    if writable:
+        return cfg_dir
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    return base / "FengMingToolbox" / "config"
+
+
+def performance_auto_start_readonly() -> bool:
+    """启动入口读取唯一已有布尔键；缺失、损坏或不可读时不启用诊断。"""
+    data = _read_json(get_config_dir_readonly() / "config.json")
+    section = data.get("convert", {}) if isinstance(data, dict) else {}
+    return isinstance(section, dict) and section.get("performance_auto_start") is True
+
 # 合并后的文件路径
 def _cfg_path() -> Path:
     return get_config_dir() / "config.json"

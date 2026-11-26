@@ -531,11 +531,12 @@ class DouyinIndexPage(BasePage):
             "将保存完整指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。\n"
             "不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。")
         cancel = box.addButton("取消", QMessageBox.RejectRole)
-        confirm = box.addButton("抓取并回写", QMessageBox.AcceptRole)
+        box.addButton("抓取并回写", QMessageBox.AcceptRole)
         box.setDefaultButton(cancel)
         box.setEscapeButton(cancel)
         box.exec()
-        return box.clickedButton() is confirm
+        clicked = box.clickedButton()
+        return clicked is not None and box.buttonRole(clicked) == QMessageBox.AcceptRole
 
     def _cancel_fetch(self):
         self._cancel_requested = True

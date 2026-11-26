@@ -423,7 +423,6 @@ class GlobalSettingsPage(BasePage):
         cloud_title.setProperty("role", "sectionTitle")
         card.content_layout.addWidget(cloud_title)
         self.cloud_backup_page = QuarkBackupPage(app)
-        self.cloud_backup_page.setMinimumHeight(420)
         card.content_layout.addWidget(self.cloud_backup_page)
         v.addWidget(card)
 

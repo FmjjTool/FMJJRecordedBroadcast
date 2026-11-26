@@ -1054,18 +1054,20 @@ class HomePage(BasePage):
             table = self.site_history_table
             column = {"site_visitors": 2, "site_sessions": 3,
                       "site_pageviews": 4, "site_online": 5}[key]
-            lines = [f"{cell(table, row, 0)} · {cell(table, row, 1)}\n"
+            lines = [f"{cell(table, row, 0)} · {cell(table, row, 1)} · "
                      f"{cell(table, row, column)}"
                      for row in range(min(3, table.rowCount()))]
             empty = "尚无历史记录，可在完整详情中采集"
+        elif key == "tcdoc_rows":
+            lines = [f"文档 · {self.tcdoc_doc_combo.itemText(row)}"
+                     for row in range(min(3, self.tcdoc_doc_combo.count()))]
+            empty = self.tcdoc_status.text() or "尚无文档记录"
         elif key in TCDOC_DRAWER_KEYS:
             table = self.tcdoc_table
-            column = {"doc_views": 1, "doc_members": 3, "doc_readers": 5,
-                      "tcdoc_rows": 1}[key]
-            metric = "浏览量 " if key == "tcdoc_rows" else ""
+            column = {"doc_views": 1, "doc_members": 3, "doc_readers": 5}[key]
             name = self.tcdoc_doc_combo.currentText()
             lines = [f"{name} · {cell(table, row, 0)}\n"
-                     f"{metric}{cell(table, row, column)}"
+                     f"{cell(table, row, column)}"
                      for row in range(min(3, table.rowCount()))]
             empty = self.tcdoc_status.text() or "尚无文档历史记录"
         else:
@@ -1074,6 +1076,8 @@ class HomePage(BasePage):
                      f"粉丝 {cell(table, row, 3)}"
                      for row in range(min(3, table.rowCount()))]
             empty = self.account_status.text() or "尚无观察账号"
+            if empty.startswith("读取账号数据失败"):
+                lines = [empty]
         for index, label in enumerate(preview.findChildren(QLabel)):
             text = lines[index] if index < len(lines) else (empty if index == 0 else "")
             label.setText(text)
@@ -1089,11 +1093,11 @@ class HomePage(BasePage):
 
     def _fit_drawer_height(self):
         """按当前页表格的实际行数收紧抽屉高度，避免数据少时留一大片空白。"""
-        self._refresh_stat_preview()
-        if self.drawer.isHidden():
-            return
         stack = getattr(self, "drawer_stack", None)
         if stack is None or getattr(self, "drawer", None) is None:
+            return
+        self._refresh_stat_preview()
+        if self.drawer.isHidden():
             return
         page = stack.currentWidget()
         if page is self.account_drawer_page:
@@ -1182,6 +1186,7 @@ class HomePage(BasePage):
                 return
             if err:
                 self.account_status.setText(f"读取账号数据失败：{err}")
+                self._refresh_stat_preview()
                 return
             for row, account in enumerate(display):
                 history = (histories or {}).get(account["key"]) or []

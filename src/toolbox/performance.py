@@ -148,8 +148,14 @@ class PerformanceRecorder:
         self.running = {}
         self._task_id = 0
         self.dropped_samples = self.dropped_events = 0
+        self._startup = False
+        self._startup_complete = False
+        self._startup_phases = {}
+        self._phase_pending = {}
+        self._phase_id = 0
+        self._startup_completed_seconds = None
 
-    def start(self, trace=False):
+    def start(self, trace=False, *, started=None, started_at=None, cpu_started=None, startup=False):
         with self._lock:
             if self.active:
                 return
@@ -166,10 +172,16 @@ class PerformanceRecorder:
             self.snapshots.clear()
             self.running.clear()
             self.dropped_samples = self.dropped_events = 0
-            self.started = time.perf_counter()
-            self.started_at = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+            self.started = time.perf_counter() if started is None else started
+            self.started_at = started_at or datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="milliseconds")
             self.stopped_at = None
-            self._last_wall, self._last_cpu = self.started, time.process_time()
+            self._last_wall = self.started
+            self._last_cpu = time.process_time() if cpu_started is None else cpu_started
+            self._startup = bool(startup)
+            self._startup_complete = False
+            self._startup_phases.clear()
+            self._phase_pending.clear()
+            self._startup_completed_seconds = None
             self.active = True
 
     def stop(self):
@@ -201,7 +213,7 @@ class PerformanceRecorder:
             traced, peak = tracemalloc.get_traced_memory() if self._trace_owned else (None, None)
             sample = {"seconds": round(now - self.started, 3), "page": page,
                       **process_memory(), "cpu_one_core_percent": round(percent, 1),
-                      "ui_lag_ms": round(lag_ms, 1), "python_bytes": traced,
+                      "ui_lag_ms": None if lag_ms is None else round(lag_ms, 1), "python_bytes": traced,
                       "python_peak_bytes": peak,
                       "trace_overhead_bytes": tracemalloc.get_tracemalloc_memory() if self._trace_owned else None,
                       "threads": threading.active_count(), "tasks": len(self.running),
@@ -209,6 +221,64 @@ class PerformanceRecorder:
             self.dropped_samples += len(self.samples) == self.MAX_SAMPLES
             self.samples.append(sample)
             return sample
+
+    def phase_started(self, name):
+        """只记录固定启动阶段与进程边界读数，不记录参数、业务内容或异常消息。"""
+        with self._lock:
+            if not self.active or not self._startup:
+                return None
+            self._phase_id += 1
+            token = {"id": self._phase_id, "session": self.session, "name": str(name)[:80],
+                     "time": time.perf_counter(), "cpu": time.process_time(), "memory": process_memory()}
+            self._phase_pending[token["id"]] = token
+            return token
+
+    def phase_finished(self, token, failed=False, error_type=None):
+        with self._lock:
+            if token is None or token["session"] != self.session:
+                return
+            self._phase_pending.pop(token["id"], None)
+            after = process_memory()
+            deltas = {f"{key}_delta": after[key] - token["memory"][key]
+                      if after[key] is not None and token["memory"][key] is not None else None
+                      for key in ("rss", "private")}
+            self.record_startup_phase(token["name"], (time.perf_counter() - token["time"]) * 1000,
+                                      failed=failed, error_type=error_type,
+                                      started_seconds=token["time"] - self.started,
+                                      cpu_ms=(time.process_time() - token["cpu"]) * 1000, **deltas)
+
+    def record_startup_phase(self, name, duration_ms, *, failed=False, error_type=None,
+                             started_seconds=None, cpu_ms=None, rss_delta=None, private_delta=None):
+        with self._lock:
+            if not self.active or not self._startup:
+                return
+            name = str(name)[:80]
+            if name not in self._startup_phases and len(self._startup_phases) >= 128:
+                name = "其他启动阶段"
+            row = self._startup_phases.setdefault(name, {
+                "name": name, "count": 0, "total_ms": 0.0, "max_ms": 0.0, "failures": 0,
+                "rss_delta": None, "private_delta": None, "cpu_ms": None,
+                "first_seconds": round(started_seconds or 0, 3), "last_seconds": 0.0})
+            row["count"] += 1
+            row["total_ms"] = round(row["total_ms"] + duration_ms, 2)
+            row["max_ms"] = max(row["max_ms"], round(duration_ms, 2))
+            row["failures"] += bool(failed)
+            row["last_seconds"] = round(time.perf_counter() - self.started, 3)
+            for key, value in (("rss_delta", rss_delta), ("private_delta", private_delta), ("cpu_ms", cpu_ms)):
+                if value is not None:
+                    row[key] = (row[key] or 0) + value
+            if error_type:
+                row["error_type"] = str(error_type)[:80]
+            self.event("startup_phase", name, duration_ms=round(duration_ms, 2), failed=bool(failed),
+                       rss_delta=rss_delta, private_delta=private_delta)
+
+    def complete_startup(self):
+        with self._lock:
+            if self.active and self._startup and not self._startup_complete:
+                self._startup_complete = True
+                self._startup_completed_seconds = round(time.perf_counter() - self.started, 3)
+                return True
+            return False
 
     def task_started(self, fn):
         with self._lock:
@@ -263,6 +333,16 @@ class PerformanceRecorder:
                     "stopped_at": getattr(self, "stopped_at", None), "active": self.active,
                     "platform": sys.platform, "python": sys.version.split()[0],
                     "python_tracing": getattr(self, "trace_enabled", False),
+                    "startup": {"origin": "python_entry" if self._startup else None,
+                                "complete": self._startup_complete,
+                                "completed_seconds": self._startup_completed_seconds,
+                                "phases": [dict(row) for row in self._startup_phases.values()],
+                                "pending": [{"name": token["name"],
+                                             "elapsed_ms": round((time.perf_counter() - token["time"]) * 1000, 2)}
+                                            for token in self._phase_pending.values()],
+                                "limitations": ["起点为 Python 入口，不能覆盖解释器与打包引导加载。",
+                                                "内存从诊断初始化后开始采样，阶段增量不代表独占内存。",
+                                                "阶段可能嵌套或并发，耗时与内存增量不可直接相加。"]},
                     "samples": list(self.samples), "events": list(self.events),
                     "memory_snapshots": list(self.snapshots),
                     "running_tasks": [{"label": task["label"], "started_seconds": round(task["started"] - self.started, 3)}

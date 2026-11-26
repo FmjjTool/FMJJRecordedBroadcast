@@ -77,11 +77,11 @@ def prepare_xianyu_search(payload: dict) -> dict:
     text = payload.get("text")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("请先输入闲鱼搜索关键词")
-    if len(text.strip()) > 200:
-        raise ValueError("搜索关键词不能超过 200 字")
+    if len(text.strip()) > 100:
+        raise ValueError("搜索关键词不能超过 100 字")
     limit = payload.get("limit", 30)
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 60:
-        raise ValueError("搜索数量须为 1 至 60 件")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+        raise ValueError("搜索数量须为 1 至 30 件")
     return {"text": text.strip(), "limit": limit}
 
 
@@ -94,22 +94,10 @@ def search_xianyu(payload: dict, on_log=None, is_cancelled=None) -> dict:
 
 def prepare_xianyu_save(payload: dict) -> dict:
     _require_xianyu(payload)
-    items = payload.get("items")
-    if not isinstance(items, list) or not 1 <= len(items) <= 60:
-        raise ValueError("请勾选 1 至 60 件闲鱼商品")
-    selected = []
-    for item in items:
-        if not isinstance(item, dict):
-            raise ValueError("商品数据无效，请重新搜索后勾选")
-        item_id, url = item.get("item_id", ""), item.get("url", "")
-        if not isinstance(item_id, str) or not isinstance(url, str):
-            raise ValueError("商品数据无效，请重新搜索后勾选")
-        if not item_id.strip() and not url.strip():
-            raise ValueError("商品缺少编号或链接，请重新搜索后勾选")
-        if len(item_id) > 32 or len(url) > 2048:
-            raise ValueError("商品数据无效，请重新搜索后勾选")
-        selected.append({"item_id": item_id.strip(), "url": url.strip()})
-    return {"items": selected}
+    from toolbox import xianyu_shopping
+    # 与桌面共用规范化/去重，只向任务传递服务器核对过的稳定 ID。
+    return {"items": [{"item_id": value} for value in
+                      xianyu_shopping.normalize_items(payload.get("items"))]}
 
 
 def save_xianyu(payload: dict, on_log=None, is_cancelled=None) -> dict:
