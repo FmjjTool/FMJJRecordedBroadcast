@@ -17,10 +17,10 @@ from PySide6.QtCore import Qt, QTimer, QAbstractTableModel
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QStackedWidget, QTableView, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QDialogButtonBox, QCompleter, QFormLayout, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+    QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui_qt import common, table_sort
@@ -735,6 +735,15 @@ class TcDocBridgePanel(QWidget):
             "图片列请用「复制图片」或到腾讯文档里补。")
         self.manual_btn.clicked.connect(self._manual_entry)
         row2.addWidget(self.manual_btn)
+
+        # 线下活动专用：直接给已存在的活动行登记三个平台的歌单链接
+        self.playlist_btn = QPushButton("歌单录入")
+        self.playlist_btn.setToolTip(
+            "给「线下活动」里某一场活动登记网易云 / 酷狗 / QQ音乐歌单链接：\n"
+            "只改「活动歌单_*」三列，已有其它链接不覆盖；链接或歌单 ID 都能填。")
+        self.playlist_btn.setVisible(False)
+        self.playlist_btn.clicked.connect(self._playlist_entry)
+        row2.addWidget(self.playlist_btn)
         row2.addStretch(1)
 
         self.copy_btn = QPushButton("复制全部（TSV）")
@@ -1108,6 +1117,7 @@ class TcDocBridgePanel(QWidget):
         readonly = profile in ("events", "merch", "lives")
         self.manual_btn.setVisible(bool(target))
         self.field_map_btn.setVisible(bool(target))
+        self.playlist_btn.setVisible(profile == "events")
         self.partner_filter_btn.setVisible(profile == "posts")
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
@@ -1974,6 +1984,131 @@ class TcDocBridgePanel(QWidget):
     # ==================== 比对 ====================
 
     _MANUAL_SKIP_TYPES = {5, 10, 11, 13, 19, 21}   # 图片/人员/公式/关联
+
+    @staticmethod
+    def _playlist_event_label(event: dict) -> str:
+        parts = [event.get("name") or "", event.get("date") or "",
+                 f"{event.get('song_count') or 0} 首"]
+        return " · ".join(part for part in parts if part)
+
+    def _playlist_event_by_text(self, combo, events):
+        data = combo.currentData()
+        if isinstance(data, dict):
+            return data
+        text = combo.currentText().strip()
+        if not text:
+            return None
+        for event in events:
+            if self._playlist_event_label(event) == text:
+                return event
+        lowered = text.lower()
+        for event in events:
+            if lowered in self._playlist_event_label(event).lower():
+                return event
+        return None
+
+    def _playlist_entry(self) -> None:
+        """线下活动：给某一场活动登记三个平台的歌单链接（只写「活动歌单_*」三列）。"""
+        from music import playlist_service
+        from toolbox.tcdoc import event_playlist
+
+        try:
+            events = playlist_service.load_offline_events()
+        except Exception as exc:  # noqa: BLE001 - 快照损坏按读取失败提示
+            QMessageBox.warning(self, "歌单录入", f"读取线下活动快照失败：{exc}")
+            return
+        if not events:
+            QMessageBox.information(
+                self, "歌单录入", "本地没有「线下活动」快照，请先在腾讯文档页同步表格。")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("歌单录入 · 线下活动")
+        dlg.resize(580, 360)
+        root = QVBoxLayout(dlg)
+        tip = QLabel("选一场活动，粘贴平台歌单链接或只填歌单 ID（可留空）；"
+                     "只写「活动歌单_*」三列，已有其它链接不会覆盖。")
+        tip.setWordWrap(True)
+        tip.setProperty("role", "muted")
+        root.addWidget(tip)
+
+        form = QFormLayout()
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        for event in events:
+            combo.addItem(self._playlist_event_label(event), event)
+        combo.setCurrentIndex(-1)
+        combo.setEditText("")
+        combo.lineEdit().setPlaceholderText("输入活动名称搜索，或点箭头选择")
+        completer = combo.completer()
+        if completer is not None:
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+        form.addRow("活动", combo)
+        edits: dict[str, QLineEdit] = {}
+        for platform, label in (("netease", "网易云"), ("kugou", "酷狗"),
+                                ("qq", "QQ音乐")):
+            edit = QLineEdit()
+            edit.setPlaceholderText("歌单链接，或歌单 ID（可留空）")
+            edits[platform] = edit
+            form.addRow(f"活动歌单_{label}", edit)
+        root.addLayout(form)
+        root.addStretch(1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(dlg.reject)
+        buttons.addWidget(cancel)
+        ok = QPushButton("推送到腾讯文档")
+        ok.setProperty("variant", "primary")
+        buttons.addWidget(ok)
+        root.addLayout(buttons)
+
+        def submit():
+            event = self._playlist_event_by_text(combo, events)
+            if event is None:
+                QMessageBox.warning(dlg, "歌单录入", "请先选择一场线下活动。")
+                return
+            entries = {platform: edit.text().strip()
+                       for platform, edit in edits.items()}
+            if not any(entries.values()):
+                QMessageBox.warning(dlg, "歌单录入", "至少填写一个平台的歌单链接。")
+                return
+            try:
+                for platform, text in entries.items():
+                    if text:
+                        event_playlist.parse_input(platform, text)
+            except ValueError as exc:
+                QMessageBox.warning(dlg, "歌单录入", str(exc))
+                return
+            dlg.accept()
+            self._run_playlist_write(event, entries)
+
+        ok.clicked.connect(submit)
+        dlg.exec()
+
+    def _run_playlist_write(self, event, entries) -> None:
+        from toolbox.tcdoc import event_playlist
+
+        self.status.setText(f"正在写入「{event.get('name') or ''}」的活动歌单…")
+
+        def work():
+            return event_playlist.write_manual(event, entries)
+
+        def done(receipt, err):
+            if err:
+                self.status.setText(f"歌单录入失败：{err}")
+                QMessageBox.warning(self, "歌单录入", f"写入失败：{err}")
+                return
+            text = event_playlist.summary_text(receipt)
+            self.status.setText(text)
+            tip = "\n\n已写入腾讯文档；本地快照未更新，需要查看请点「同步前刷新」。" \
+                if receipt.get("ok") else ""
+            QMessageBox.information(self, "歌单录入", text + tip)
+
+        run_bg(work, done, owner=self)
 
     def _manual_entry(self) -> None:
         """手动新增一行：按当前表头生成输入框，只生成可复制 TSV。

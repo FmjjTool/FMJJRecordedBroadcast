@@ -215,6 +215,19 @@ class TCDocService:
             lambda task: self._bridge_upload_job(task, module, payload))
         return {"job": job.id}
 
+    def bridge_events(self) -> dict:
+        return _bridge_module().event_list()
+
+    def start_bridge_playlist(self, payload: dict) -> dict:
+        """线下活动歌单链接写入「活动歌单_*」三列（只改这三列）。"""
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        module = _bridge_module()
+        job = self.jobs.submit(
+            "tcdoc_bridge_playlist",
+            lambda task: module.write_event_playlist(dict(payload)))
+        return {"job": job.id}
+
     def _bridge_upload_job(self, job, module, payload: dict) -> dict:
         def progress(done, total, name) -> None:
             fraction = (float(done) / total) if total else None

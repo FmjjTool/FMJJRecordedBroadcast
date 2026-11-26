@@ -158,15 +158,63 @@ def probe_page(url: str, name: str = "", timeout: float = 8.0) -> tuple[bool, st
     return True, "网页可访问"
 
 
+def parse_input(platform: str, text: str) -> str:
+    """手填的歌单链接或 ID → 可写入的 http(s) 链接；无法识别时抛 ValueError。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if re.match(r"^https?://", raw, re.I):
+        if not urlsplit(raw).hostname:
+            raise ValueError(f"链接无法识别：{raw}")
+        return raw
+    if not re.match(r"^[A-Za-z0-9_-]{2,64}$", raw):
+        raise ValueError(f"歌单 ID 无法识别：{raw}")
+    url = playlist_link.url_of(platform, raw)
+    if not url:
+        raise ValueError(f"{platform} 暂不支持生成歌单链接")
+    return url
+
+
+def write_manual(event, entries, *, reader=None, client_factory=None,
+                 overwrite: bool = False, probe=None) -> dict:
+    """手工录入歌单链接：entries = {平台: 链接或 ID}，只写填写了的平台。"""
+    links = []
+    for platform in ("netease", "kugou", "qq"):
+        text = str((entries or {}).get(platform) or "").strip()
+        if not text:
+            continue
+        links.append({
+            "platform": platform,
+            "column": playlist_link.column_of(platform),
+            "playlist_id": "" if re.match(r"^https?://", text, re.I) else text,
+            "url": parse_input(platform, text),
+            "playlist_name": "",
+            "verify": False,   # 用户自己贴的链接视为可信，不再探测
+        })
+    if not links:
+        return {"ok": False, "event": _text((event or {}).get("name")),
+                "record_id": "", "items": [],
+                "message": "没有填写任何平台的歌单链接"}
+    return _write_links(event, links, reader=reader, client_factory=client_factory,
+                        overwrite=overwrite, probe=probe, verify=False)
+
+
 def write_results(event, results, *, reader=None, client_factory=None,
                   overwrite: bool = False, probe=None) -> dict:
     """把平台歌单链接回写到线下活动行；返回逐项回执。"""
     links = playlist_link.build_links(results)
+    if not links:
+        return {"ok": False, "event": _text((event or {}).get("name")),
+                "record_id": "", "items": [],
+                "message": "没有可回写的平台歌单（未创建成功或平台不受支持）"}
+    return _write_links(event, links, reader=reader, client_factory=client_factory,
+                        overwrite=overwrite, probe=probe, verify=True)
+
+
+def _write_links(event, links, *, reader=None, client_factory=None,
+                 overwrite: bool = False, probe=None, verify: bool = True) -> dict:
     receipt = {"ok": False, "event": _text((event or {}).get("name")),
                "record_id": "", "items": [], "message": ""}
-    if not links:
-        receipt["message"] = "没有可回写的平台歌单（未创建成功或平台不受支持）"
-        return receipt
     if not str((event or {}).get("name") or "").strip():
         receipt["message"] = "缺少活动名称，无法定位表格行"
         return receipt
@@ -213,7 +261,7 @@ def write_results(event, results, *, reader=None, client_factory=None,
             item["status"] = "conflict"
             item["message"] = f"已有其它链接（{current}），未覆盖"
             continue
-        if link.get("verify"):
+        if verify and link.get("verify"):
             check = (probe or probe_page)(link["url"], link.get("playlist_name") or "")
             if not check[0]:
                 item["status"] = "unverified"

@@ -20,6 +20,7 @@ from toolbox.webui.services.music_download import MusicDownloadService
 from toolbox.webui.services.music_tag import MusicTagService
 from toolbox.webui.services.performance import PerformanceService
 from toolbox.webui.services.rename_batch import RenameBatchService
+from toolbox.webui.services.file_time import FileTimeService
 from toolbox.webui.services.tickets import TicketsService
 from toolbox.webui.services.netdisk import NetdiskService
 from toolbox.webui.services.publish import PublishService
@@ -56,6 +57,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     livestream_summary = LivestreamSummaryService(jobs)
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
+    file_time = FileTimeService()
     tickets = TicketsService(jobs)
     music_playlist = MusicPlaylistService(jobs)
     music_download = MusicDownloadService(jobs)
@@ -437,6 +439,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return rename_batch.execute(dict(req.json or {}))
     server.post("/api/rename-batch/execute", rename_batch_execute)
 
+    server.get("/api/file-time", lambda req: file_time.overview())
+
+    def file_time_preview(req):
+        return file_time.preview(dict(req.json or {}))
+    server.post("/api/file-time/preview", file_time_preview)
+
+    def file_time_apply(req):
+        return file_time.apply(dict(req.json or {}))
+    server.post("/api/file-time/apply", file_time_apply)
+
     server.get("/api/tickets", lambda req: tickets.overview())
 
     def start_tickets_parse(req):
@@ -723,6 +735,12 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_tcdoc_bridge_upload(req):
         return tcdoc.start_bridge_upload(dict(req.json or {}))
     server.post("/api/tcdoc/bridge/upload", start_tcdoc_bridge_upload)
+
+    server.get("/api/tcdoc/bridge/events", lambda req: tcdoc.bridge_events())
+
+    def start_tcdoc_bridge_playlist(req):
+        return tcdoc.start_bridge_playlist(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/playlist", start_tcdoc_bridge_playlist)
 
     def get_job(req, job_id):
         job = jobs.get(job_id)

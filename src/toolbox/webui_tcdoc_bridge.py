@@ -44,6 +44,46 @@ def _write_mode(target: dict) -> str:
     return "read_only"
 
 
+def event_list() -> dict:
+    """线下活动清单（来自本地快照），供「歌单录入」下拉使用。"""
+    from music import playlist_service
+
+    events = []
+    for event in playlist_service.load_offline_events():
+        events.append({
+            "row_no": event.get("row_no"),
+            "name": event.get("name") or "",
+            "date": event.get("date") or "",
+            "city": event.get("city") or "",
+            "song_count": event.get("song_count") or 0,
+        })
+    return {"events": events, "total": len(events)}
+
+
+def write_event_playlist(payload: dict) -> dict:
+    """线下活动：把三个平台的歌单链接写入「活动歌单_*」三列。"""
+    from music import playlist_service
+    from toolbox.tcdoc import event_playlist
+
+    row_no = payload.get("row_no")
+    if row_no is None:
+        raise ValueError("请先选择一场线下活动")
+    event = next((item for item in playlist_service.load_offline_events()
+                  if int(item.get("row_no")) == int(row_no)), None)
+    if event is None:
+        raise ValueError("没有找到该线下活动，请刷新腾讯文档快照后重试")
+    entries = {platform: str(payload.get(platform) or "").strip()
+               for platform in ("netease", "kugou", "qq")}
+    if not any(entries.values()):
+        raise ValueError("至少填写一个平台的歌单链接")
+    for platform, text in entries.items():
+        if text:
+            event_playlist.parse_input(platform, text)
+    receipt = event_playlist.write_manual(event, entries)
+    receipt["summary"] = event_playlist.summary_text(receipt)
+    return receipt
+
+
 def overview() -> dict:
     """中间层概览：可同步的表、刷新门禁与默认范围。"""
     targets = []

@@ -10407,6 +10407,9 @@ function renderMusicTag(root) {
             class: 'btn primary', type: 'button', disabled: true
           }, '上传选中');
           var selLabel = h('span', { class: 'muted small' }, '已选 0 条');
+          var playlistBtn = h('button', {
+            class: 'btn', type: 'button', style: 'display:none'
+          }, '歌单录入');
           var targets = [];
           var maxUpload = 50;
 
@@ -10461,6 +10464,8 @@ function renderMusicTag(root) {
             var isLives = !!target && target.profile === 'lives';
             accSel.style.display = isLives ? 'none' : '';
             dupSel.style.display = isLives ? '' : 'none';
+            playlistBtn.style.display = (target && target.profile === 'events')
+              ? '' : 'none';
             accSel.value = bridgeState.accounts;
             dupSel.value = bridgeState.dupMode;
             if (target) {
@@ -10685,6 +10690,95 @@ function renderMusicTag(root) {
             });
           });
 
+          playlistBtn.addEventListener('click', function () {
+            api('/api/tcdoc/bridge/events').then(function (data) {
+              var events = data.events || [];
+              if (!events.length) {
+                toast('本地没有线下活动快照，请先同步表格', 'warning');
+                return;
+              }
+              var evSel = h('select', { class: 'select', style: 'width:100%' });
+              events.forEach(function (ev) {
+                evSel.appendChild(h('option', { value: String(ev.row_no) },
+                  [ev.name, ev.date, ev.city, (ev.song_count || 0) + ' 首']
+                    .filter(Boolean).join(' · ')));
+              });
+              var inputs = {};
+              var rows = [['netease', '活动歌单_网易云'],
+                ['kugou', '活动歌单_酷狗'], ['qq', '活动歌单_QQ']]
+                .map(function (pair) {
+                  var input = h('input', {
+                    class: 'input', type: 'text',
+                    placeholder: '歌单链接，或歌单 ID（可留空）',
+                    style: 'flex:1;min-width:200px'
+                  });
+                  inputs[pair[0]] = input;
+                  return h('div', { class: 'toolbar', style: 'margin-top:6px' },
+                    h('span', { class: 'muted small' }, pair[1]), input);
+                });
+              var pushBtn = h('button', {
+                class: 'btn primary', type: 'button'
+              }, '推送到腾讯文档');
+              var overlay = h('div', { class: 'preview-overlay' });
+              overlay.addEventListener('click', function (event) {
+                if (event.target === overlay) overlay.remove();
+              });
+              pushBtn.addEventListener('click', function () {
+                var payload = { row_no: Number(evSel.value) };
+                var any = false;
+                Object.keys(inputs).forEach(function (key) {
+                  payload[key] = inputs[key].value.trim();
+                  if (payload[key]) any = true;
+                });
+                if (!any) {
+                  toast('至少填写一个平台的歌单链接', 'warning');
+                  return;
+                }
+                pushBtn.disabled = true;
+                pushBtn.textContent = '写入中…';
+                post('/api/tcdoc/bridge/playlist', payload).then(function (res) {
+                  watchJob(jobHost2, res.job, function (job) {
+                    var receipt = job.result || {};
+                    toast(receipt.summary || '已处理',
+                      receipt.ok ? 'success' : 'warning');
+                    overlay.remove();
+                  }, {
+                    onSettled: function (job) {
+                      pushBtn.disabled = false;
+                      pushBtn.textContent = '推送到腾讯文档';
+                      if (job.status !== 'done') {
+                        toast('写入失败：' + (job.error || '未知错误'), 'error');
+                      }
+                    }
+                  });
+                }).catch(function (error) {
+                  pushBtn.disabled = false;
+                  pushBtn.textContent = '推送到腾讯文档';
+                  toast('写入失败：' + error.message, 'error');
+                });
+              });
+              overlay.appendChild(h('div', { class: 'preview-box' },
+                h('div', { class: 'preview-caption' },
+                  h('span', null, '歌单录入 · 线下活动'),
+                  h('button', {
+                    class: 'btn mini', type: 'button',
+                    onclick: function () { overlay.remove(); }
+                  }, '关闭')),
+                h('div', { class: 'preview-body' },
+                  h('div', { class: 'toolbar' },
+                    h('span', { class: 'muted small' }, '活动'), evSel),
+                  rows,
+                  h('div', { class: 'muted small', style: 'margin-top:8px' },
+                    '只写「活动歌单_*」三列，已有其它链接不会覆盖；'
+                    + '可填完整链接，也可只填歌单 ID。'),
+                  h('div', { class: 'toolbar', style: 'margin-top:10px' },
+                    h('span', { style: 'flex:1' }), pushBtn))));
+              document.body.appendChild(overlay);
+            }).catch(function (error) {
+              toast('读取线下活动失败：' + error.message, 'error');
+            });
+          });
+
           tsvBtn.addEventListener('click', function () {
             if (!lastPreview || !lastPreview.tsv) return;
             var area = h('textarea', {
@@ -10715,7 +10809,7 @@ function renderMusicTag(root) {
               h('span', { class: 'muted small' }, '时间'), daysSel,
               accSel, dupSel, compareBtn),
             h('div', { class: 'toolbar', style: 'margin-top:8px' },
-              refreshBtn, gateBadge, tsvBtn, uploadBtn,
+              refreshBtn, gateBadge, tsvBtn, uploadBtn, playlistBtn,
               h('span', { style: 'flex:1' }), selLabel),
             refreshInfo,
             h('div', { class: 'muted small', style: 'margin-top:4px' },
