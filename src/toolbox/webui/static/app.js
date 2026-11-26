@@ -2233,6 +2233,48 @@
         schedule();
       });
 
+      var delTypeBoxes = {};
+      var delTypeRow = h('div', { class: 'toolbar' });
+      [['space', '空格'], ['digit', '数字'], ['lower', '小写'],
+        ['upper', '大写'], ['chinese', '中文'], ['special', '特殊字符']
+      ].forEach(function (pair) {
+        var box = h('input', { type: 'checkbox' });
+        delTypeBoxes[pair[0]] = box;
+        delTypeRow.appendChild(h('label', { class: 'check' }, box,
+          ' ' + pair[1]));
+      });
+      var delPos = h('input', {
+        class: 'input', type: 'number', value: '0', min: '0',
+        style: 'width:72px'
+      });
+      var delCnt = h('input', {
+        class: 'input', type: 'number', value: '0', min: '0',
+        style: 'width:72px'
+      });
+      var delRight = h('input', { type: 'checkbox' });
+      var delKw = h('input', {
+        class: 'input', type: 'text', placeholder: '定位关键词',
+        style: 'min-width:120px'
+      });
+      var delKwCnt = h('input', {
+        class: 'input', type: 'number', value: '0', min: '0',
+        style: 'width:72px'
+      });
+      var delDir = h('select', { class: 'select' },
+        h('option', { value: 'right' }, '向右删'),
+        h('option', { value: 'left' }, '向左删'));
+      var delIncl = h('input', { type: 'checkbox' });
+      var delPosRow = h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' }, '从第'), delPos,
+        h('span', { class: 'muted small' }, '个字符起删除'), delCnt,
+        h('span', { class: 'muted small' }, '个字符'),
+        h('label', { class: 'check' }, delRight, ' 从右往左'),
+        h('span', { class: 'muted small' }, '（数量 0 表示不按位置删）'));
+      var delKwRow = h('div', { class: 'toolbar' },
+        h('span', { class: 'muted small' }, '关键词'), delKw, delDir,
+        delKwCnt, h('span', { class: 'muted small' }, '个字符'),
+        h('label', { class: 'check' }, delIncl, ' 包含关键词本身'));
+
       function collect() {
         return {
           path: pathInput.value.trim(),
@@ -2248,6 +2290,16 @@
           pos_idx: posIdx.value,
           pos_text: posText.value,
           from_right: fromRightCb.checked,
+          del_types: Object.keys(delTypeBoxes).filter(function (key) {
+            return delTypeBoxes[key].checked;
+          }),
+          del_pos: delPos.value,
+          del_cnt: delCnt.value,
+          del_from_right: delRight.checked,
+          del_kw: delKw.value,
+          del_kw_cnt: delKwCnt.value,
+          del_dir: delDir.value,
+          del_incl: delIncl.checked,
           textmode: textmode.value,
           numbering: numberingCb.checked,
           start: startInput.value,
@@ -2318,6 +2370,17 @@
         });
       [recursiveCb, numberingCb, ignoreExtCb, conflictCb, filterSel,
         caseSel, convertSel, fromRightCb]
+        .forEach(function (input) {
+          input.addEventListener('change', schedule);
+        });
+      Object.keys(delTypeBoxes).forEach(function (key) {
+        delTypeBoxes[key].addEventListener('change', schedule);
+      });
+      [delPos, delCnt, delKw, delKwCnt]
+        .forEach(function (input) {
+          input.addEventListener('input', schedule);
+        });
+      [delRight, delIncl, delDir]
         .forEach(function (input) {
           input.addEventListener('change', schedule);
         });
@@ -2397,6 +2460,15 @@
           h('label', { class: 'check' }, ignoreExtCb, ' 忽略扩展名'),
           h('label', { class: 'check' }, conflictCb, ' 冲突加序号')),
         h('div', {
+          class: 'toolbar', style: 'margin-top:10px'
+        },
+          h('span', { class: 'row-title' }, '按类型删除'),
+          h('span', { class: 'muted small' },
+            '勾选后从文件名里删掉这类字符；只改文件名，不删文件')),
+        delTypeRow,
+        delPosRow,
+        delKwRow,
+        h('div', {
           class: 'toolbar', style: 'margin-top:8px;margin-bottom:6px'
         },
           h('span', { class: 'row-title' }, '文本模式'),
@@ -2406,7 +2478,7 @@
           fillTmBtn),
         textmode,
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '按类型删除、扩展名改名、改名时间等规则仍在桌面端。')));
+          '扩展名改名、改名时间等规则仍在桌面端。')));
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
           h('span', { class: 'row-title' }, '预览'),
