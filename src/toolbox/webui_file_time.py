@@ -65,14 +65,18 @@ def _root(path: str) -> Path:
 def preview(path: str, options: dict | None = None) -> dict:
     opts = _options(options)
     root = _root(path)
-    files, truncated = _scan(str(root), opts["recursive"], opts["filter"])
+    found, truncated = _scan(str(root), opts["recursive"], opts["filter"])
     rows = []
     ready = 0
-    for index, file_path in enumerate(files):
+    index = 0
+    for file_path, kind in found:
+        if kind != "file":
+            continue
+        index += 1
         try:
             stat = file_path.stat()
         except OSError:
-            rows.append({"index": index + 1, "rel": str(file_path.name),
+            rows.append({"index": index, "rel": str(file_path.name),
                          "name": file_path.name, "mtime": "", "ctime": "",
                          "new_mtime": "文件不可访问", "new_ctime": "",
                          "status": "失败"})
@@ -80,7 +84,7 @@ def preview(path: str, options: dict | None = None) -> dict:
         result = compute_times(str(file_path), opts["mode"], opts["value"],
                                opts["offset"])
         row = {
-            "index": index + 1,
+            "index": index,
             "rel": str(file_path.relative_to(root)),
             "name": file_path.name,
             "mtime": _fmt(stat.st_mtime),
@@ -111,10 +115,12 @@ def preview(path: str, options: dict | None = None) -> dict:
 def apply(path: str, options: dict | None = None) -> dict:
     opts = _options(options)
     root = _root(path)
-    files, _truncated = _scan(str(root), opts["recursive"], opts["filter"])
+    found, _truncated = _scan(str(root), opts["recursive"], opts["filter"])
     applied = 0
     failed = []
-    for file_path in files:
+    for file_path, kind in found:
+        if kind != "file":
+            continue
         result = compute_times(str(file_path), opts["mode"], opts["value"],
                                opts["offset"])
         if isinstance(result, str):

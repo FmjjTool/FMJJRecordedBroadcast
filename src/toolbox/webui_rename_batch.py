@@ -41,6 +41,7 @@ def _name_error(name: str) -> str:
 FIELDS: dict[str, dict] = {
     "recursive": {"type": "bool", "default": False},
     "filter": {"type": "str", "default": "all"},
+    "dir_rename": {"type": "bool", "default": False},
     "template": {"type": "str", "default": ""},
     "prefix": {"type": "str", "default": ""},
     "suffix": {"type": "str", "default": ""},
@@ -140,35 +141,43 @@ def _cfg_from_options(options: dict) -> dict:
     }
 
 
-def _scan(path: str, recursive: bool, filter_key: str) -> tuple[list[Path], bool]:
+def _scan(path: str, recursive: bool, filter_key: str,
+          include_dirs: bool = False) -> tuple[list[tuple[Path, str]], bool]:
+    """扫描待处理项，返回 [(路径, "file" | "dir")] 与是否被截断。"""
     root = Path(str(path or "").strip())
     if not path or not root.is_dir():
         raise ValueError("文件夹不存在或不可访问")
     allowed = _EXT_GROUPS.get(filter_key)
-    found: list[Path] = []
+    found: list[tuple[Path, str]] = []
+    dirs: list[tuple[Path, str]] = []
     truncated = False
     if recursive:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            if include_dirs:
+                for name in dirnames:
+                    dirs.append((Path(dirpath) / name, "dir"))
             for name in sorted(filenames):
                 candidate = Path(dirpath) / name
                 if allowed and candidate.suffix.lower() not in allowed:
                     continue
-                found.append(candidate)
-                if len(found) >= _MAX_FILES:
+                found.append((candidate, "file"))
+                if len(found) + len(dirs) >= _MAX_FILES:
                     truncated = True
-                    return found, truncated
+                    return found + dirs, truncated
     else:
         for candidate in sorted(root.iterdir()):
-            if not candidate.is_file():
+            if candidate.is_dir():
+                if include_dirs:
+                    dirs.append((candidate, "dir"))
                 continue
             if allowed and candidate.suffix.lower() not in allowed:
                 continue
-            found.append(candidate)
-            if len(found) >= _MAX_FILES:
+            found.append((candidate, "file"))
+            if len(found) + len(dirs) >= _MAX_FILES:
                 truncated = True
-                return found, truncated
-    return found, truncated
+                return found + dirs, truncated
+    return found + dirs, truncated
 
 
 def preview(path: str, options: dict | None = None) -> dict:
@@ -181,8 +190,11 @@ def preview(path: str, options: dict | None = None) -> dict:
     if not path or not root.is_dir():
         raise ValueError("文件夹不存在或不可访问")
     root = root.resolve()
-    files, truncated = _scan(str(root), recursive, filter_key)
+    include_dirs = bool(options.get("dir_rename"))
+    files, truncated = _scan(str(root), recursive, filter_key, include_dirs)
     cfg = _cfg_from_options(options)
+    dir_cfg = {**cfg, "whole": {**cfg["whole"], "ext_case": "",
+                                "new_ext": ""}}
     ignore_ext = cfg["options"]["ignore_ext"]
     conflict = cfg["options"]["conflict"]
     text_lines = [line.strip() for line in
@@ -192,17 +204,21 @@ def preview(path: str, options: dict | None = None) -> dict:
     used: dict[tuple[str, str], int] = {}
     changed = 0
     name_counts: dict[tuple[str, str], int] = {}
-    for item in files:
+    for item, _kind in files:
         key = (_rel_parent(item, root), item.name.lower())
         name_counts[key] = name_counts.get(key, 0) + 1
-    for index, file_path in enumerate(files):
+    for index, (file_path, kind) in enumerate(files):
         name = file_path.name
         rel = str(file_path.relative_to(root))
         rel_parent = _rel_parent(file_path, root)
-        stem, ext = split_name(name, ignore_ext)
-        new_stem, new_ext = apply_rules(stem, ext, cfg, index, now)
+        if kind == "dir":
+            # 目录没有扩展名：不拆扩展名，也不套用扩展名相关规则
+            new_stem, new_ext = apply_rules(name, "", dir_cfg, index, now)
+        else:
+            stem, ext = split_name(name, ignore_ext)
+            new_stem, new_ext = apply_rules(stem, ext, cfg, index, now)
         if not new_stem or new_stem in (".", ".."):
-            new_stem = stem or "未命名"
+            new_stem = name if kind == "dir" else (stem or "未命名")
         new_name = join_name(new_stem, new_ext)
         status = "不变"
         if conflict:
@@ -225,7 +241,7 @@ def preview(path: str, options: dict | None = None) -> dict:
             if status == "不变":
                 status = "将改名"
         try:
-            size = int(file_path.stat().st_size)
+            size = 0 if kind == "dir" else int(file_path.stat().st_size)
         except OSError:
             size = 0
         rows.append({
@@ -234,6 +250,7 @@ def preview(path: str, options: dict | None = None) -> dict:
             "rel": rel,
             "new": new_name,
             "status": status,
+            "kind": kind,
             "ext": new_ext or "（无）",
             "size": size,
         })
@@ -330,11 +347,12 @@ def execute(path: str, options: dict | None = None,
             failures.append({"old": row["old"], "error": error})
             continue
         source = _safe_rel(root, row["rel"])
-        if source is None or not source.is_file():
+        if source is None or not source.exists():
             failures.append({"old": row["old"], "error": "源文件不存在或路径越界"})
             continue
         plan.append({"old": row["old"], "rel": row["rel"],
-                     "new": row["new"]})
+                     "new": row["new"], "kind": row.get("kind")
+                     or ("dir" if source.is_dir() else "file")})
 
     sources = {(str(Path(item["rel"]).parent).lower(), item["old"].lower())
                for item in plan}
@@ -354,24 +372,28 @@ def execute(path: str, options: dict | None = None,
         valid.append(item)
 
     renamed = 0
+    file_items = [item for item in valid if item["kind"] != "dir"]
+    dir_items = sorted([item for item in valid if item["kind"] == "dir"],
+                       key=lambda item: len(Path(item["rel"]).parts),
+                       reverse=True)
     temp_paths: dict[str, Path] = {}
     temp_names: dict[str, Path] = {}
     try:
-        for index, item in enumerate(valid):
+        for index, item in enumerate(file_items):
             source = root / item["rel"]
             temp = source.parent / f".fmjj_rename_{os.getpid()}_{index}"
             if temp.exists():
                 raise OSError("临时文件名冲突")
             source.rename(temp)
             temp_paths[item["rel"]] = temp
-        for item in valid:
+        for item in file_items:
             temp = temp_paths[item["rel"]]
             final = root / Path(item["rel"]).parent / item["new"]
             temp.rename(final)
             temp_names[item["rel"]] = final
             renamed += 1
     except Exception as exc:  # noqa: BLE001 - 回滚后统一转成可读错误
-        for item in reversed(valid):
+        for item in reversed(file_items):
             final = temp_names.get(item["rel"])
             temp = temp_paths.get(item["rel"])
             original = root / item["rel"]
@@ -383,5 +405,24 @@ def execute(path: str, options: dict | None = None,
             except OSError:
                 pass
         raise ValueError(f"改名失败，已尝试回滚：{str(exc)[:120]}") from exc
+
+    # 目录：先深后浅逐个改名（子目录先改，父目录路径才不会失效）
+    dir_done: list[tuple[Path, Path]] = []
+    for item in dir_items:
+        source = root / item["rel"]
+        target = root / Path(item["rel"]).parent / item["new"]
+        try:
+            source.rename(target)
+        except OSError as exc:
+            failures.append({"old": item["old"], "error": str(exc)[:120]})
+            for done_src, done_dst in reversed(dir_done):
+                try:
+                    done_dst.rename(done_src)
+                except OSError:
+                    pass
+            renamed -= len(dir_done)
+            break
+        dir_done.append((source, target))
+        renamed += 1
     return {"path": str(root), "renamed": renamed, "failed": failures,
             "total": len(valid) + len(failures), "ok": True}

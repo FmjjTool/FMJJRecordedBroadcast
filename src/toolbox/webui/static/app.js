@@ -24,7 +24,10 @@
     douyin: { name: '', tab: 'core' },
     chaohua: { topic: '' },
     image_sorter: { kind: 'all', q: '' },
-    rename_batch: { path: '', recursive: false, filter: 'all', tab: 'rename' },
+    rename_batch: {
+      path: '', recursive: false, filter: 'all', tab: 'rename',
+      dirRename: false
+    },
     shopping: { tab: 'taobao' },
     info_accounts: { platform: '', scope: 'all' },
     artifacts: { tab: 'comments' },
@@ -2151,6 +2154,9 @@
       var recursiveCb = h('input', {
         type: 'checkbox', checked: !!state.rename_batch.recursive
       });
+      var dirRenameCb = h('input', {
+        type: 'checkbox', checked: !!state.rename_batch.dirRename
+      });
       var filterSel = h('select', { class: 'select' });
       (data.filters || []).forEach(function (item) {
         filterSel.appendChild(h('option', {
@@ -2296,6 +2302,7 @@
           path: pathInput.value.trim(),
           recursive: recursiveCb.checked,
           filter: filterSel.value,
+          dir_rename: dirRenameCb.checked,
           template: template.value.trim(),
           prefix: prefix.value,
           suffix: suffix.value,
@@ -2348,7 +2355,7 @@
           stats.textContent = '共 ' + fmtNumber(result.total) + ' 个文件 · 将改名 '
             + fmtNumber(result.changed) + ' 个'
             + (result.truncated ? '（超过 2000 个，已截断）' : '')
-            + ' · 执行前会二次确认，只改文件名不改内容';
+            + ' · 执行前会二次确认，只改名称不改内容';
           if (!lastRows.length) {
             tableHost.replaceChildren(empty('文件夹内没有符合条件的文件。'));
             return;
@@ -2364,7 +2371,8 @@
           lastRows.forEach(function (row) {
             body.appendChild(h('tr', null,
               h('td', { class: 'num' }, row.index),
-              h('td', { class: 'ellipsis' }, row.old),
+              h('td', { class: 'ellipsis' },
+                (row.kind === 'dir' ? '［目录］' : '') + row.old),
               h('td', {
                 class: 'ellipsis',
                 style: row.status === '不变' ? '' : 'color: var(--link)'
@@ -2391,7 +2399,7 @@
           input.addEventListener('input', schedule);
         });
       [recursiveCb, numberingCb, randomCb, ignoreExtCb, conflictCb, filterSel,
-        caseSel, convertSel, fromRightCb, extCaseSel, kwAfterCb]
+        caseSel, convertSel, fromRightCb, extCaseSel, kwAfterCb, dirRenameCb]
         .forEach(function (input) {
           input.addEventListener('change', schedule);
         });
@@ -2425,8 +2433,8 @@
         }
         var payload = collect();
         if (!window.confirm('将对「' + payload.path + '」的 ' + changed
-          + ' 个文件执行改名。\n\n按当前预览执行（随机后缀不会再变）；'
-          + '只修改文件名，不改文件内容；'
+          + ' 个文件 / 文件夹执行改名。\n\n按当前预览执行（随机后缀不会再变）；'
+          + '只修改名称，不改内容；'
           + '目标已存在或文件名非法的会跳过。\n\n确定继续？')) {
           return;
         }
@@ -2634,6 +2642,7 @@
         h('div', { class: 'toolbar' },
           h('span', { class: 'muted small' }, '文件夹'), pathInput,
           h('label', { class: 'check' }, recursiveCb, ' 包含子文件夹'),
+          h('label', { class: 'check' }, dirRenameCb, ' 文件夹改名'),
           h('span', { class: 'muted small' }, '类型'), filterSel,
           scanBtn)));
       renameHost.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
@@ -2694,7 +2703,7 @@
           h('span', { style: 'flex:1' }),
           execBtn,
           h('span', { class: 'muted small' },
-            '只改文件名，不改内容；执行前二次确认'))));
+            '只改文件 / 文件夹名，不改内容；执行前二次确认'))));
       renameHost.appendChild(stats);
       renameHost.appendChild(tableHost);
       renameHost.appendChild(resultHost);
