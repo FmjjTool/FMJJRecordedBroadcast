@@ -6893,10 +6893,42 @@ function renderLivestreamSummary(root) {
         refreshBtn.addEventListener('click', function () {
           renderTrackerPage(root, kind);
         });
+        var groupSel = h('select', { class: 'select' },
+          h('option', { value: '' }, '选择分组'));
         var exportBtn = h('button', {
           class: 'btn', type: 'button', disabled: true,
-          title: '按组导出在桌面端'
+          title: '选择分组后导出该组全部账号的变化对比 PNG'
         }, '按组导出');
+        api('/api/trackers/groups?kind=' + encodeURIComponent(kind))
+          .then(function (result) {
+            (result.groups || []).forEach(function (group) {
+              groupSel.appendChild(h('option', { value: group.id },
+                group.name + '（' + group.id + '）'));
+            });
+            if (!(result.groups || []).length) {
+              groupSel.disabled = true;
+              groupSel.firstChild.textContent = '暂无分组（桌面端账号配置）';
+            }
+          }).catch(function () {
+            groupSel.disabled = true;
+            groupSel.firstChild.textContent = '分组读取失败';
+          });
+        groupSel.addEventListener('change', function () {
+          exportBtn.disabled = !groupSel.value;
+        });
+        exportBtn.addEventListener('click', function () {
+          if (!groupSel.value) return;
+          exportBtn.disabled = true;
+          downloadPost('/api/trackers/group-export', {
+            kind: kind, group_id: groupSel.value
+          }, '分组变化对比.png').then(function () {
+            toast('已导出分组变化对比图', 'success');
+          }).catch(function (error) {
+            toast('导出失败：' + error.message, 'error');
+          }).then(function () {
+            exportBtn.disabled = !groupSel.value;
+          });
+        });
         var collectBtn = h('button', {
           class: 'btn primary', type: 'button'
         }, '获取全部');
@@ -6937,12 +6969,12 @@ function renderLivestreamSummary(root) {
           });
         });
         root.appendChild(h('div', { class: 'toolbar' },
-          refreshBtn, exportBtn, collectBtn,
+          refreshBtn, groupSel, exportBtn, collectBtn,
           h('span', { class: 'muted small' }, '平台'), platformSel,
           h('span', { class: 'spacer' }),
           h('span', { class: 'muted small' },
             '共 ' + fmtNumber(data.total) + ' 个账号；'
-            + '「获取全部」按当前平台筛选采集，单账号卡片可导出变化对比图。')));
+            + '「获取全部」按当前平台筛选采集；单账号可导出变化对比图，选分组可整组合成一张 PNG。')));
         root.appendChild(jobHost);
         root.appendChild(grid);
         draw();

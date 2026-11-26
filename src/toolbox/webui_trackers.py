@@ -302,3 +302,38 @@ def export_png(payload: dict) -> dict:
 def _progress(on_progress, done, total, text) -> None:
     if on_progress:
         on_progress(done, total, text)
+
+
+def groups(kind: str) -> dict:
+    """账号分组列表（音乐 / 网媒各自的 groups 配置）。"""
+    _kind, acc_mod, _export = _modules(kind)
+    try:
+        mapping = acc_mod.get_groups() or {}
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"读取分组失败：{exc}") from exc
+    rows = [{"id": str(gid), "name": str(name)}
+            for gid, name in sorted(mapping.items())]
+    return {"groups": rows, "total": len(rows)}
+
+
+def group_png(payload: dict) -> dict:
+    """导出某分组全部账号的变化对比合成 PNG（返回字节）。"""
+    _kind, acc_mod, export_mod = _modules(payload.get("kind"))
+    group_id = str(payload.get("group_id") or "").strip()
+    if not group_id:
+        raise ValueError("请选择分组")
+    mapping = acc_mod.get_groups() or {}
+    group_name = str(mapping.get(group_id) or "").strip()
+    if not group_name:
+        raise ValueError("分组不存在或已删除，请刷新后重试")
+    try:
+        path = export_mod.export_group_png(group_id, group_name)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"导出分组图片失败：{exc}") from exc
+    target = Path(path)
+    try:
+        data = target.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"读取导出图片失败：{exc}") from exc
+    return {"data": data, "filename": target.name, "size": len(data),
+            "summary": f"已导出分组「{group_name}」变化对比（{target.name}）"}

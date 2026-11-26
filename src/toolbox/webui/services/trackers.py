@@ -38,6 +38,12 @@ class TrackerService:
     def export_png(self, payload: dict) -> dict:
         return webui_trackers.export_png(dict(payload))
 
+    def groups(self, kind: str) -> dict:
+        return webui_trackers.groups(kind)
+
+    def export_group_png(self, payload: dict) -> dict:
+        return webui_trackers.group_png(dict(payload))
+
     @staticmethod
     def _progress(task):
         def progress(done, total, text) -> None:

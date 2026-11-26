@@ -188,6 +188,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return AttachmentResponse(data["data"], data["filename"], "image/png")
     server.post("/api/trackers/export", export_tracker_png)
 
+    server.get("/api/trackers/groups",
+               lambda req: trackers.groups(req.q("kind")))
+
+    def export_tracker_group(req):
+        data = trackers.export_group_png(dict(req.json or {}))
+        return AttachmentResponse(data["data"], data["filename"], "image/png")
+    server.post("/api/trackers/group-export", export_tracker_group)
+
     server.get("/api/trackers/music", lambda req: trackers.music())
     server.get("/api/trackers/media", lambda req: trackers.media())
     server.get("/api/trackers/music/history", lambda req: trackers.music_history(
