@@ -4532,14 +4532,18 @@ function renderLivestreamSummary(root) {
   function renderRename(host) {
     host.replaceChildren();
     setLoading(host, '正在读取工作目录…');
-    Promise.all([
-      api('/api/tools/rename/overview'),
-      api('/api/tools/rename/preview?limit=300'),
-      api('/api/publish/overview').catch(function () { return null; }),
-      api('/api/publish/templates').catch(function () { return null; }),
-      api('/api/publish/history').catch(function () { return null; }),
-      api('/api/publish/categories').catch(function () { return null; })
-    ]).then(function (results) {
+    api('/api/tools/rename/overview').then(function (overview) {
+      return Promise.all([
+        Promise.resolve(overview),
+        overview.has_work_dir
+          ? api('/api/tools/rename/preview?limit=300')
+          : Promise.resolve({ items: [], total: 0, truncated: false }),
+        api('/api/publish/overview').catch(function () { return null; }),
+        api('/api/publish/templates').catch(function () { return null; }),
+        api('/api/publish/history').catch(function () { return null; }),
+        api('/api/publish/categories').catch(function () { return null; })
+      ]);
+    }).then(function (results) {
       var overview = results[0];
       var preview = results[1];
       var publishInfo = results[2] || {};

@@ -321,8 +321,8 @@ class EditorPage(BasePage):
 
         cfg = load_convert_config()
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(6)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(8)
 
         body = QHBoxLayout()
         body.setSpacing(8)
@@ -368,7 +368,7 @@ class EditorPage(BasePage):
         left.addWidget(self.file_label)
         self.left_wrap = QWidget()
         self.left_wrap.setLayout(left)
-        self.left_wrap.setFixedWidth(330)
+        self.left_wrap.setFixedWidth(280)
         body.addWidget(self.left_wrap)
 
         # ==================== 右：预览 + 操作 ====================
@@ -383,7 +383,8 @@ class EditorPage(BasePage):
         preview_area.setMinimumHeight(260)
         self.video = QVideoWidget()
         self.video.setMinimumHeight(100)
-        self.video.setStyleSheet("background: #000;")
+        self.video.setObjectName("editorVideo")
+        self.video.setStyleSheet("QVideoWidget#editorVideo { background: palette(base); }")
         preview_layout.addWidget(self.video, 3)
 
         self.player = QMediaPlayer(self)
@@ -406,10 +407,10 @@ class EditorPage(BasePage):
             "QSlider::groove:horizontal { height: 8px;"
             " background: palette(mid); border-radius: 4px; }"
             " QSlider::sub-page:horizontal { height: 8px;"
-            " background: palette(highlight); border-radius: 4px; }"
+            " background: palette(mid); border-radius: 4px; }"
             " QSlider::handle:horizontal { width: 16px; height: 16px; margin: -4px 0;"
             " border-radius: 8px; background: palette(base);"
-            " border: 2px solid palette(highlight); }"
+            " border: 1px solid palette(highlight); }"
             " QSlider::handle:horizontal:hover { background: palette(midlight); }"
             " QSlider::groove:horizontal:disabled { background: palette(alternate-base); }"
         )
@@ -443,30 +444,31 @@ class EditorPage(BasePage):
         seek_wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         preview_layout.addWidget(seek_wrap)
 
-        ctrl = QHBoxLayout()
-        self.play_btn = QPushButton("▶ 播放")
-        self.play_btn.setFixedWidth(80)
+        self.play_btn = QPushButton("播放")
         self.play_btn.clicked.connect(self._toggle_play)
-        ctrl.addWidget(self.play_btn)
-        self.set_start_btn = self._btn("起点", self._set_start, small=True)
-        self.set_end_btn = self._btn("终点", self._set_end, small=True)
+        self.set_start_btn = self._btn("标记开始", self._set_start, small=True)
+        self.set_start_btn.setToolTip("将当前播放指针标为起点（I），再标记结束生成片段")
+        self.set_end_btn = self._btn("标记结束", self._set_end, small=True)
+        self.set_end_btn.setToolTip("将当前播放指针标为终点（O）；未标记开始时从 00:00 开始")
         self.remove_seg_btn = self._btn("删除选中片段", self._remove_segment, small=True)
         self.clear_seg_btn = self._btn("清空片段", self._clear_segments, small=True)
         self.shot_current_btn = self._btn("截图当前帧", self._shot_current, small=True)
-        for widget in (self.set_start_btn, self.set_end_btn, self.remove_seg_btn,
-                       self.clear_seg_btn, self.shot_current_btn):
-            ctrl.addWidget(widget)
-        ctrl.addStretch(1)
-        preview_layout.addLayout(ctrl)
+        preview_layout.addWidget(_OptionGrid([
+            self.play_btn, self.set_start_btn, self.set_end_btn], columns=3, cell_width=88))
+        preview_layout.addWidget(_OptionGrid([
+            self.remove_seg_btn, self.clear_seg_btn, self.shot_current_btn], columns=3, cell_width=104))
+
+        self.segment_status = QLabel("未标记片段：移动播放指针后标记开始 / 结束")
+        self.segment_status.setProperty("role", "caption")
+        self.segment_status.setWordWrap(True)
+        preview_layout.addWidget(self.segment_status)
 
         # 快捷转跳
-        jump_row = QHBoxLayout()
-        jump_row.addWidget(QLabel("转跳:"))
+        jump_items = []
         self.jump_buttons = []
-        for text, delta in (("⏮", None), ("-10s", -10000), ("-1s", -1000),
-                            ("+1s", 1000), ("+10s", 10000), ("⏭", "end")):
+        for text, delta in (("片头", None), ("-10s", -10000), ("-1s", -1000),
+                            ("+1s", 1000), ("+10s", 10000), ("片尾", "end")):
             btn = QPushButton(text)
-            btn.setFixedWidth(44)
             btn.setStyleSheet("padding: 2px 4px;")
             if delta is None:
                 btn.clicked.connect(lambda: self._seek_to(0))
@@ -475,17 +477,18 @@ class EditorPage(BasePage):
             else:
                 btn.clicked.connect(lambda _c=False, d=delta: self._jump(d))
             self.jump_buttons.append(btn)
-            jump_row.addWidget(btn)
+            jump_items.append(btn)
+        preview_layout.addWidget(_OptionGrid(jump_items, columns=3, cell_width=76))
+        jump_row = QHBoxLayout()
         self.jump_input = QLineEdit()
         self.jump_input.setPlaceholderText("00:30 跳转")
-        self.jump_input.setFixedWidth(110)
+        self.jump_input.setAccessibleName("跳转时间")
         self.jump_input.returnPressed.connect(self._jump_to_text)
-        jump_row.addWidget(self.jump_input)
+        jump_row.addWidget(self.jump_input, 1)
         self.jump_btn = QPushButton("跳转")
         self.jump_btn.setStyleSheet("padding: 2px 8px;")
         self.jump_btn.clicked.connect(self._jump_to_text)
         jump_row.addWidget(self.jump_btn)
-        jump_row.addStretch(1)
         preview_layout.addLayout(jump_row)
 
         self.seg_list = QListWidget()
@@ -494,16 +497,25 @@ class EditorPage(BasePage):
         # Ignored：竖直方向不参与「最小高度」争夺，窗口变矮时先压它和日志，
         # 而不是把视频和进度条一起挤成一条缝。
         self.seg_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
+        self.seg_list.currentRowChanged.connect(self._sync_timeline)
+        self.seg_list.itemDoubleClicked.connect(
+            lambda item: self._seek_to(item.data(Qt.UserRole)[0]))
         preview_layout.addWidget(self.seg_list)
         self.operation_splitter.addWidget(preview_area)
 
         self.tabs = QTabWidget()
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        operation_scroll = QScrollArea()
-        operation_scroll.setWidgetResizable(True)
-        operation_scroll.setMinimumHeight(210)
-        operation_scroll.setWidget(self.tabs)
-        self.operation_splitter.addWidget(operation_scroll)
+        self.tabs.setObjectName("editorOperations")
+        self.tabs.tabBar().setObjectName("editorOperationTabs")
+        self.tabs.setStyleSheet(
+            "QTabWidget#editorOperations::pane { border: 1px solid palette(shadow); }"
+            "QTabBar#editorOperationTabs::tab { background: transparent; border: none;"
+            " border-bottom: 2px solid transparent; padding: 6px 10px; }"
+            "QTabBar#editorOperationTabs::tab:selected { color: palette(link);"
+            " border-bottom-color: palette(highlight); }")
+        self.tabs.setMinimumHeight(180)
+        self.tabs.setMinimumWidth(0)
+        self.tabs.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        self.operation_splitter.addWidget(self.tabs)
         self.operation_splitter.setStretchFactor(0, 3)
         self.operation_splitter.setStretchFactor(1, 2)
         self.operation_splitter.setSizes([300, 250])
@@ -536,8 +548,69 @@ class EditorPage(BasePage):
         self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         right.addWidget(self.log_text)
         body.addLayout(right, 1)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.on_theme_changed()
 
     # ==================== 小工具 ====================
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "left_wrap"):
+            self.left_wrap.setFixedWidth(220 if self.width() < 900 else 280)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        # 文本输入框会先消费字母，不抢占元数据/文件名的正常输入。
+        if event.modifiers() == Qt.NoModifier and self.slider.isEnabled():
+            if event.key() == Qt.Key_I:
+                self._set_start()
+                event.accept()
+                return
+            if event.key() == Qt.Key_O:
+                self._set_end()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def on_theme_changed(self):
+        self.slider.update()
+        for widget, name in ((self.play_btn, "play"),
+                             (self.set_start_btn, "skip_prev"),
+                             (self.set_end_btn, "skip_next")):
+            widget.setIcon(line_icon(name, theme.color("text"), 16))
+
+    @staticmethod
+    def _field(label, control):
+        group = QWidget()
+        row = QHBoxLayout(group)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        text = QLabel(label)
+        text.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(text)
+        row.addWidget(control, 1)
+        control.setAccessibleName(label.rstrip(":"))
+        return group
+
+    def _add_tab(self, content, title):
+        """固定页签头；每页只有一个纵向滚动容器。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(0)
+        content.setMinimumWidth(0)
+        content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        for combo in content.findChildren(QComboBox):
+            combo.setMinimumWidth(100)
+            combo.setMinimumContentsLength(8)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setToolTip(combo.currentText())
+            combo.currentTextChanged.connect(combo.setToolTip)
+        for label in content.findChildren(QLabel):
+            if label.wordWrap():
+                label.setMinimumWidth(0)
+                label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        scroll.setWidget(content)
+        return self.tabs.addTab(scroll, title)
 
     def _btn(self, text, slot, small=False, danger=False):
         b = QPushButton(text)
@@ -933,26 +1006,20 @@ class EditorPage(BasePage):
     # ==================== 转换页签 ====================
 
     def _build_convert_tab(self, cfg):
-        tab = QScrollArea()
-        tab.setWidgetResizable(True)
         content = QWidget()
-        tab.setWidget(content)
         v = QVBoxLayout(content)
-        v.setContentsMargins(8, 8, 8, 8)
+        v.setContentsMargins(12, 12, 12, 12)
         hint = QLabel("转换左侧整个文件队列，优先无损封装。成功后队列切换为输出文件，可继续剪辑。")
         hint.setWordWrap(True)
         v.addWidget(hint)
-        row = QHBoxLayout()
         self.convert_scan_btn = self._btn("扫描待转换视频", self._scan_convert)
-        row.addWidget(self.convert_scan_btn)
         self.convert_btn = self._btn("开始转换", self._start_convert)
         self.convert_btn.setProperty("variant", "primary")
-        row.addWidget(self.convert_btn)
         self.convert_clear_btn = self._btn("清除转换缓存", self._clear_convert_cache)
         self.convert_clear_btn.setToolTip("只清除转换记录，不删除视频文件。")
-        row.addWidget(self.convert_clear_btn)
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(_OptionGrid([
+            self.convert_scan_btn, self.convert_clear_btn, self.convert_btn],
+            columns=3, cell_width=128))
         row = QHBoxLayout()
         row.addWidget(QLabel("输出格式:"))
         self.convert_ext = QComboBox()
@@ -962,7 +1029,6 @@ class EditorPage(BasePage):
         row.addWidget(self.convert_ext)
         row.addStretch(1)
         v.addLayout(row)
-        options = QGridLayout()
         self.convert_options = {}
         for index, (key, label, default) in enumerate((
             ("preserve_metadata", "保留元数据", True),
@@ -974,17 +1040,28 @@ class EditorPage(BasePage):
             checkbox = QCheckBox(label)
             checkbox.setChecked(cfg.get(key, default))
             checkbox.toggled.connect(lambda checked, k=key: self._save(**{k: checked}))
-            options.addWidget(checkbox, index // 3, index % 3)
             self.convert_options[key] = checkbox
         self.convert_options["delete_source_after_success"].setToolTip("转换成功后删除原始视频。")
-        v.addLayout(options)
+        v.addWidget(_OptionGrid(list(self.convert_options.values()), columns=3, cell_width=130))
         self.convert_hint = QLabel()
         self.convert_hint.setWordWrap(True)
         self.convert_hint.setMinimumWidth(0)
         self.convert_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         v.addWidget(self.convert_hint)
+        self.meta_rotation = QComboBox()
+        for label, value in (("保持原样", None), ("0°", 0), ("90°", 90),
+                             ("180°", 180), ("270°", 270)):
+            self.meta_rotation.addItem(label, value)
+        self.rotate_btn = self._btn("导出旋转", self._write_rotation, small=True)
+        self.rotate_btn.setToolTip("只旋转当前视频，独立导出新文件；不修改画质与已有元数据")
+        v.addWidget(_OptionGrid([
+            self._field("旋转:", self.meta_rotation), self.rotate_btn], columns=2))
+        rotation_hint = QLabel("旋转仅处理当前视频的显示方向，不参与批量转换；MP4 支持显示矩阵，MKV 可能忽略。")
+        rotation_hint.setWordWrap(True)
+        rotation_hint.setProperty("role", "caption")
+        v.addWidget(rotation_hint)
         v.addStretch(1)
-        self.convert_tab_index = self.tabs.addTab(tab, "转换")
+        self.convert_tab_index = self._add_tab(content, "转换")
         self._refresh_convert_hint()
 
     def open_convert_tab(self):
@@ -1146,8 +1223,6 @@ class EditorPage(BasePage):
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("合并方式:"))
         self.merge_mode = QComboBox()
         self.merge_mode.addItem("无损拼接（推荐）", MODE_COPY)
         self.merge_mode.addItem("兼容转码（参数不一致时）", MODE_ENCODE)
@@ -1155,29 +1230,29 @@ class EditorPage(BasePage):
         self.merge_mode.setCurrentIndex(max(0, idx))
         self.merge_mode.currentIndexChanged.connect(
             lambda _i: self._save(merge_mode=self.merge_mode.currentData()))
-        row.addWidget(self.merge_mode)
-        row.addWidget(QLabel("输出:"))
         self.merge_ext = QComboBox()
         self.merge_ext.addItems([".mp4", ".mkv"])
         self.merge_ext.setCurrentText(cfg.get("merge_out_ext", ".mp4"))
         self.merge_ext.currentTextChanged.connect(lambda t: self._save(merge_out_ext=t))
-        row.addWidget(self.merge_ext)
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(_OptionGrid([
+            self._field("合并方式:", self.merge_mode), self._field("输出:", self.merge_ext)]))
 
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("文件名:"))
         self.merge_name = QLineEdit()
-        self.merge_name.setPlaceholderText("留空 = 合并_日期_时间")
+        self.merge_name.setPlaceholderText("文件名（留空自动命名）")
+        self.merge_name.setAccessibleName("合并文件名")
+        self.merge_name.setToolTip("合并文件名；留空使用 合并_日期_时间")
         name_row.addWidget(self.merge_name, 1)
         self.merge_btn = QPushButton("开始合并")
         self.merge_btn.setProperty("variant", "primary")
         self.merge_btn.clicked.connect(self._start_merge)
         name_row.addWidget(self.merge_btn)
         v.addLayout(name_row)
-        v.addWidget(QLabel("合并按左侧列表顺序执行；参数不一致会提示，可改用「兼容转码」。"))
+        hint = QLabel("合并按左侧列表顺序执行；参数不一致会提示，可改用「兼容转码」。")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         v.addStretch(1)
-        self.tabs.addTab(tab, "合并")
+        self._add_tab(tab, "合并")
 
     # ==================== 切割页签 ====================
 
@@ -1185,8 +1260,6 @@ class EditorPage(BasePage):
         tab = QWidget()
         v = QVBoxLayout(tab)
         v.setContentsMargins(8, 8, 8, 8)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("导出方式:"))
         self.cut_export = QComboBox()
         self.cut_export.addItem("逐段导出", "each")
         self.cut_export.addItem("拼接成一个文件", "merge")
@@ -1195,8 +1268,6 @@ class EditorPage(BasePage):
         self.cut_export.setCurrentIndex(max(0, idx))
         self.cut_export.currentIndexChanged.connect(
             lambda _i: self._save(editor_cut_export=self.cut_export.currentData()))
-        row.addWidget(self.cut_export)
-        row.addWidget(QLabel("方式:"))
         self.cut_mode = QComboBox()
         self.cut_mode.addItem("无损（关键帧边界，快）", "copy")
         self.cut_mode.addItem("精确（重编码，准）", "precise")
@@ -1204,14 +1275,14 @@ class EditorPage(BasePage):
         self.cut_mode.setCurrentIndex(max(0, idx))
         self.cut_mode.currentIndexChanged.connect(
             lambda _i: self._save(editor_cut_mode=self.cut_mode.currentData()))
-        row.addWidget(self.cut_mode)
-        row.addStretch(1)
-        v.addLayout(row)
+        v.addWidget(_OptionGrid([
+            self._field("导出方式:", self.cut_export), self._field("切割方式:", self.cut_mode)]))
 
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("合并文件名:"))
         self.cut_name = QLineEdit()
-        self.cut_name.setPlaceholderText("留空 = 原文件名_片段合并")
+        self.cut_name.setPlaceholderText("合并文件名（留空自动命名）")
+        self.cut_name.setAccessibleName("切割后合并文件名")
+        self.cut_name.setToolTip("切割后合并文件名；留空使用 原文件名_片段合并")
         row2.addWidget(self.cut_name, 1)
         self.cut_btn = QPushButton("开始切割")
         self.cut_btn.setProperty("variant", "primary")
@@ -1219,56 +1290,48 @@ class EditorPage(BasePage):
         row2.addWidget(self.cut_btn)
         v.addLayout(row2)
 
-        hint = QLabel("在预览区拖时间轴，点「起点」「终点」添加片段。无损切割以关键帧为界，"
+        hint = QLabel("移动播放指针，用「标记开始 / 结束」或 I / O 添加片段，时间轴同步显示颜色。无损切割以关键帧为界，"
                       "实际起止可能前后偏移；要精确请选「精确」（会转码）。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         v.addWidget(hint)
 
         # 自动检测（静音/黑帧/场景）→ 切点 → 片段
-        det_row = QHBoxLayout()
-        det_row.addWidget(QLabel("自动检测:"))
         self.det_type = QComboBox()
         self.det_type.addItem("静音", "silence")
         self.det_type.addItem("黑帧", "black")
         self.det_type.addItem("场景切换", "scene")
         self.det_type.currentIndexChanged.connect(self._on_detect_type_changed)
-        det_row.addWidget(self.det_type)
-        det_row.addWidget(QLabel("阈值:"))
         self.det_thresh = QDoubleSpinBox()
         self.det_thresh.setDecimals(2)
         self.det_thresh.setRange(-60, 1)
         self.det_thresh.setValue(-30)
         self.det_thresh.setSuffix(" dB")
-        det_row.addWidget(self.det_thresh)
-        det_row.addWidget(QLabel("最短:"))
         self.det_min = QDoubleSpinBox()
         self.det_min.setRange(0.1, 10.0)
         self.det_min.setSingleStep(0.1)
         self.det_min.setValue(0.5)
         self.det_min.setSuffix(" 秒")
-        det_row.addWidget(self.det_min)
-        det_row.addWidget(self._btn("检测", self._start_detect, small=True))
-        det_row.addWidget(self._btn("生成片段", self._segments_from_points, small=True))
-        det_row.addWidget(self._btn("清空切点", self._clear_points, small=True))
-        det_row.addStretch(1)
-        v.addLayout(det_row)
+        v.addWidget(_OptionGrid([
+            self._field("自动检测:", self.det_type), self._field("阈值:", self.det_thresh),
+            self._field("最短:", self.det_min)]))
+        v.addWidget(_OptionGrid([
+            self._btn("清空切点", self._clear_points, small=True),
+            self._btn("生成片段", self._segments_from_points, small=True),
+            self._btn("检测", self._start_detect, small=True)], columns=3, cell_width=88))
 
         self.points_list = QListWidget()
         self.points_list.setMaximumHeight(56)
         v.addWidget(self.points_list)
 
-        exp_row = QHBoxLayout()
-        exp_row.addWidget(QLabel("片段导出:"))
-        exp_row.addWidget(self._btn("CSV", self._export_csv, small=True))
-        exp_row.addWidget(self._btn("EDL", self._export_edl, small=True))
-        exp_row.addWidget(self._btn("章节文件", self._export_chapters, small=True))
-        exp_row.addWidget(self._btn("写入章节到视频", self._write_chapters, small=True))
-        exp_row.addWidget(self._btn("导入 CSV", self._import_csv, small=True))
-        exp_row.addStretch(1)
-        v.addLayout(exp_row)
+        v.addWidget(_OptionGrid([
+            self._btn("导出 CSV", self._export_csv, small=True),
+            self._btn("导出 EDL", self._export_edl, small=True),
+            self._btn("导出章节", self._export_chapters, small=True),
+            self._btn("写入章节", self._write_chapters, small=True),
+            self._btn("导入 CSV", self._import_csv, small=True)], columns=3, cell_width=100))
         v.addStretch(1)
-        self.tabs.addTab(tab, "切割")
+        self._add_tab(tab, "切割")
 
     # ==================== 压缩页签 ====================
 
