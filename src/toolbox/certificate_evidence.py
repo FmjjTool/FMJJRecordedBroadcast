@@ -1,13 +1,15 @@
 """Certificate evidence export use cases (Qt-free).
 
 History remains owned by certificate_history. This module only captures file
-metadata and reads one selected record; exporting never changes history/source
+metadata and reads selected records; exporting never changes history/source
 files. Local refs may contain absolute paths, but portable records/manifests do
 not. Exports are standard WinZip AES-256 ZIPs; every entry is encrypted and no
 password is persisted. There is no plaintext fallback or credential-key reuse.
 
 Archive schema v1: record.json, manifest.json, 说明.txt, files/0001.ext.
+Batch schema v1: batch-manifest.json, 说明.txt, records/0001/<schema v1 files>.
 At most 128 entries (125 attachments), 64 MiB of plaintext, 1 MiB per JSON.
+Batch exports allow at most 42 records; their metadata shares those limits.
 Refs are not retained copies: files must still match their captured hash.
 """
 
@@ -31,6 +33,7 @@ from . import certificate_history as history
 
 MAX_FILES = 128
 MAX_ATTACHMENTS = MAX_FILES - 3
+MAX_BATCH_RECORDS = (MAX_FILES - 2) // 3
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 CHUNK_SIZE = 64 * 1024
@@ -224,12 +227,17 @@ def _filename(record) -> str:
     return f"certificate-evidence-{key}-r{_revision(record)}.zip"
 
 
-def _select(record_id, history_path):
-    if not isinstance(record_id, str) or not record_id or len(record_id) > 256:
+def _validate_record_id(record_id):
+    if (not isinstance(record_id, str) or not record_id.strip() or len(record_id) > 256
+            or any(ord(char) < 32 for char in record_id)):
         raise EvidenceError("请先选择一条证书记录")
     if os.path.isabs(record_id) or ntpath.isabs(record_id) or "/" in record_id or "\\" in record_id:
         raise EvidenceError("所选证书记录标识无效")
-    matches = [record for record in history.load_records(history_path)
+
+
+def _select(record_id, history_path, *, records=None):
+    _validate_record_id(record_id)
+    matches = [record for record in (history.load_records(history_path) if records is None else records)
                if str(record.get("id") or "") == record_id]
     if len(matches) != 1:
         raise EvidenceError("所选证书记录不存在或标识重复，请刷新后重试")
@@ -258,22 +266,32 @@ def _discovered(record, output_root):
     return [path for path in candidates if os.path.lexists(path)]
 
 
-def plan_export(record_id, *, output_root=None, extra_files=(), history_path=None) -> dict:
+def plan_export(record_id, *, output_root=None, extra_files=(), history_path=None,
+                is_cancelled=lambda: False) -> dict:
     """Return a PRIVATE plan with source paths. Never expose it as a Web DTO."""
+    _cancel(is_cancelled)
     record = _select(record_id, history_path)
+    return _plan_record(record, output_root=output_root, extra_files=extra_files,
+                        is_cancelled=is_cancelled)
+
+
+def _plan_record(record, *, output_root=None, extra_files=(), is_cancelled=lambda: False):
+    _cancel(is_cancelled)
     files, seen, warnings, total = [], set(), [], 0
     rejected_refs = set()
     failed = {"missing": 0, "changed": 0, "unsafe": 0}
 
     def add(raw, source, expected=None, captured_at=""):
         nonlocal total
+        _cancel(is_cancelled)
         path = _path(raw)
         key = os.path.normcase(str(path))
         if key in seen:
             return
         if len(files) >= MAX_ATTACHMENTS:
             raise EvidenceLimitError("每个证据包最多包含 125 个附件")
-        item = _read_file(path, expected=expected, budget=MAX_TOTAL_BYTES - total)
+        item = _read_file(path, expected=expected, budget=MAX_TOTAL_BYTES - total,
+                          is_cancelled=is_cancelled)
         item.update(source=source, captured_at=str(captured_at or ""))
         files.append(item)
         seen.add(key)
@@ -288,6 +306,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
             warnings.append("历史附件未绑定当前字段版本，未纳入留存证据。")
             refs = []
         for ref in refs:
+            _cancel(is_cancelled)
             if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str)
                     or not isinstance(ref.get("size"), int) or isinstance(ref.get("size"), bool)
                     or ref["size"] < 0 or not _HASH.fullmatch(str(ref.get("sha256") or ""))):
@@ -302,7 +321,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
                 add(path, "历史留存引用（本次已校验）", expected={
                     "size": ref["size"], "sha256": ref["sha256"].lower()},
                     captured_at=ref.get("captured_at") or evidence.get("captured_at"))
-            except EvidenceLimitError:
+            except (EvidenceCancelled, EvidenceLimitError):
                 raise
             except EvidenceError as exc:
                 rejected_refs.add(os.path.normcase(str(_path(ref["path"]))))
@@ -317,7 +336,7 @@ def plan_export(record_id, *, output_root=None, extra_files=(), history_path=Non
                 try:
                     add(path, "本次发现，非历史留存")
                     discovered += 1
-                except EvidenceLimitError:
+                except (EvidenceCancelled, EvidenceLimitError):
                     raise
                 except EvidenceError:
                     failed["unsafe"] += 1
@@ -392,7 +411,7 @@ def list_exports(*, output_root=None, history_path=None) -> dict:
                         ("id", "title", "archive_no", "saved_at")})
         records[-1].update(revision=_revision(record), warnings=warnings,
                            file_count=count, file_count_is_estimate=True, filename=_filename(record))
-    return {"records": records, "available": available}
+    return {"records": records, "available": available, "max_records": MAX_BATCH_RECORDS}
 
 
 def _public_string(value):
@@ -435,9 +454,55 @@ def _password(value):
         raise EvidenceError("导出口令包含无效字符") from None
 
 
-def _write_archive(stream, plan, password, is_cancelled, on_progress):
-    pyzipper = _dependency()
+def _plan_selection(record_ids, *, output_root, extra_files, history_path, is_cancelled):
+    """Validate every selection against one history snapshot before hashing files."""
+    if isinstance(record_ids, str):
+        selected = [record_ids]
+    elif isinstance(record_ids, (list, tuple)) and record_ids:
+        if len(record_ids) > MAX_BATCH_RECORDS:
+            raise EvidenceLimitError(f"每批最多导出 {MAX_BATCH_RECORDS} 条记录，请分批导出")
+        selected = list(record_ids)
+    else:
+        raise EvidenceError("请先选择证书记录")
+    for record_id in selected:
+        _validate_record_id(record_id)
+    if len(set(selected)) != len(selected):
+        raise EvidenceError("所选证书记录重复，请重新选择")
+    if isinstance(extra_files, (str, bytes, Path)):
+        raise EvidenceError("请提供补充文件列表")
+    try:
+        extras = tuple(extra_files)
+    except TypeError:
+        raise EvidenceError("请提供补充文件列表") from None
+    if len(selected) > 1 and extras:
+        raise EvidenceError("批量导出不能共用补充材料，请单独选择一条记录后补充")
     _cancel(is_cancelled)
+    snapshot = history.load_records(history_path)
+    records = [_select(record_id, history_path, records=snapshot) for record_id in selected]
+    plans, file_count, size = [], 0, 0
+    metadata_count = 3 * len(records) + (2 if len(records) > 1 else 0)
+    for record in records:
+        _cancel(is_cancelled)
+        plan = _plan_record(record, output_root=output_root, extra_files=extras,
+                            is_cancelled=is_cancelled)
+        plans.append(plan)
+        file_count += plan["file_count"]
+        size += plan["total_size"]
+        if metadata_count + file_count > MAX_FILES:
+            raise EvidenceLimitError("批量证据包文件总数不能超过 128 项，请减少记录或附件后分批导出")
+        if size > MAX_TOTAL_BYTES:
+            raise EvidenceLimitError("证据包全部内容不能超过 64 MiB，请减少记录或附件后分批导出")
+    warnings = ([warning for plan in plans for warning in plan["warnings"]] if len(plans) == 1
+                else [f"记录 {index}：{warning}" for index, plan in enumerate(plans, 1)
+                      for warning in plan["warnings"]])
+    key = hashlib.sha256(_json(selected)).hexdigest()[:12]
+    return {"plans": plans, "filename": plans[0]["filename"] if len(plans) == 1 else
+            f"certificate-evidence-batch-{key}.zip", "warnings": warnings,
+            "record_count": len(plans), "file_count": file_count, "total_size": size}
+
+
+def _record_entries(plan, prefix=""):
+    """Prepare portable metadata; attachment payloads are streamed and rechecked later."""
     record_json = _json(_public_record(plan["record"]))
     entries = []
     for i, item in enumerate(plan["files"], 1):
@@ -454,23 +519,55 @@ def _write_archive(stream, plan, password, is_cancelled, on_progress):
               "历史留存引用仅表示文件与保存时记录的校验值一致，并非独立保存的原件副本。\n"
               "本次发现/本次补充不代表历史原件；从字段重新生成的文档也不能替代原始协议。\n"
               "\n提示：\n" + "\n".join(plan["warnings"])).encode("utf-8")
-    total_plain_size = plan["total_size"] + len(record_json) + len(manifest_json) + len(readme)
+    metadata = [(prefix + "record.json", record_json), (prefix + "manifest.json", manifest_json),
+                (prefix + "说明.txt", readme)]
+    attachments = [(item, prefix + entry["entry"]) for item, entry in zip(plan["files"], entries)]
+    return metadata, attachments
+
+
+def _write_archive(stream, selection, password, is_cancelled, on_progress):
+    pyzipper = _dependency()
+    _cancel(is_cancelled)
+    plans = selection["plans"]
+    metadata, attachments = [], []
+    if len(plans) > 1:
+        index = {"format": "fmjj-certificate-evidence-batch", "version": 1,
+                 "created_at": _now(), "encryption": "WinZip AES-256",
+                 "record_count": len(plans), "records": []}
+        for number, plan in enumerate(plans, 1):
+            index["records"].append({"directory": f"records/{number:04d}",
+                                     "record_id": _public_record(plan["record"])["id"],
+                                     "revision": _revision(plan["record"]),
+                                     "file_count": plan["file_count"], "warnings": plan["warnings"]})
+        metadata.extend((("batch-manifest.json", _json(index)),
+                         ("说明.txt", ("证书批量证据包（格式 1）\n"
+                          "所有文件均使用同一导出口令加密。batch-manifest.json 列出所选记录与目录。\n"
+                          "每条记录独立存放于 records/编号/，附件不得互相代用。\n"
+                          "缺失、变更或本次发现的材料详见各记录 manifest.json 与说明.txt。\n").encode("utf-8"))))
+    for number, plan in enumerate(plans, 1):
+        _cancel(is_cancelled)
+        record_metadata, record_attachments = _record_entries(
+            plan, f"records/{number:04d}/" if len(plans) > 1 else "")
+        metadata.extend(record_metadata)
+        attachments.extend(record_attachments)
+    total_plain_size = selection["total_size"] + sum(len(payload) for _name, payload in metadata)
     if total_plain_size > MAX_TOTAL_BYTES:
-        raise EvidenceError("证据包全部内容不能超过 64 MiB")
-    total = len(entries) + 3
+        raise EvidenceLimitError("证据包全部内容不能超过 64 MiB，请减少记录或附件后分批导出")
+    total = len(metadata) + len(attachments)
+    if total > MAX_FILES:
+        raise EvidenceLimitError("证据包文件总数不能超过 128 项，请减少记录或附件后分批导出")
     on_progress(0, total)
     with pyzipper.AESZipFile(stream, "w", compression=pyzipper.ZIP_DEFLATED,
                             encryption=pyzipper.WZ_AES, allowZip64=False) as archive:
         archive.setpassword(password)
         archive.setencryption(pyzipper.WZ_AES, nbits=256, force_wz_aes_version=2)
-        for done, (name, payload) in enumerate((("record.json", record_json),
-                ("manifest.json", manifest_json), ("说明.txt", readme)), 1):
+        for done, (name, payload) in enumerate(metadata, 1):
             _cancel(is_cancelled)
             archive.writestr(name, payload)
             on_progress(done, total)
-        for i, (item, entry) in enumerate(zip(plan["files"], entries), 4):
+        for i, (item, entry) in enumerate(attachments, len(metadata) + 1):
             _cancel(is_cancelled)
-            with archive.open(entry["entry"], "w") as target:
+            with archive.open(entry, "w") as target:
                 verified = _read_file(item["path"], expected=item, consume=target.write,
                                       is_cancelled=is_cancelled)
             if (verified["name"] != item["name"]
@@ -490,13 +587,13 @@ def bundle_bytes(record_id, password, *, output_root=None, extra_files=(), histo
     secret = _password(password)
     _dependency()
     _cancel(is_cancelled)
-    plan = plan_export(record_id, output_root=output_root, extra_files=extra_files,
-                       history_path=history_path)
+    plan = _plan_selection(record_id, output_root=output_root, extra_files=extra_files,
+                           history_path=history_path, is_cancelled=is_cancelled)
     stream = io.BytesIO()
     _write_archive(stream, plan, secret, is_cancelled, on_progress)
     data = stream.getvalue()
     return {"data": data, "filename": plan["filename"], "warnings": plan["warnings"],
-            "file_count": plan["file_count"], "bytes": len(data)}
+            "file_count": plan["file_count"], "record_count": plan["record_count"], "bytes": len(data)}
 
 
 def export_bundle(record_id, password, target, *, output_root=None, extra_files=(),
@@ -514,10 +611,10 @@ def export_bundle(record_id, password, target, *, output_root=None, extra_files=
     parent_info = _components(destination.parent, private=False)
     if not stat.S_ISDIR(parent_info.st_mode):
         raise EvidenceError("导出目录不存在")
-    plan = plan_export(record_id, output_root=output_root, extra_files=extra_files,
-                       history_path=history_path)
+    plan = _plan_selection(record_id, output_root=output_root, extra_files=extra_files,
+                           history_path=history_path, is_cancelled=is_cancelled)
     if any(os.path.normcase(str(destination)) == os.path.normcase(item["path"])
-           for item in plan["files"]):
+           for record_plan in plan["plans"] for item in record_plan["files"]):
         raise EvidenceError("导出目标不能与证据原文件相同")
     temporary = None
     temporary_identity = None
@@ -547,7 +644,8 @@ def export_bundle(record_id, password, target, *, output_root=None, extra_files=
         else:
             os.link(temporary, destination)
         return {"path": str(destination), "filename": destination.name,
-                "warnings": plan["warnings"], "file_count": plan["file_count"], "bytes": size}
+                "warnings": plan["warnings"], "file_count": plan["file_count"],
+                "record_count": plan["record_count"], "bytes": size}
     except FileExistsError:
         raise EvidenceError("目标文件已存在，请使用新的文件名") from None
     except OSError:
