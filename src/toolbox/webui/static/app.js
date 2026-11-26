@@ -7569,23 +7569,128 @@
     setLoading(root, '正在读取票务缓存…');
     api('/api/tickets').then(function (data) {
       root.replaceChildren();
+      var parseInput = h('input', {
+        class: 'input grow',
+        placeholder: '票务链接或关键词（留空可按关键词搜索）'
+      });
+      var scopeSel = h('select', { class: 'select' },
+        h('option', { value: 'recent' }, '近期（在售）'),
+        h('option', { value: 'all', selected: true }, '所有（含历史）'));
+      var parseBtn = h('button', { class: 'btn primary', type: 'button' }, '解析演出');
+      var exportBtn = h('button', { class: 'btn', type: 'button' }, '导出 JSON');
+      var resultHost = h('div', { style: 'margin-top:8px' });
+      var jobHost = h('div');
+      var running = false;
+
+      function sync() {
+        parseBtn.disabled = running;
+        exportBtn.disabled = running || !parseInput.value.trim();
+        parseBtn.textContent = running ? '处理中…' : '解析演出';
+      }
+      function drawEvents(rows) {
+        if (!rows.length) {
+          resultHost.replaceChildren(empty('没有解析到演出。'));
+          return;
+        }
+        var head = h('tr', null, h('th', null, '标题'), h('th', null, '平台'),
+          h('th', null, '城市'), h('th', null, '场馆'), h('th', null, '时间'),
+          h('th', null, '票价'), h('th', null, '状态'));
+        var body = h('tbody');
+        rows.forEach(function (row) {
+          body.appendChild(h('tr', null,
+            h('td', { class: 'ellipsis' }, row.url
+              ? h('a', { href: row.url, target: '_blank',
+                rel: 'noopener noreferrer' }, row.title || '-')
+              : (row.title || '-')),
+            h('td', null, row.platform || '-'),
+            h('td', null, row.city || '-'),
+            h('td', { class: 'ellipsis' }, row.venue || '-'),
+            h('td', null, row.time || '-'),
+            h('td', null, row.price || '-'),
+            h('td', null, row.status || '-')));
+        });
+        resultHost.replaceChildren(h('div', { class: 'muted small',
+          style: 'margin-bottom:6px' }, '解析结果 ' + rows.length + ' 场'),
+          h('div', { class: 'table-wrap' },
+            h('table', { class: 'db-table' },
+              h('thead', null, head), body)));
+      }
+      parseBtn.addEventListener('click', function () {
+        if (running) return;
+        running = true;
+        sync();
+        post('/api/tickets/parse', {
+          text: parseInput.value.trim(), scope: scopeSel.value
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            running = false;
+            sync();
+            var outcome = job.result || {};
+            toast(outcome.summary || '解析完成',
+              (outcome.events || []).length ? 'success' : 'info');
+            drawEvents(outcome.events || []);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              sync();
+              if (job.status === 'error') {
+                toast('解析失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          sync();
+          toast('解析失败：' + error.message, 'error');
+        });
+      });
+      exportBtn.addEventListener('click', function () {
+        if (running) return;
+        if (!parseInput.value.trim()) {
+          toast('请先填写链接或关键词', 'warning');
+          return;
+        }
+        running = true;
+        sync();
+        post('/api/tickets/export', {
+          text: parseInput.value.trim(), scope: scopeSel.value
+        }).then(function (result) {
+          watchJob(jobHost, result.job, function (job) {
+            running = false;
+            sync();
+            var outcome = job.result || {};
+            toast(outcome.summary || '导出完成',
+              outcome.failed ? 'warning' : 'success');
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              running = false;
+              sync();
+              if (job.status === 'error') {
+                toast('导出失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          running = false;
+          sync();
+          toast('导出失败：' + error.message, 'error');
+        });
+      });
+      parseInput.addEventListener('input', sync);
+      sync();
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'toolbar' },
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '解析演出'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '获取选中详情'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '导出列表'),
+          h('span', { class: 'muted small' }, '链接 / 关键词'), parseInput,
+          scopeSel, parseBtn, exportBtn,
           h('span', { style: 'flex:1' }),
           h('span', { class: 'muted small' },
             data.saved_at ? '最近解析 ' + data.saved_at : '尚未解析')),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '解析、拉取详情、导出 JSON 与图片下载仍在桌面端；'
-          + '本页展示最近一次解析缓存与导出目录。')));
+          '支持大麦艺人/演出、秀动艺人/事件、B站会员购搜索或项目；'
+          + '也可直接输入关键词走三平台搜索。导出会把全量 JSON 与图片写入「票务演出」目录。'),
+        resultHost, jobHost));
       var events = data.events || [];
       if (!events.length) {
         root.appendChild(empty(

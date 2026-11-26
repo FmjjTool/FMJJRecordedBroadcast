@@ -54,7 +54,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     livestream_summary = LivestreamSummaryService()
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
-    tickets = TicketsService()
+    tickets = TicketsService(jobs)
     music_playlist = MusicPlaylistService()
     music_download = MusicDownloadService()
     music_tag = MusicTagService()
@@ -365,6 +365,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/rename-batch/execute", rename_batch_execute)
 
     server.get("/api/tickets", lambda req: tickets.overview())
+
+    def start_tickets_parse(req):
+        return tickets.start_parse(dict(req.json or {}))
+    server.post("/api/tickets/parse", start_tickets_parse)
+
+    def start_tickets_export(req):
+        return tickets.start_export(dict(req.json or {}))
+    server.post("/api/tickets/export", start_tickets_export)
+
 
     server.get("/api/music-playlist", lambda req: music_playlist.overview())
     server.get("/api/music-playlist/report",
