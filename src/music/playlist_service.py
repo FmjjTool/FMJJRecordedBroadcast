@@ -52,6 +52,26 @@ PLATFORM_NAMES = {
     "5sing": "5sing",
 }
 
+PLAYLIST_NAME_PREFIX = "封茗囧菌数据汇总库-"
+MAX_PLAYLIST_NAME_LENGTH = 60
+
+
+def default_playlist_name(value: str) -> str:
+    """为选中的活动生成可编辑默认名，不用于重写用户输入。"""
+    title = str(value or "").strip()
+    return (PLAYLIST_NAME_PREFIX + title)[:MAX_PLAYLIST_NAME_LENGTH] if title else ""
+
+
+def validate_playlist_name(value: str) -> str:
+    """校验最终歌单名，保留用户对默认前缀的删除与修改。"""
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError("请填写歌单名称")
+    if len(name) > MAX_PLAYLIST_NAME_LENGTH:
+        raise ValueError(f"歌单名称不能超过 {MAX_PLAYLIST_NAME_LENGTH} 个字符")
+    return name
+
+
 _LINK_KEYS = {
     "qq": ("qq", "QQ音乐", "QQ音乐链接"),
     "netease": ("netease", "网易云音乐", "网易云音乐链接"),
@@ -358,6 +378,30 @@ def _tables_db_path() -> Path:
     return Path(tcdoc_config.tables_db_path())
 
 
+def _event_date_text(value) -> str:
+    text = _text_value(value)
+    match = re.search(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})", text)
+    if not match:
+        return text[:10]
+    try:
+        return datetime(*(int(part) for part in match.groups())).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return text[:10]
+
+
+def _event_sort_key(event: dict) -> tuple[int, int]:
+    """活动日期降序；同日或无日期时按快照行号倒序。"""
+    try:
+        ordinal = datetime.strptime(str(event.get("date") or ""), "%Y-%m-%d").toordinal()
+    except (TypeError, ValueError):
+        ordinal = 0
+    try:
+        row_no = int(event.get("row_no") or 0)
+    except (TypeError, ValueError):
+        row_no = 0
+    return ordinal, row_no
+
+
 def load_offline_events(path: str | Path | None = None) -> list[dict]:
     """读取腾讯文档「线下活动」本地快照（只读），返回活动与演唱曲目。"""
     db = Path(path) if path else _tables_db_path()
@@ -389,11 +433,12 @@ def load_offline_events(path: str | Path | None = None) -> list[dict]:
             "row_no": row_no,
             "record_id": str(record_id or ""),
             "name": name,
-            "date": _text_value(values.get("活动日期"))[:10],
+            "date": _event_date_text(values.get("活动日期")),
             "city": _text_value(values.get("城市")),
             "songs": songs,
             "song_count": len(songs),
         })
+    events.sort(key=_event_sort_key, reverse=True)
     return events
 
 

@@ -1,11 +1,9 @@
-"""音乐工具 · 歌单页：把一份歌单编排到网易云 / QQ音乐 / 酷狗。
+"""音乐工具 · 歌单页：把线下活动曲目编排到网易云 / QQ音乐 / 酷狗。
 
 流程：选来源 → 预览匹配 → 确认写入。
-- 默认来源是腾讯文档「完整歌曲」本地快照，表内平台链接是官方歌曲 ID，
-  匹配时优先直连，链接缺失的平台才回退平台官方搜索接口。
-- 也可选「线下活动曲目」，从线下活动表挑一场，歌单名自动用活动名称，
-  曲目复用完整歌曲里的官方链接。
-- 也可读取本地歌曲清单（txt / json / csv / xlsx）或已有歌单链接。
+- 来源固定为腾讯文档「线下活动」本地快照，默认选日期最新的活动，
+  也可清空、搜索或改选；曲目复用完整歌曲里的官方链接。
+- 歌单名默认使用「封茗囧菌数据汇总库-」加活动名，完整名称均可编辑。
 - 预览只生成计划、不碰平台；写入前二次确认，逐平台写 journal 支持断点。
 
 凭据只通过统一管理接口只读使用，本页不保存、不刷新、不展示登录内容。
@@ -20,7 +18,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QCompleter, QFileDialog, QHBoxLayout, QHeaderView,
+    QCheckBox, QComboBox, QCompleter, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -44,11 +42,6 @@ _STATE_LABELS = {
     "duplicate": "重复",
 }
 
-_SOURCE_SNAPSHOT = "snapshot"
-_SOURCE_EVENT = "event"
-_SOURCE_FILE = "file"
-_SOURCE_PLAYLIST = "playlist"
-
 # 默认勾选的目标平台：线下歌单主要落这三个（酷我/5sing 需要时手动勾）
 DEFAULT_PLATFORMS = ("netease", "qq", "kugou")
 
@@ -70,6 +63,7 @@ class MusicPlaylistPage(BasePage):
         self._event: dict | None = None
         self._events: list[dict] = []
         self._events_loaded = False
+        self._setting_event_text = False
         self._report_dir = service.report_dir()
         self._report_paths: list[Path] = []
         self._platform_supported: dict[str, bool] = {}
@@ -101,8 +95,8 @@ class MusicPlaylistPage(BasePage):
     def _build_setup_card(self) -> QWidget:
         card = ToolSectionCard(
             "来源与目标",
-            "「完整歌曲」快照和「线下活动」曲目都用表内官方歌曲 ID 优先直连匹配，"
-            "缺失平台才走平台官方搜索；选线下活动时歌单名自动使用活动名称。",
+            "仅使用所选线下活动的登记曲目；优先匹配表内官方歌曲 ID，"
+            "缺失平台时才走平台官方搜索。",
             icon="music",
         )
         content = card.content_layout
@@ -110,45 +104,34 @@ class MusicPlaylistPage(BasePage):
         source_row = QHBoxLayout()
         source_row.setSpacing(8)
         source_row.addWidget(QLabel("来源"))
-        self.source_box = QComboBox()
-        self.source_box.addItem("完整歌曲快照", _SOURCE_SNAPSHOT)
-        self.source_box.addItem("线下活动曲目", _SOURCE_EVENT)
-        self.source_box.addItem("歌曲清单文件", _SOURCE_FILE)
-        self.source_box.addItem("现有歌单链接", _SOURCE_PLAYLIST)
-        self.source_box.setFixedWidth(150)
-        self.source_box.setMinimumHeight(28)
-        self.source_box.currentIndexChanged.connect(self._on_source_change)
-        source_row.addWidget(self.source_box)
+        source_row.addWidget(QLabel("线下活动曲目"))
+        source_row.addWidget(QLabel("活动"))
 
-        self.source_input = QLineEdit()
-        self.source_input.setMinimumHeight(28)
-        self.source_input.setPlaceholderText("使用本地「完整歌曲」快照")
-        source_row.addWidget(self.source_input, 1)
-
-        # 线下活动：可直接输入搜索（包含匹配），也可点箭头从全部活动里选
+        # 可输入搜索或点箭头改选；清除文字会同步清空当前活动与预览。
         self.event_box = QComboBox()
         self.event_box.setEditable(True)
         self.event_box.setInsertPolicy(QComboBox.NoInsert)
+        self.event_box.setMinimumWidth(160)
+        self.event_box.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.event_box.setMinimumContentsLength(8)
         self.event_box.setMinimumHeight(28)
-        self.event_box.setVisible(False)
-        self.event_box.lineEdit().setPlaceholderText("输入活动名称搜索，或点箭头选择")
+        self.event_box.lineEdit().setClearButtonEnabled(True)
+        self.event_box.lineEdit().setPlaceholderText("搜索或选择线下活动")
+        self.event_box.lineEdit().textChanged.connect(self._on_event_text_edited)
         self.event_box.activated.connect(self._on_event_activated)
         self.event_box.lineEdit().returnPressed.connect(self._on_event_return)
         source_row.addWidget(self.event_box, 1)
-
-        self.pick_btn = QPushButton("选择文件")
-        self.pick_btn.setMinimumHeight(28)
-        self.pick_btn.setVisible(False)
-        self.pick_btn.clicked.connect(self._pick_file)
-        source_row.addWidget(self.pick_btn)
         content.addLayout(source_row)
 
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
         name_row.addWidget(QLabel("歌单名称"))
-        self.name_edit = QLineEdit("封茗囧菌歌曲合集")
+        self.name_edit = QLineEdit()
         self.name_edit.setMinimumHeight(28)
-        self.name_edit.setMaxLength(60)
+        self.name_edit.setMaxLength(service.MAX_PLAYLIST_NAME_LENGTH)
+        self.name_edit.setPlaceholderText("输入歌单名称，可修改或删除默认前缀")
+        self.name_edit.textChanged.connect(self._invalidate_preview)
         name_row.addWidget(self.name_edit, 1)
         content.addLayout(name_row)
 
@@ -215,11 +198,11 @@ class MusicPlaylistPage(BasePage):
         action_row.addWidget(self.preview_btn)
         content.addLayout(action_row)
 
-        self.status_label = QLabel("选来源 → 预览匹配 → 确认写入")
+        self.status_label = QLabel("选择线下活动 → 预览匹配 → 确认写入")
         self.status_label.setProperty("role", "muted")
         self.status_label.setWordWrap(True)
         content.addWidget(self.status_label)
-        self._on_source_change()
+        self._ensure_events()
         return card
 
     def _build_result_card(self) -> QWidget:
@@ -290,27 +273,8 @@ class MusicPlaylistPage(BasePage):
 
     # ---------- 来源 ----------
 
-    def _on_source_change(self, *_):
-        mode = self.source_box.currentData()
-        is_snapshot = mode == _SOURCE_SNAPSHOT
-        is_event = mode == _SOURCE_EVENT
-        self.source_input.setVisible(not is_event)
-        self.event_box.setVisible(is_event)
-        self.pick_btn.setVisible(mode == _SOURCE_FILE)
-        self.source_input.setEnabled(not (is_snapshot or is_event))
-        if is_snapshot:
-            self.source_input.clear()
-            self.source_input.setPlaceholderText("使用本地「完整歌曲」快照")
-        elif is_event:
-            self._ensure_events()
-        elif mode == _SOURCE_FILE:
-            self.source_input.setPlaceholderText("选择 txt / json / csv / xlsx 歌曲清单")
-        else:
-            self.source_input.setPlaceholderText(
-                "粘贴歌单链接或 ID（QQ音乐 / 网易云 / 酷狗 / 酷我 / 5sing）")
-
     def _ensure_events(self):
-        """首次进入线下活动来源时读取活动列表，输入即按包含匹配筛选。"""
+        """首次构造页面时读取活动；共享服务按日期最新优先返回。"""
         if self._events_loaded:
             return
         try:
@@ -320,21 +284,26 @@ class MusicPlaylistPage(BasePage):
             return
         self._events_loaded = True
         self._events = events
+        self._setting_event_text = True
         self.event_box.blockSignals(True)
         self.event_box.clear()
         for event in events:
             self.event_box.addItem(self._event_label(event), event["row_no"])
-        self.event_box.setCurrentIndex(-1)
-        self.event_box.setEditText("")
+        self.event_box.setCurrentIndex(0 if events else -1)
+        self.event_box.setEditText(
+            self._event_label(events[0]) if events else "")
         self.event_box.blockSignals(False)
+        self._setting_event_text = False
         completer = self.event_box.completer()
         if completer is not None:
             completer.setFilterMode(Qt.MatchContains)
             completer.setCaseSensitivity(Qt.CaseInsensitive)
             completer.setCompletionMode(QCompleter.PopupCompletion)
-        if not events:
-            QMessageBox.information(
-                self, "歌单", "本地没有「线下活动」快照，请先在腾讯文档页完成一次同步")
+        if events:
+            self._apply_event(events[0])
+        else:
+            self.event_box.lineEdit().setPlaceholderText("本地暂无线下活动")
+            self.status_label.setText("本地没有线下活动快照，请先同步活动数据")
 
     @staticmethod
     def _event_label(event: dict) -> str:
@@ -351,6 +320,16 @@ class MusicPlaylistPage(BasePage):
     def _on_event_return(self):
         self._apply_event_by_text()
 
+    def _on_event_text_edited(self, text: str):
+        if self._setting_event_text:
+            return
+        if self._event and text.strip() == self._event_label(self._event):
+            return
+        self._event = None
+        self.name_edit.clear()
+        self.event_box.setToolTip("")
+        self._invalidate_preview()
+
     def _apply_event_by_text(self):
         text = self.event_box.currentText().strip()
         if not text:
@@ -366,19 +345,35 @@ class MusicPlaylistPage(BasePage):
                 return
 
     def _apply_event(self, event: dict):
+        changed = (self._event or {}).get("row_no") != event.get("row_no")
         self._event = event
-        self.name_edit.setText(event.get("name") or self.name_edit.text())
+        if changed:
+            self.name_edit.setText(service.default_playlist_name(event.get("name") or ""))
         index = self.event_box.findData(event.get("row_no"))
-        if index >= 0:
-            self.event_box.setCurrentIndex(index)
+        self._setting_event_text = True
+        self.event_box.blockSignals(True)
+        self.event_box.setCurrentIndex(index)
         self.event_box.setEditText(self._event_label(event))
+        self.event_box.setToolTip(self._event_label(event))
+        self.event_box.blockSignals(False)
+        self._setting_event_text = False
+        if changed:
+            self._invalidate_preview()
 
-    def _pick_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择歌曲清单", "",
-            "歌曲清单 (*.txt *.json *.csv *.xlsx *.xlsm);;所有文件 (*.*)")
-        if path:
-            self.source_input.setText(path)
+    def _invalidate_preview(self, *_):
+        if not hasattr(self, "table"):
+            return
+        self._plans = []
+        self._selection = {}
+        self._check_cells = {}
+        self._source_label = ""
+        self.table.setRowCount(0)
+        self.summary_label.setText("尚未预览")
+        self.selection_label.setText("请先选择线下活动并预览匹配")
+        self.apply_btn.setEnabled(False)
+        for button in (self.select_all_btn, self.select_matched_btn,
+                       self.select_none_btn):
+            button.setEnabled(False)
 
     def _platform_note_text(self) -> str:
         parts = []
@@ -388,7 +383,7 @@ class MusicPlaylistPage(BasePage):
             elif row["experimental"]:
                 parts.append(f"{row['name']}：实验接口，可能失败（{row.get('note')}）")
             elif row["platform"] == "kugou":
-                parts.append("酷狗：云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App扫码）")
+                parts.append("酷狗：云歌单需要有效登录状态，未登录时跳过该平台")
         netease_slot = service.login_slot_label("netease")
         if netease_slot:
             parts.append(f"网易云建单账号：{netease_slot}")
@@ -401,23 +396,9 @@ class MusicPlaylistPage(BasePage):
     # ---------- 预览 ----------
 
     def _load_sources(self):
-        mode = self.source_box.currentData()
-        if mode == _SOURCE_SNAPSHOT:
-            return service.read_source_complete_songs()
-        if mode == _SOURCE_EVENT:
-            if not self._event:
-                raise ValueError("请先在下拉里选一场线下活动（可直接输入名称搜索）")
-            return service.read_source_event(self._event["row_no"])
-        value = self.source_input.text().strip()
-        if not value:
-            raise ValueError("请先填写歌曲清单或歌单链接")
-        if mode == _SOURCE_FILE:
-            return service.read_source_file(value), f"文件 {Path(value).name}"
-        platform = service.detect_platform(value)
-        if not platform:
-            raise ValueError("无法识别歌单链接所属平台")
-        sources, name = service.read_source_playlist(platform, value)
-        return sources, f"{service.PLATFORM_NAMES.get(platform, platform)}歌单「{name}」"
+        if not self._event:
+            raise ValueError("请先选择一场线下活动")
+        return service.read_source_event(self._event["row_no"])
 
     def _start_preview(self):
         if self._busy:
@@ -426,9 +407,13 @@ class MusicPlaylistPage(BasePage):
         if not targets:
             QMessageBox.information(self, "歌单", "请至少选择一个目标平台")
             return
-        name = self.name_edit.text().strip()
-        if not name:
-            QMessageBox.information(self, "歌单", "请填写歌单名称")
+        if not self._event:
+            QMessageBox.information(self, "歌单", "请先选择一场线下活动")
+            return
+        try:
+            name = service.validate_playlist_name(self.name_edit.text())
+        except ValueError as exc:
+            QMessageBox.information(self, "歌单", str(exc))
             return
 
         self._cancel.clear()
@@ -666,11 +651,9 @@ class MusicPlaylistPage(BasePage):
                          f"未找到 {counts['missing']} 首未勾选）")
         detail = "\n".join(lines)
         if any(plan.platform == "kugou" for plan in plans):
-            detail += ("\n\n酷狗云歌单需要登录酷狗 App："
-                       "请先在「账号与登录 → 登录状态 → 酷狗」点「App扫码」；"
+            detail += ("\n\n酷狗云歌单需要有效登录状态；"
                        "未登录时该平台会提示登录，不影响其他平台写入。")
-        if self.source_box.currentData() == _SOURCE_EVENT:
-            detail += "\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。"
+        detail += "\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。"
         answer = QMessageBox.question(
             self, "确认写入歌单",
             f"歌单名称：{plans[0].playlist_name}\n\n{detail}\n\n"
@@ -686,9 +669,8 @@ class MusicPlaylistPage(BasePage):
         self._log("开始写入平台…")
         # 逐首勾选已经在结果表里落成显式状态，写入完全以勾选为准
         include_uncertain = False
-        # 来源是线下活动时，写完平台歌单要回填腾讯文档「活动歌单_*」三列
-        event = (dict(self._event) if self.source_box.currentData() == _SOURCE_EVENT
-                 and self._event else None)
+        # 写完平台歌单后，按原有链路回填腾讯文档「活动歌单_*」三列。
+        event = dict(self._event) if self._event else None
 
         def work():
             results = []
@@ -806,12 +788,8 @@ class MusicPlaylistPage(BasePage):
         self.progress.setVisible(busy)
         self.preview_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
-        self.source_box.setEnabled(not busy)
-        self.source_input.setEnabled(
-            not busy and self.source_box.currentData() not in (_SOURCE_SNAPSHOT, _SOURCE_EVENT))
         self.event_box.setEnabled(not busy)
         self.name_edit.setEnabled(not busy)
-        self.pick_btn.setEnabled(not busy)
         for platform, box in self._platform_boxes.items():
             box.setEnabled(not busy and self._platform_supported.get(platform, False))
         for button in (self.select_all_btn, self.select_matched_btn,
