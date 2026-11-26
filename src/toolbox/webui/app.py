@@ -9,6 +9,7 @@ from toolbox.webui.server import (AttachmentResponse, BytesResponse,
 from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
+from toolbox.webui.services.cover import CoverService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
@@ -38,6 +39,7 @@ from version import APP_VERSION
 def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer:
     jobs = JobManager()
     collected = CollectedService()
+    cover = CoverService(jobs)
     assets = AssetService(jobs)
     record = RecordService()
     modules = ModuleService()
@@ -67,6 +69,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/health", lambda req: {
         "ok": True, "name": "录播工具箱 WebUI", "version": APP_VERSION})
+
+    server.get("/api/cover/overview", lambda req: cover.overview())
+    server.post("/api/cover/preview", lambda req: cover.preview(req.json))
+    server.post("/api/cover/generate", lambda req: cover.start_generate(req.json))
 
     server.get("/api/collected/overview", lambda req: collected.overview())
     server.get("/api/collected/items", lambda req: collected.items(

@@ -80,8 +80,10 @@
         '图片裁切是自绘画布（选区、旋转、缩放），Web 端不提供编辑，请在桌面端使用。');
     } },
     cover_maker: { title: '封面制作', load: function (host) {
-      renderDesktopOnly(host, '封面制作',
-        '封面制作使用桌面端自绘排版与字体资源，Web 端不提供编辑，请在桌面端使用。');
+      window.renderCoverAutomation(host, {
+        api: api, post: post, watchJob: watchJob, toast: toast,
+        cycleSort: cycleSort, sortRows: sortRows
+      });
     } },
     certificate_maker: { title: '证书制作', load: function (host) {
       renderDesktopOnly(host, '证书制作',
