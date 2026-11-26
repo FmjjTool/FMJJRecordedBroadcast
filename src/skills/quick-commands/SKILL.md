@@ -60,6 +60,7 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 | `/测试清理` | `test-cleanup` | 任务完成后删除测试文件与测试缓存；烟测文件固定放 `_smoking/` |
 | `/隔离测试` | `isolated-testing` | 默认隔离实例测试；接入真实实例需申请；测试后必须还原数据 |
 | `/功能说明` | `software-feature-guide` | 各页面功能唯一说明处 |
+| `/WebUI同步` | `webui-sync` | 桌面功能变化后四层同步到 WebUI |
 | `/shaman` | `shaman-jobs` | 可选 persona，非强制 |
 | `/快捷指令` | 本 skill | 输出本表 |
 
@@ -248,6 +249,14 @@ description: "项目快捷指令分发表：用户发送 /约定、/视觉、/�
 1. 页面功能的唯一说明处；软件内已移除所有「功能介绍 / 使用说明 / 使用教程」入口。
 2. 按「页面索引」查用途、操作入口、保存位置与限制。
 3. 新增或调整页面功能时同步更新本 skill，不回头加页面内帮助控件或标题头部。
+
+### /WebUI同步 → `webui-sync`
+
+1. 桌面端新增或改动页面、用例、配置键、写操作、导出、行为修复后，必须同一批接入 WebUI，不允许只做桌面。
+2. 四层缺一不可：`toolbox/webui_*.py`（Qt-free）→ `webui/services/*.py` → `webui/app.py` 路由 → `static/app.js` + `index.html` 导航（名称/分组照 `page_index.py`）。
+3. 业务规则复用共享模块，配置与数据与桌面同源，不写第二套实现或第二份数据。
+4. 只有自绘画布、本机原生窗口或进程启停、桌面进程内状态可列桌面专属；须登记理由并保留 `renderDesktopOnly` 说明页。
+5. 四层同一 commit，提交后 `git show --stat` 核对；验收按「页面接入 / 功能可执行 / 布局对齐」三层分开报。
 
 ### /shaman → `shaman-jobs`
 

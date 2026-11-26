@@ -11,6 +11,7 @@
 | 类别 | Skill | 触发 |
 | --- | --- | --- |
 | 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件、缓存与根目录临时产物 |
+| 桌面 / Web 同步 | `webui-sync` | 桌面端新增或改动功能后同步到 WebUI：四层接入、桌面专属白名单、同批提交与三层验收 |
 | 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
 | 运行保护 | `running-instance-guard`、`isolated-testing` | 软件运行中禁止关闭 / 结束进程；测试默认隔离实例，接入真实实例需申请，测试后必须还原数据 |
 | 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
@@ -22,7 +23,7 @@
 
 分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/隔离测试`、`/功能说明`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/隔离测试`、`/功能说明`、`/WebUI同步`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
 
 软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
 
@@ -70,8 +71,11 @@
 
 完整内容见 [src/skills/layering-contract/SKILL.md](src/skills/layering-contract/SKILL.md)。项目按「入口/任务编排 → UI 表现 → 应用服务/用例 → 平台适配/领域引擎 → 基础设施/数据」五层 + 横切层组织；只允许上层依赖下层，禁止 UI 直接承载业务、引擎反向依赖 UI、数据层双写与第二套凭据/定时入口。该 skill 不改变既有功能，也不构成录播八模块、Cookie 或腾讯文档写入的改动授权。
 
-## 横向工程 skill（按任务触发）
+## 桌面端 → WebUI 同步 skill（桌面功能变化后强制阅读）
 
+完整内容见 [src/skills/webui-sync/SKILL.md](src/skills/webui-sync/SKILL.md)。桌面端新增或改动任何用户可用能力（页面、按钮、用例、配置键、写操作、导出/下载、行为修复）后，必须同一批同步到 WebUI，不允许只做桌面。同步固定四层：`src/toolbox/webui_*.py`（L3，Qt-free）→ `src/toolbox/webui/services/*.py` → `src/toolbox/webui/app.py` 路由 → `src/toolbox/webui/static/app.js` 与 `index.html`（名称、分组、顺序照 `page_index.py`）。业务规则复用共享模块，配置与数据与桌面同源，四层同一 commit，提交后 `git show --stat` 核对不漏层。仅「自绘画布 / 本机原生窗口或进程启停 / 桌面进程内状态」可列为桌面专属，须在 `software-feature-guide` 与当日报告写明理由并保留 `renderDesktopOnly` 说明页。验收按「页面接入 / 功能可执行 / 布局对齐」三层分开报告，未验证项如实标注。
+
+## 横向工程 skill（按任务触发）
 - **安全基线** [security-baseline](src/skills/security-baseline/SKILL.md)：涉及 Cookie 之外的密钥、日志脱敏、文件导入导出、ZIP、subprocess、网络请求、依赖或打包时必读。
 - **测试与质量门禁** [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md)：任何代码修改、重构、Bug 修复、数据迁移或 UI 改动时必读。
 - **测试文件清理** [test-cleanup](src/skills/test-cleanup/SKILL.md)：任何代码任务验证完成后执行——删除 `tests/` 全部测试文件与测试缓存（`__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率产物），以及用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；`tests/` 已被 `.gitignore` 忽略、删除不备份；被 Git 跟踪的本地数据文件只 `git rm --cached` 移出版本跟踪、不删本地文件；备份/快照类目录经用户确认后移入回收站；不得借清理删源码、用户数据或凭据，也不得跳过测试。**所有烟测脚本、harness、临时数据与过程截图统一放根目录 `_smoking/`（已忽略，不提交、不推送），不要散落到根目录、`tests/` 或 `Progress/`；只有最终报告证据截图才放 `Progress/ui/<日期>/`。**

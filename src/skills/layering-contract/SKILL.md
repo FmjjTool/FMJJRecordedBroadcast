@@ -139,11 +139,12 @@ WebUI 以独立进程运行，其对主程序而言只是 L2 显示层；所有 
 5. **数据边界**：Web 中间层只做只读或用户明确授权的写入；返回 DTO 不含绝对路径；与桌面共享的存储仍保持唯一写入方。
 6. **验证隔离**：WebUI 的测试与验证默认使用隔离副本（独立 `config/`、`download/`、`logs/`、独立端口），不得接入运行中的桌面实例；真实 `config/` 与 `download/` 一律只读，禁止在主工作区运行会创建或改写配置的脚本。
 
-任何 WebUI 相关的新文档、skill、页面或用例，都必须写明并遵守本节；与其他 skill 冲突时，真实 Cookie 保护与录播核心保护仍优先。
+任何 WebUI 相关的新文档、skill、页面或用例，都必须写明并遵守本节；与其他 skill 冲突时，真实 Cookie 保护与录播核心保护仍优先。桌面端新增或改动功能后的同步流程、四层接入顺序与验收口径见 [webui-sync](../webui-sync/SKILL.md)。
 
 ## 与其他 skill 的关系
 
 - `convention-skill`：负责拉取、备份、提交、报告与总约定；本 skill 只补充分层。
+- `webui-sync`：负责桌面端到 WebUI 的同步流程与四层接入；本 skill 只管层间职责，两者同时适用。
 - `cookie-data-protection` / `cookie-manager`：负责真实凭据保护与统一登录；本 skill 不授权任何凭据写入。
 - `recording-toolbox-core`：负责八个核心模块保护；本 skill 不授权核心重构。
 - `tcdoc-sync-scope`：负责腾讯文档写入白名单；本 skill 不放宽写入范围。

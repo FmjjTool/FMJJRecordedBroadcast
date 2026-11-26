@@ -286,6 +286,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [ ] 所有表格已支持表头右键「列宽自适应 / 重置列宽」，以及表格卡片底部操作行里的「自适应 / 重置」两个小按钮（`gui_qt/table_columns.py`）；默认布局铺满且无横向滚动。
 - [ ] 本次涉及界面时已读 `ui-visual-spec` 并核对留白、页签层级（≤4 级）、边框（1px）、单行按钮数（≤5）与下拉宽度；涉及弹窗、表格、状态、表单或按钮文案时已读 `ui-interaction-spec`。
 - [ ] 本次涉及新增/移动/重构模块或跨层调用时，已读 `layering-contract`，新代码放置与依赖方向符合分层约束。
+- [ ] 本次改动桌面端用户可用能力时已读 `webui-sync`：已判定「需同步 / 桌面专属」，四层（`webui_*.py`、`services/*.py`、`app.py`、`app.js` + `index.html`）同一提交，并按三层口径报告验收。
 - [ ] 本次涉及安全/测试/并行协作/数据迁移/平台适配/生成图片时，已读对应横向 skill：`security-baseline` / `testing-quality-gates` / `agent-coordination` / `data-lifecycle` / `platform-adapter-policy` / `image-output-spec`。
 - [ ] 代码任务完成后已按 `test-cleanup` 删除 `tests/` 全部测试文件与测试缓存（用户当次明确保留的除外）。
 - [ ] 更新前已读 `recording-toolbox-core` 并核对直接/间接影响；未修改八个核心模块，或仅按用户已明确授权的具体范围修改。
@@ -303,6 +304,7 @@ description: "项目强制约定：操作前必读；已存真实 Cookie 绝对�
 - [summarize-article](../summarize-article/SKILL.md)：关键词「总结文章」与文件前置条件，转交指定直播总结指令；总结类任务不自动推送。
 - `tcdoc-sync-scope`：腾讯文档同步的编辑范围强制约束（仅允许「官方动态」「直播记录」两张表，其余全部禁写）。凡触及腾讯文档同步、写回、表格增删改、导出覆盖，必须先读该 skill。
 - [layering-contract](../layering-contract/SKILL.md)：五层 + 横切层的名称、职责、允许依赖与禁止模式；新增/重构/跨层调用前必读。
+- [webui-sync](../webui-sync/SKILL.md)：桌面端新增或改动功能后同步到 WebUI 的四层接入、桌面专属白名单、同批提交与三层验收。
 - [security-baseline](../security-baseline/SKILL.md)：Cookie 之外的密钥、日志、文件、ZIP、subprocess、网络、依赖与打包安全；不授权真实凭据操作。
 - [running-instance-guard](../running-instance-guard/SKILL.md)：运行中软件不得关闭 / 结束进程；只能新建实例，重启交给用户。
 - [isolated-testing](../isolated-testing/SKILL.md)：测试默认隔离实例、接入真实环境申请、测试前快照与测试后完整还原；真实 Cookie 与运行中实例保护不放宽。
