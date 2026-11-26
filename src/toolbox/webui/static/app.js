@@ -8944,7 +8944,11 @@ function renderLivestreamSummary(root) {
               state.douyin.lastResult = done.result || {};
             }
             setFetching(false);
-            if (state.route === 'douyin_index') renderDouyinIndex(root);
+            if (state.route === 'douyin_index') {
+              if (done.status === 'error' && state.douyin.view === view) {
+                fetchResultHost.textContent = state.douyin.lastResult.summary;
+              } else renderDouyinIndex(root);
+            }
           }
         });
       }
@@ -9001,7 +9005,11 @@ function renderLivestreamSummary(root) {
                   state.douyin.fetchTask = null;
                   state.douyin.lastResult = { summary: '抓取失败：' + error.message };
                   setFetching(false);
-                  if (state.route === 'douyin_index') renderDouyinIndex(root);
+                  if (state.route === 'douyin_index') {
+                    if (state.douyin.view === view) {
+                      fetchResultHost.textContent = state.douyin.lastResult.summary;
+                    } else renderDouyinIndex(root);
+                  }
                 });
               });
               body.appendChild(h('tr', null,

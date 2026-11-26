@@ -40,10 +40,10 @@ def new_report_id() -> str:
 
 
 def _reports_dir() -> Path:
-    # app_logger 的导入与 LOG_DIR 求值无 mkdir/日志初始化副作用。
-    from app_logger import LOG_DIR
+    # 与唯一配置 owner 的数据根一致；安装目录不可写时跟随 AppData，仅读不探写。
+    from toolbox.config_manager import get_config_dir_readonly
 
-    return Path(LOG_DIR) / "performance"
+    return get_config_dir_readonly().parent / "logs" / "performance"
 
 
 def _validate_id(report_id: str) -> str:

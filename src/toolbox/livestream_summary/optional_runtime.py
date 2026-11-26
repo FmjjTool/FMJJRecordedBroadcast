@@ -164,7 +164,7 @@ def _root(root=None):
 
 def _safe_name(value, *, gguf=False):
     text = str(value or "")
-    if (not text or len(text) > 180 or text != text.strip() or text.endswith((".", " "))
+    if (not text or len(text) > 180 or text != text.strip() or text.startswith(".") or text.endswith((".", " "))
             or not re.fullmatch(r"[\w.-]+", text, flags=re.UNICODE)
             or text in (".", "..") or text.split(".")[0].upper() in
             {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -262,7 +262,7 @@ def _read_manifest(directory, kind, identifier):
             item["size"] = int(item["size"])
             names.add(name.casefold())
         return value
-    except (OSError, ValueError, TypeError, RuntimeErrorBase):
+    except (OSError, ValueError, TypeError, OverflowError, RuntimeErrorBase):
         return None
 
 

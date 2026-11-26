@@ -11,7 +11,7 @@ import threading
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QComboBox, QCompleter, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -41,6 +41,18 @@ def _combo() -> QComboBox:
     combo.setFocusPolicy(Qt.StrongFocus)
     combo.currentTextChanged.connect(combo.setToolTip)
     return combo
+
+
+def _sync_model_search(combo: QComboBox) -> None:
+    """Keep long model lists searchable without allowing arbitrary new IDs."""
+    combo.setEditable(combo.count() > 12)
+    combo.setInsertPolicy(QComboBox.NoInsert)
+    if combo.isEditable():
+        combo.lineEdit().setPlaceholderText("输入名称筛选模型")
+        completer = combo.completer()
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
 
 
 class LocalLlmOptionsWidget(QWidget):
@@ -130,6 +142,7 @@ class LocalLlmOptionsWidget(QWidget):
             control.addItem("未找到模型：" + selected, selected)
             index = control.count() - 1
         control.setCurrentIndex(max(0, index))
+        _sync_model_search(control)
         control.blockSignals(False)
 
 
@@ -293,6 +306,7 @@ class LocalLlmComponentsPanel(QWidget):
                 self.model_combo.addItem("还没有模型，可下载或导入 GGUF", "")
             index = self.model_combo.findData(previous)
             self.model_combo.setCurrentIndex(max(0, index))
+            _sync_model_search(self.model_combo)
             self.model_combo.blockSignals(False)
             previous = self.catalog_combo.currentData()
             self.catalog_combo.clear()
