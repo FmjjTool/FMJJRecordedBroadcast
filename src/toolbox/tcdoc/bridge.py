@@ -70,6 +70,8 @@ def append_auto_remark(text, now=None) -> str:
 # 完整歌曲：只比对/新增，不改不删；本地来源是「音乐信息」页导出结果
 SONG_DOC_KEY = "DRnd3bkhkQUR1aEJr"
 SONG_TAB_ID = "ss_ktwk0t"
+# 歌曲片段只有本地快照预览，不复用动态候选匹配或开放程序写入。
+FRAGMENT_TAB_ID = "ss_rvstfu"
 SONG_REQUIRED_COLUMNS = ("歌曲名称", "演唱者", "首发日期")
 # 腾讯表头缺省顺序（本地快照读不到时兜底）；实际以快照表头为准。
 SONG_FALLBACK_COLUMNS = (
@@ -1501,7 +1503,7 @@ def _is_song_sheet(sheet: dict, doc_key: str = SONG_DOC_KEY,
 
 
 def list_targets() -> list[dict]:
-    """本地已同步的目标表：官方动态（含直播记录结构）+ 完整歌曲。"""
+    """本地已同步的五类比对目标及歌曲片段只读快照。"""
     targets = []
     for doc in tc_cfg.load_docs():
         key = str(doc.get("key") or tables.doc_key_of(doc.get("url")) or "")
@@ -1516,7 +1518,9 @@ def list_targets() -> list[dict]:
                 continue
             names = {str(col.get("name") or "") for col in sheet.get("columns") or []}
             tab_id = str(sheet.get("tab_id") or "")
-            if key == SONG_DOC_KEY and tab_id == EVENT_TAB_ID:
+            if key == SONG_DOC_KEY and tab_id == FRAGMENT_TAB_ID:
+                profile = "fragments"
+            elif key == SONG_DOC_KEY and tab_id == EVENT_TAB_ID:
                 if not all(name in names for name in
                            _resolved_required(key, tab_id, EVENT_REQUIRED_COLUMNS)):
                     continue
@@ -1550,6 +1554,17 @@ def list_targets() -> list[dict]:
                 "profile": profile,
             })
     return targets
+
+
+def build_fragment_snapshot(doc_key: str, tab_id: str, columns) -> dict:
+    """按快照原列序展示歌曲片段；不匹配本地动态、不联网、不写入。"""
+    if (doc_key, tab_id) != (SONG_DOC_KEY, FRAGMENT_TAB_ID):
+        raise ValueError("该表不支持歌曲片段快照预览")
+    names = [str(name) for name in columns if str(name)]
+    rows = [dict(item.get("values") or {}) for item in load_remote(doc_key, tab_id)]
+    return {"profile": "fragments", "columns": names, "rows": rows,
+            "stats": {"remote_rows": len(rows), "pending": 0},
+            "note": "歌曲片段仅展示本地已同步快照；不生成待上传记录、不写入腾讯文档。"}
 
 
 _REMOTE_CACHE: dict[tuple, tuple[tuple, list[dict], dict]] = {}

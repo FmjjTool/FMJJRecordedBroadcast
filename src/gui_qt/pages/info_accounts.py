@@ -215,7 +215,6 @@ class InfoAccountsPage(BasePage):
         layout.addWidget(self._build_batch_card())
         layout.addWidget(self._build_accounts_card())
         layout.addWidget(self._build_settings_card())
-        layout.addWidget(self._build_run_bar())
         layout.addWidget(self._build_log_card(), 1)
         self._scroll.setWidget(self._content)
         outer.addWidget(self._scroll)
@@ -436,18 +435,16 @@ class InfoAccountsPage(BasePage):
                        self.rate_count_entry, self.rate_interval_entry, self.date_btn):
             widget.setFixedHeight(30)
 
+        body.addWidget(self._separator())
+        self._build_run_controls(body)
+
         self._load_date_range()
         self.fetch_mode.setCurrentText("选中账号")
         self._on_fetch_mode_change("选中账号")
         return card
 
-    def _build_run_bar(self) -> QFrame:
-        bar = QFrame()
-        bar.setProperty("variant", "toolbar")
-        v = QVBoxLayout(bar)
-        v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(8)
-
+    def _build_run_controls(self, layout: QVBoxLayout) -> None:
+        """将采集操作和进度放进设置卡片，避免相邻卡片重复描边。"""
         row = QHBoxLayout()
         row.setSpacing(6)
         self.fetch_btn = QPushButton("获取最新")
@@ -481,7 +478,7 @@ class InfoAccountsPage(BasePage):
         self.timer_dot = self._caption("定时未开启")
         row.addWidget(self.timer_dot)
         row.addStretch(1)
-        v.addLayout(row)
+        layout.addLayout(row)
 
         prog_row = QHBoxLayout()
         prog_row.setSpacing(8)
@@ -496,8 +493,7 @@ class InfoAccountsPage(BasePage):
         self.progress_bar.setFormat("空闲")
         self.progress_bar.setValue(0)
         prog_row.addWidget(self.progress_bar, 1)
-        v.addLayout(prog_row)
-        return bar
+        layout.addLayout(prog_row)
 
     def _build_log_card(self) -> QFrame:
         card, head, body = self._new_card("运行日志")

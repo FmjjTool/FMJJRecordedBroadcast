@@ -208,6 +208,12 @@ class TCDocService:
     def bridge_option_preview(self, payload: dict) -> dict:
         return _bridge_module().option_preview(dict(payload or {}))
 
+    def bridge_manual_schema(self, payload: dict) -> dict:
+        return _bridge_module().manual_schema(dict(payload or {}))
+
+    def bridge_manual_tsv(self, payload: dict) -> dict:
+        return _bridge_module().manual_tsv(dict(payload or {}))
+
     def promo_status(self) -> dict:
         return _image_module().status()
 
@@ -276,8 +282,8 @@ class TCDocService:
             lambda task: self._bridge_upload_job(task, module, payload))
         return {"job": job.id}
 
-    def bridge_events(self) -> dict:
-        return _bridge_module().event_list()
+    def bridge_events(self, payload: dict) -> dict:
+        return _bridge_module().event_list(dict(payload or {}))
 
     def start_bridge_playlist(self, payload: dict) -> dict:
         """线下活动歌单链接写入「活动歌单_*」三列（只改这三列）。"""

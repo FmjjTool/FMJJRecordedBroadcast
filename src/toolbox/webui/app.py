@@ -251,6 +251,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return fangroups.start_qq_avatars(dict(req.json or {}))
     server.post("/api/tools/fangroups/qq/avatars", start_qq_avatars)
 
+    def start_qq_refresh(req):
+        return fangroups.start_qq_refresh(dict(req.json or {}))
+    server.post("/api/tools/fangroups/qq/refresh", start_qq_refresh)
+
+    def remove_qq_subscription(req):
+        return fangroups.qq_remove(dict(req.json or {}))
+    server.post("/api/tools/fangroups/qq/remove", remove_qq_subscription)
+
 
     server.get("/api/douyin-index", lambda req: douyin_index.overview())
     server.get("/api/douyin-index/report", lambda req: douyin_index.report(
@@ -767,6 +775,14 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.bridge_option_preview(dict(req.json or {}))
     server.post("/api/tcdoc/bridge/options", tcdoc_bridge_options)
 
+    def tcdoc_bridge_manual_schema(req):
+        return tcdoc.bridge_manual_schema(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/manual/schema", tcdoc_bridge_manual_schema)
+
+    def tcdoc_bridge_manual_tsv(req):
+        return tcdoc.bridge_manual_tsv(dict(req.json or {}))
+    server.post("/api/tcdoc/bridge/manual/tsv", tcdoc_bridge_manual_tsv)
+
     def start_tcdoc_bridge_refresh(req):
         job = tcdoc.start_bridge_refresh()
         return {"job": job.id}
@@ -776,7 +792,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.start_bridge_upload(dict(req.json or {}))
     server.post("/api/tcdoc/bridge/upload", start_tcdoc_bridge_upload)
 
-    server.get("/api/tcdoc/bridge/events", lambda req: tcdoc.bridge_events())
+    server.get("/api/tcdoc/bridge/events", lambda req: tcdoc.bridge_events({
+        "doc_key": req.q("doc_key"), "tab_id": req.q("tab_id")}))
 
     def start_tcdoc_bridge_playlist(req):
         return tcdoc.start_bridge_playlist(dict(req.json or {}))

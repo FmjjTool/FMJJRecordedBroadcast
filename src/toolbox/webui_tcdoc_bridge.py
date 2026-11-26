@@ -44,10 +44,60 @@ def _write_mode(target: dict) -> str:
     return "read_only"
 
 
-def event_list() -> dict:
-    """线下活动清单（来自本地快照），供「歌单录入」下拉使用。"""
+def manual_schema(payload: dict) -> dict:
+    """手动录入字段（只读）；普通新增仅生成 TSV，活动歌单补录另行确认。"""
+    from toolbox.tcdoc import event_playlist, manual_entry
+
+    target = _find_target(payload.get("doc_key"), payload.get("tab_id"))
+    return {
+        "doc_key": target["doc_key"],
+        "tab_id": target["tab_id"],
+        "tab_name": target.get("tab_name") or "",
+        "profile": target.get("profile") or "posts",
+        "playlist_allowed": (target["doc_key"], target["tab_id"]) == (
+            event_playlist.EVENT_DOC, event_playlist.EVENT_TAB),
+        "fields": [{"name": shown, "internal": internal}
+                   for shown, internal in manual_entry.field_pairs(target)],
+    }
+
+
+def manual_tsv(payload: dict) -> dict:
+    """手动新增一行的可复制 TSV；不落盘、不加入上传清单、不请求腾讯文档。"""
+    from toolbox.tcdoc import manual_entry
+
+    target = _find_target(payload.get("doc_key"), payload.get("tab_id"))
+    values = payload.get("values")
+    if not isinstance(values, dict):
+        raise ValueError("录入内容格式错误")
+    row = manual_entry.build_row(target, values)
+    pairs = manual_entry.field_pairs(target)
+    table_columns = [str(column.get("name") or "")
+                     for column in target.get("columns") or []]
+    return {
+        "tsv": bridge.to_tsv(
+            [row], columns=[internal for _shown, internal in pairs],
+            doc_key=target["doc_key"], tab_id=target["tab_id"],
+            table_columns=table_columns),
+        "columns": table_columns,
+        "total": 1,
+    }
+
+
+def _playlist_target(payload: dict) -> dict:
+    from toolbox.tcdoc import event_playlist
+
+    target = _find_target(payload.get("doc_key"), payload.get("tab_id"))
+    if (target["doc_key"], target["tab_id"]) != (
+            event_playlist.EVENT_DOC, event_playlist.EVENT_TAB):
+        raise ValueError("只有「封茗囧菌数据汇总库 / 线下活动」支持补充活动歌单")
+    return target
+
+
+def event_list(payload: dict) -> dict:
+    """线下活动清单（来自本地快照），供手动录入的「补充已有活动歌单」使用。"""
     from music import playlist_service
 
+    _playlist_target(payload)
     events = []
     for event in playlist_service.load_offline_events():
         events.append({
@@ -65,6 +115,7 @@ def write_event_playlist(payload: dict) -> dict:
     from music import playlist_service
     from toolbox.tcdoc import event_playlist
 
+    _playlist_target(payload)
     row_no = payload.get("row_no")
     if row_no is None:
         raise ValueError("请先选择一场线下活动")
@@ -126,7 +177,11 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
         dup_mode = "skip"
     _progress(on_progress, 0.2, 1, "正在比对本地数据与表格快照")
     _check_cancelled(is_cancelled)
-    if profile == "lives":
+    if profile == "fragments":
+        columns = [str(col.get("name") or "") for col in target.get("columns") or []
+                   if str(col.get("name") or "")]
+        result = bridge.build_fragment_snapshot(target["doc_key"], target["tab_id"], columns)
+    elif profile == "lives":
         result = bridge.build_live_pending(days=days, duplicate_mode=dup_mode)
     elif profile == "songs":
         result = bridge.build_song_pending()
@@ -141,10 +196,12 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
     rows = list(result.get("rows") or [])
     existing = list(result.get("existing") or [])
     columns = list(result.get("columns") or [])
-    items = [_item(profile, row, index) for index, row in enumerate(rows)]
+    items = ([] if profile == "fragments" else
+             [_item(profile, row, index) for index, row in enumerate(rows)])
     tsv = ""
     try:
-        tsv = bridge.to_tsv(rows, columns, target["doc_key"], target["tab_id"])
+        tsv = (bridge.to_tsv(rows, columns) if profile == "fragments" else
+               bridge.to_tsv(rows, columns, target["doc_key"], target["tab_id"]))
     except Exception:  # noqa: BLE001 - TSV 只是辅助，失败不影响预览
         tsv = ""
     allowed, message = sync_refresh.upload_allowed()
@@ -160,6 +217,9 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
         "dup_mode": dup_mode,
         "columns": columns,
         "items": items,
+        "snapshot_rows": ([[str(row.get(name) if row.get(name) is not None else "")
+                            for name in columns] for row in rows]
+                          if profile == "fragments" else []),
         "total": len(rows),
         "existing": len(existing),
         "tsv": tsv,
@@ -167,7 +227,8 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
         "can_upload": write_mode == "append",
         "write_mode": write_mode,
         "refresh": {"allowed": bool(allowed), "message": str(message)},
-        "note": ("只读比对：不写入腾讯文档。" if write_mode != "append"
+        "note": (result["note"] if profile == "fragments" else
+                 "只读比对：不写入腾讯文档。" if write_mode != "append"
                  else "只读比对：勾选后可在页面确认上传，仅新增、不修改已有行。"),
     }
 

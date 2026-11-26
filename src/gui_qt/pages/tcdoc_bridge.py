@@ -622,7 +622,7 @@ class TcDocBridgePanel(QWidget):
         row1.addWidget(_caption("表格"))
         self.target_combo = QComboBox()
         self.target_combo.setMinimumWidth(320)
-        self.target_combo.setToolTip("已同步到本地的腾讯表格（自动识别含官方动态字段的工作表）")
+        self.target_combo.setToolTip("已同步到本地的腾讯表格；歌曲片段仅预览本地快照")
         self.target_combo.currentIndexChanged.connect(self._on_target_changed)
         row1.addWidget(self.target_combo, 2)
 
@@ -731,19 +731,11 @@ class TcDocBridgePanel(QWidget):
 
         self.manual_btn = QPushButton("手动录入")
         self.manual_btn.setToolTip(
-            "为当前表手动新增一行；只生成可复制的 TSV，不会直接写入腾讯文档。"
+            "为当前表新增待复制行；线下活动还可在录入窗口内补充已有活动歌单。"
             "图片列请用「复制图片」或到腾讯文档里补。")
         self.manual_btn.clicked.connect(self._manual_entry)
         row2.addWidget(self.manual_btn)
 
-        # 线下活动专用：直接给已存在的活动行登记三个平台的歌单链接
-        self.playlist_btn = QPushButton("歌单录入")
-        self.playlist_btn.setToolTip(
-            "给「线下活动」里某一场活动登记网易云 / 酷狗 / QQ音乐歌单链接：\n"
-            "只改「活动歌单_*」三列，已有其它链接不覆盖；链接或歌单 ID 都能填。")
-        self.playlist_btn.setVisible(False)
-        self.playlist_btn.clicked.connect(self._playlist_entry)
-        row2.addWidget(self.playlist_btn)
         row2.addStretch(1)
 
         self.copy_btn = QPushButton("复制全部（TSV）")
@@ -1114,10 +1106,11 @@ class TcDocBridgePanel(QWidget):
         profile = str((target or {}).get("profile") or "posts")
         songs = profile == "songs"
         lives = profile == "lives"
-        readonly = profile in ("events", "merch", "lives")
-        self.manual_btn.setVisible(bool(target))
-        self.field_map_btn.setVisible(bool(target))
-        self.playlist_btn.setVisible(profile == "events")
+        fragments = profile == "fragments"
+        readonly = profile in ("events", "merch", "lives", "fragments")
+        self.manual_btn.setVisible(bool(target) and not fragments)
+        self.field_map_btn.setVisible(bool(target) and not fragments)
+        self.compare_btn.setText("刷新快照" if fragments else "重新比对")
         self.partner_filter_btn.setVisible(profile == "posts")
         self.live_account_btn.setVisible(lives)
         self.dup_combo.setVisible(lives)
@@ -1137,7 +1130,7 @@ class TcDocBridgePanel(QWidget):
             self.days_combo.setCurrentIndex(self._posts_days_index)
             self.days_combo.blockSignals(False)
         self._songs_mode = songs
-        self.days_combo.setEnabled(not songs and not lives)
+        self.days_combo.setEnabled(not songs and not lives and not fragments)
         self.account_btn.setEnabled(not songs and not readonly)
         if readonly:
             self.account_btn.setText("全部")
@@ -1965,8 +1958,6 @@ class TcDocBridgePanel(QWidget):
 
     # ==================== 比对 ====================
 
-    _MANUAL_SKIP_TYPES = {5, 10, 11, 13, 19, 21}   # 图片/人员/公式/关联
-
     @staticmethod
     def _playlist_event_label(event: dict) -> str:
         parts = [event.get("name") or "", event.get("date") or "",
@@ -1989,33 +1980,39 @@ class TcDocBridgePanel(QWidget):
                 return event
         return None
 
-    def _playlist_entry(self) -> None:
-        """线下活动：给某一场活动登记三个平台的歌单链接（只写「活动歌单_*」三列）。"""
-        from music import playlist_service
+    def _playlist_entry_form(self, parent):
+        """手动录入窗口中的歌单补充表单，复用既有三列写回用例。"""
+        from music import playlist_link, playlist_service
         from toolbox.tcdoc import event_playlist
 
+        body = QWidget(parent)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 0)
         try:
             events = playlist_service.load_offline_events()
         except Exception as exc:  # noqa: BLE001 - 快照损坏按读取失败提示
-            QMessageBox.warning(self, "歌单录入", f"读取线下活动快照失败：{exc}")
-            return
+            root.addWidget(QLabel(f"读取线下活动快照失败：{exc}；请重新同步表格。"))
+            root.addStretch(1)
+            return body, None
         if not events:
-            QMessageBox.information(
-                self, "歌单录入", "本地没有「线下活动」快照，请先在腾讯文档页同步表格。")
-            return
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("歌单录入 · 线下活动")
-        dlg.resize(580, 360)
-        root = QVBoxLayout(dlg)
+            hint = QLabel("本地没有「线下活动」快照，请先同步表格；仍可切回新增待复制行。")
+            hint.setWordWrap(True)
+            root.addWidget(hint)
+            root.addStretch(1)
+            return body, None
         tip = QLabel("选一场活动，粘贴平台歌单链接或只填歌单 ID（可留空）；"
-                     "只写「活动歌单_*」三列，已有其它链接不会覆盖。")
+                     "只补充该活动的三列歌单链接，默认保留已有其它链接。")
         tip.setWordWrap(True)
         tip.setProperty("role", "muted")
         root.addWidget(tip)
 
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
         combo = QComboBox()
+        combo.setObjectName("manualPlaylistEvent")
+        combo.setMinimumWidth(160)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(8)
         combo.setEditable(True)
         combo.setInsertPolicy(QComboBox.NoInsert)
         for event in events:
@@ -2032,12 +2029,14 @@ class TcDocBridgePanel(QWidget):
         for platform, label in (("netease", "网易云"), ("kugou", "酷狗"),
                                 ("qq", "QQ音乐")):
             edit = QLineEdit()
+            edit.setObjectName(f"manualPlaylist_{platform}")
             edit.setPlaceholderText(
                 "歌单链接，或 collection_3_<uid>_<listid>_0 形式的酷狗歌单 ID（可留空）"
                 if platform == "kugou" else "歌单链接，或歌单 ID（可留空）")
             edits[platform] = edit
             form.addRow(f"活动歌单_{label}", edit)
         overwrite_box = QCheckBox("覆盖该列已有的其它链接")
+        overwrite_box.setObjectName("manualPlaylistOverwrite")
         overwrite_box.setToolTip("默认不覆盖人工登记的链接；勾选后填写的平台会直接替换")
         form.addRow("", overwrite_box)
         paste_btn = QPushButton("从剪贴板填入酷狗链接")
@@ -2046,11 +2045,11 @@ class TcDocBridgePanel(QWidget):
         def fill_from_clipboard():
             text = QApplication.clipboard().text().strip()
             if not text:
-                QMessageBox.information(dlg, "歌单录入", "剪贴板是空的。")
+                QMessageBox.information(parent, "手动录入", "剪贴板是空的。")
                 return
             if "kugou.com" not in text.lower():
                 QMessageBox.warning(
-                    dlg, "歌单录入",
+                    parent, "手动录入",
                     f"剪贴板里不是酷狗分享链接：{text[:60]}")
                 return
             edits["kugou"].setText(text)
@@ -2060,38 +2059,42 @@ class TcDocBridgePanel(QWidget):
         root.addLayout(form)
         root.addStretch(1)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(dlg.reject)
-        buttons.addWidget(cancel)
-        ok = QPushButton("推送到腾讯文档")
-        ok.setProperty("variant", "primary")
-        buttons.addWidget(ok)
-        root.addLayout(buttons)
-
         def submit():
             event = self._playlist_event_by_text(combo, events)
             if event is None:
-                QMessageBox.warning(dlg, "歌单录入", "请先选择一场线下活动。")
+                QMessageBox.warning(parent, "手动录入", "请先选择一场线下活动。")
                 return
             entries = {platform: edit.text().strip()
                        for platform, edit in edits.items()}
             if not any(entries.values()):
-                QMessageBox.warning(dlg, "歌单录入", "至少填写一个平台的歌单链接。")
+                QMessageBox.warning(parent, "手动录入", "至少填写一个平台的歌单链接。")
                 return
             try:
                 for platform, text in entries.items():
                     if text:
                         event_playlist.parse_input(platform, text)
             except ValueError as exc:
-                QMessageBox.warning(dlg, "歌单录入", str(exc))
+                QMessageBox.warning(parent, "手动录入", str(exc))
                 return
-            dlg.accept()
-            self._run_playlist_write(event, entries, overwrite_box.isChecked())
+            columns = [edit_label for platform, edit_label in
+                       playlist_link.EVENT_COLUMNS.items()
+                       if entries.get(platform)]
+            confirm = QMessageBox(parent)
+            confirm.setWindowTitle("补充活动歌单")
+            confirm.setText(f"更新「{event.get('name') or ''}」的歌单链接？")
+            confirm.setInformativeText(
+                "只写入：" + "、".join(columns) + "。\n"
+                + ("将覆盖所填平台已有的其它链接。" if overwrite_box.isChecked()
+                   else "默认保留已有其它链接；已确认失效的旧链接按原规则替换。"))
+            cancel = confirm.addButton("取消", QMessageBox.RejectRole)
+            push = confirm.addButton("推送歌单", QMessageBox.AcceptRole)
+            confirm.setDefaultButton(cancel)
+            confirm.setEscapeButton(cancel)
+            confirm.exec()
+            if confirm.clickedButton() == push:
+                return event, entries, overwrite_box.isChecked()
 
-        ok.clicked.connect(submit)
-        dlg.exec()
+        return body, submit
 
     def _run_playlist_write(self, event, entries, overwrite: bool = False) -> None:
         from toolbox.tcdoc import event_playlist
@@ -2121,7 +2124,7 @@ class TcDocBridgePanel(QWidget):
         输入框按腾讯表的真实列名显示，落库时换成程序内部字段名，
         这样字段映射改了列名也能正确显示与复制。
         """
-        from toolbox.tcdoc import field_maps
+        from toolbox.tcdoc import event_playlist, manual_entry
 
         target = self.target_combo.currentData()
         if not target:
@@ -2129,60 +2132,93 @@ class TcDocBridgePanel(QWidget):
         profile = str(target.get("profile") or "posts")
         doc_key = str(target.get("doc_key") or "")
         tab_id = str(target.get("tab_id") or "")
-        pairs: list[tuple[str, str]] = []   # (腾讯列名, 内部字段名)
-        seen: set[str] = set()
-        for col in target.get("columns") or []:
-            shown = str(col.get("name") or "")
-            if not shown or int(col.get("type") or 1) in self._MANUAL_SKIP_TYPES:
-                continue
-            internal = field_maps.internal_of(doc_key, tab_id, shown)
-            if internal in seen or not field_maps.target(doc_key, tab_id, internal):
-                continue
-            seen.add(internal)
-            pairs.append((shown, internal))
-        if not pairs:
-            pairs = [(name, field_maps.internal_of(doc_key, tab_id, name))
-                     for name in (c.get("name") for c in target.get("columns") or [])
-                     if name]
+        pairs = manual_entry.field_pairs(target)
+        playlist_allowed = (doc_key, tab_id) == (
+            event_playlist.EVENT_DOC, event_playlist.EVENT_TAB)
         dlg = QDialog(self)
         dlg.setWindowTitle(f"手动录入 · {target.get('tab_name') or ''}")
-        dlg.resize(640, 620)
+        dlg.resize(720, 640)
+        dlg.setMinimumSize(420, 300)
         root = QVBoxLayout(dlg)
-        root.setContentsMargins(12, 12, 12, 10)
+        root.setContentsMargins(16, 16, 16, 16)
+        mode = QComboBox()
+        mode.setObjectName("manualEntryMode")
+        mode.addItem("新增待复制行")
+        if playlist_allowed:
+            mode.addItem("补充已有活动歌单")
+            mode_row = QHBoxLayout()
+            mode_row.addWidget(QLabel("录入方式"))
+            mode_row.addWidget(mode, 1)
+            root.addLayout(mode_row)
+        stack = QStackedWidget()
+        new_page = QWidget()
+        new_layout = QVBoxLayout(new_page)
+        new_layout.setContentsMargins(0, 0, 0, 0)
         tip = QLabel("只生成可复制的 TSV，不会写入腾讯文档；图片列请单独处理。")
+        tip.setWordWrap(True)
         tip.setProperty("role", "muted")
-        root.addWidget(tip)
+        new_layout.addWidget(tip)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         body = QWidget()
         form = QFormLayout(body)
+        form.setLabelAlignment(Qt.AlignRight)
         form.setContentsMargins(4, 4, 4, 4)
         edits: dict[str, QLineEdit] = {}
         for shown, internal in pairs:
             edit = QLineEdit()
+            edit.setObjectName(f"manualField_{internal}")
             edit.setPlaceholderText(shown)
             edits[internal] = edit
             form.addRow(shown if shown == internal else f"{shown}（← {internal}）", edit)
         scroll.setWidget(body)
-        root.addWidget(scroll, 1)
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(dlg.reject)
-        buttons.addWidget(cancel)
-        ok = QPushButton("加入待复制行")
+        new_layout.addWidget(scroll, 1)
+        if not pairs:
+            tip.setText("当前表没有可手动录入的字段，请先检查表头与字段映射。")
+        stack.addWidget(new_page)
+        root.addWidget(stack, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.rejected.connect(dlg.reject)
+        ok = buttons.addButton("加入待复制行", QDialogButtonBox.ActionRole)
+        ok.setObjectName("manualEntrySubmit")
         ok.setProperty("variant", "primary")
-        buttons.addWidget(ok)
-        root.addLayout(buttons)
+        ok.setDefault(True)
+        ok.setEnabled(bool(pairs))
+        root.addWidget(buttons)
+
+        playlist_submit = None
+
+        def change_mode(index):
+            nonlocal playlist_submit
+            if index == 1 and stack.count() == 1:
+                playlist_page, playlist_submit = self._playlist_entry_form(dlg)
+                playlist_scroll = QScrollArea()
+                playlist_scroll.setWidgetResizable(True)
+                playlist_scroll.setWidget(playlist_page)
+                stack.addWidget(playlist_scroll)
+            stack.setCurrentIndex(index)
+            ok.setText("推送歌单" if index == 1 else "加入待复制行")
+            ok.setDefault(index == 0)
+            ok.setAutoDefault(index == 0)
+            ok.setEnabled(playlist_submit is not None if index == 1 else bool(pairs))
+
+        mode.currentIndexChanged.connect(change_mode)
 
         def save():
-            row = {name: edit.text().strip() for name, edit in edits.items()}
-            if not any(row.values()):
-                QMessageBox.warning(dlg, "手动录入", "至少填写一个字段。")
+            if mode.currentIndex() == 1:
+                if playlist_submit is not None:
+                    request = playlist_submit()
+                    if request is not None:
+                        dlg.accept()
+                        self._run_playlist_write(*request)
                 return
-            row["_images"] = []
-            row["_source"] = ""
-            row["_needs_review"] = True
+            try:
+                row = manual_entry.build_row(
+                    target, {name: edit.text() for name, edit in edits.items()})
+            except ValueError as exc:
+                QMessageBox.warning(dlg, "手动录入", str(exc))
+                return
             if self._result is None:
                 names = [internal for _shown, internal in pairs]
                 self._result = bridge.manual_target_result(profile, names)
@@ -2296,7 +2332,14 @@ class TcDocBridgePanel(QWidget):
             collected = list(common.COLLECTED)  # 主线程快照，避免采集线程并发追加
 
             profile = str(target.get("profile") or "posts")
-            if profile == "events":
+            if profile == "fragments":
+                columns = [str(col.get("name") or "")
+                           for col in target.get("columns") or []
+                           if str(col.get("name") or "")]
+
+                def work():
+                    return bridge.build_fragment_snapshot(doc_key, tab_id, columns)
+            elif profile == "events":
                 def work():
                     return bridge.build_event_pending(days=days, collected=collected)
             elif profile == "merch":
@@ -2546,6 +2589,18 @@ class TcDocBridgePanel(QWidget):
                 self._set_summary(f"比对失败：{err}")
             return
         self._result = result
+        if result.get("profile") == "fragments":
+            self._fill_table(result["rows"], result.get("columns"), append_images=False)
+            self.copy_btn.setEnabled(bool(result["rows"]))
+            self.upload_btn.setEnabled(False)
+            self.copy_images_btn.setEnabled(False)
+            self._set_summary(f"歌曲片段 · 本地快照 {len(result['rows'])} 行（只读）")
+            self.status.setText(result["note"])
+            if not result["rows"]:
+                self._set_empty("歌曲片段快照暂无记录",
+                                "请先在「表格同步」同步该子表，再点「刷新快照」。")
+            self._show_table()
+            return
         self._fill_table(result["rows"], result.get("columns"))
         stats = result["stats"]
         timing = stats.get("timing") or {}
@@ -2732,13 +2787,15 @@ class TcDocBridgePanel(QWidget):
 
     def _fill_table(self, rows: list[dict], columns=None,
                     append_images: bool = True) -> None:
-        if columns:
+        target = self.target_combo.currentData() or {}
+        fragments = target.get("profile") == "fragments"
+        if columns or fragments:
             from toolbox.tcdoc import field_maps
-            target = self.target_combo.currentData() or {}
             doc_key = str(target.get("doc_key") or "")
             tab_id = str(target.get("tab_id") or "")
-            sources = field_maps.source_map(doc_key, tab_id, columns)
-            display = field_maps.display_columns(doc_key, tab_id, columns)
+            sources = {} if fragments else field_maps.source_map(doc_key, tab_id, columns)
+            display = (list(columns or []) if fragments else
+                       field_maps.display_columns(doc_key, tab_id, columns))
             if append_images:
                 display = display + ["图片"]
             if display != self._model.columns or sources != self._model.sources:
@@ -3014,6 +3071,10 @@ class TcDocBridgePanel(QWidget):
             return
         columns = (self._result or {}).get("columns") or bridge.COLUMNS
         target = self.target_combo.currentData() or {}
+        if target.get("profile") == "fragments":
+            QApplication.clipboard().setText(bridge.to_tsv(rows, columns))
+            self.status.setText(f"已复制{label}本地快照（不含表头，只读）")
+            return
         table_columns = [str(col.get("name") or "")
                          for col in target.get("columns") or []
                          if str(col.get("name") or "")]

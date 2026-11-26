@@ -10875,6 +10875,7 @@ function renderMusicTag(root) {
 
           function syncButtons() {
             var target = targetNow();
+            var isSnapshot = !!target && target.profile === 'fragments';
             var gate = lastPreview ? lastPreview.refresh.allowed : false;
             var canUpload = !!(target && target.write_mode === 'append');
             selLabel.textContent = '已选 ' + selected.size + ' 条';
@@ -10884,6 +10885,10 @@ function renderMusicTag(root) {
             uploadBtn.textContent = busy ? '处理中…'
               : (canUpload ? '上传选中' : '该表只读');
             optBtn.disabled = busy || !canUpload || selected.size === 0;
+            uploadBtn.style.display = isSnapshot ? 'none' : '';
+            optBtn.style.display = isSnapshot ? 'none' : '';
+            selLabel.style.display = isSnapshot ? 'none' : '';
+            compareBtn.textContent = isSnapshot ? '刷新快照' : '重新比对';
             compareBtn.disabled = busy;
             refreshBtn.disabled = busy;
           }
@@ -10916,7 +10921,9 @@ function renderMusicTag(root) {
           function updateTargetUi() {
             var target = targetNow();
             var isLives = !!target && target.profile === 'lives';
-            accSel.style.display = isLives ? 'none' : '';
+            var isSnapshot = !!target && target.profile === 'fragments';
+            accSel.style.display = (isLives || isSnapshot) ? 'none' : '';
+            daysSel.disabled = isSnapshot;
             dupSel.style.display = isLives ? '' : 'none';
             playlistBtn.style.display = (target && target.profile === 'events')
               ? '' : 'none';
@@ -10967,6 +10974,30 @@ function renderMusicTag(root) {
                 ? '刷新门禁通过：' + (result.refresh.message || '')
                 : result.refresh.message || '数据未刷新，上传已锁定。';
               var stats = result.stats || {};
+              if (result.profile === 'fragments') {
+                summary.textContent = '歌曲片段 · 本地快照 '
+                  + fmtNumber(result.total) + ' 行（只读）';
+                var snapshotHead = h('tr');
+                result.columns.forEach(function (name) {
+                  snapshotHead.appendChild(h('th', null, name));
+                });
+                var snapshotBody = h('tbody');
+                (result.snapshot_rows || []).forEach(function (cells) {
+                  var row = h('tr');
+                  cells.forEach(function (value) {
+                    row.appendChild(h('td', { title: value }, value || '-'));
+                  });
+                  snapshotBody.appendChild(row);
+                });
+                tableHost.replaceChildren(result.total
+                  ? h('div', { class: 'table-wrap' },
+                    h('table', { class: 'db-table' },
+                      h('thead', null, snapshotHead), snapshotBody))
+                  : empty('歌曲片段快照暂无记录，请先在「表格同步」同步该子表。'),
+                  h('div', { class: 'muted small' }, result.note || ''));
+                syncButtons();
+                return;
+              }
               summary.textContent = '待同步 ' + fmtNumber(result.total)
                 + ' 条 · 已同步 ' + fmtNumber(stats.synced_groups)
                 + ' · 本地 ' + fmtNumber(stats.local_items)
