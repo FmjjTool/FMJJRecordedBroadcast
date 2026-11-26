@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""全局设置中的网盘备份面板。
+"""夸克网盘备份页。
 
 把本地目录按「增量追加」备份到夸克网盘的指定文件夹（云端多余文件不删）：
 
@@ -20,7 +20,7 @@ from datetime import datetime
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QGuiApplication, QPalette
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -194,28 +194,14 @@ class QuarkBackupPage(BasePage):
         self._icons: list[tuple[QWidget, str, str]] = []
 
         root = QVBoxLayout(self)
-        # 本面板只嵌入全局设置的备份与恢复，左右留白交给设置卡片
+        # 本页只作为「网络库」页签内容使用，左右留白交给页签容器
         root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)
 
         root.addWidget(self._build_toolbar())
-        self._body_layout = self._build_body()
-        root.addLayout(self._body_layout, 1)
-        self.setMinimumHeight(420)
+        root.addLayout(self._build_body(), 1)
 
         self.reload()
-
-    def has_active_tasks(self):
-        """切离设置时保留正在执行备份的面板。"""
-        return self._running
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        narrow = self.width() < 760
-        direction = QBoxLayout.TopToBottom if narrow else QBoxLayout.LeftToRight
-        if self._body_layout.direction() != direction:
-            self._body_layout.setDirection(direction)
-            self.setMinimumHeight(680 if narrow else 420)
 
     # ==================== 图标（主题切换后重生成） ====================
 

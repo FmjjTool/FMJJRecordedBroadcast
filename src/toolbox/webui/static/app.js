@@ -31,6 +31,7 @@
     shopping: { tab: 'taobao' },
     info_accounts: { platform: '', scope: 'all' },
     artifacts: { tab: 'comments' },
+    netdisk: { tab: 'backup' },
     audio: { order: '', asc: true, selected: new Set() },
     organize: { order: '', asc: true, selected: new Set() },
     rename: { order: '', asc: true },
@@ -406,7 +407,7 @@
         ['info_accounts', '采集任务', '账号清单与批量解析'],
         ['collected', '采集结果', '结果库、下载与导出'],
         ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
-        ['netdisk', '网络库', '网盘文件浏览与下载'],
+        ['netdisk', '网络库', '网盘备份状态与运行记录'],
         ['localwiki', '资料站', '部署状态与站点访问统计'],
         ['livestream_summary', '直播总结', '转录清单与已保存总结'],
         ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
@@ -1567,18 +1568,36 @@
   }
 
   function renderNetdisk(root) {
-    return renderNetdiskPanel(root, 'download');
-  }
-
-  function renderNetdiskPanel(root, mode) {
-    setLoading(root, mode === 'backup' ? '正在读取网盘备份状态…' : '正在读取网盘目录…');
-    return api('/api/netdisk').then(function (data) {
+    setLoading(root, '正在读取网盘备份状态…');
+    api('/api/netdisk').then(function (data) {
       root.replaceChildren();
+      var tabs = h('div', { class: 'tabs' });
       var host = h('div');
       var providers = data.providers || [];
       var providerLabel = {};
       providers.forEach(function (item) { providerLabel[item.value] = item.label; });
+      var TABS = [['backup', '备份到网盘'], ['download', '文件下载']];
+      TABS.forEach(function (item) {
+        tabs.appendChild(h('button', {
+          class: 'tab' + (state.netdisk.tab === item[0] ? ' active' : ''),
+          type: 'button',
+          onclick: function () {
+            state.netdisk.tab = item[0];
+            tabs.querySelectorAll('.tab').forEach(function (button, index) {
+              button.classList.toggle('active', TABS[index][0] === item[0]);
+            });
+            renderTab();
+          }
+        }, item[1]));
+      });
+      root.appendChild(tabs);
       root.appendChild(host);
+
+      function renderTab() {
+        host.replaceChildren();
+        if (state.netdisk.tab === 'backup') renderBackup();
+        else renderDownload();
+      }
 
       function editMapping(mapping) {
         var form = {
@@ -1688,7 +1707,7 @@
           }).then(function (result) {
             toast(result.summary || '已保存', 'success');
             overlay.remove();
-            renderNetdiskPanel(root, mode);
+            renderNetdisk(root);
           }).catch(function (error) {
             saveBtn.disabled = false;
             errLine.textContent = '保存失败：' + error.message;
@@ -1751,7 +1770,7 @@
                   h('div', { class: 'row-title' }, '本次分享链接'),
                   shareHost));
               }
-              setTimeout(function () { renderNetdiskPanel(root, mode); }, 1200);
+              setTimeout(function () { renderNetdisk(root); }, 1200);
             }, {
               cancelable: true,
               onSettled: function (job) {
@@ -1805,7 +1824,7 @@
               id: mapping.id, enabled: !mapping.enabled
             }).then(function (result) {
               toast(result.summary || '已保存', 'success');
-              renderNetdiskPanel(root, mode);
+              renderNetdisk(root);
             }).catch(function (error) {
               toggleBtn.disabled = false;
               toast('操作失败：' + error.message, 'error');
@@ -1825,7 +1844,7 @@
               id: mapping.id, confirmed: true
             }).then(function (result) {
               toast(result.summary || '已删除', 'success');
-              renderNetdiskPanel(root, mode);
+              renderNetdisk(root);
             }).catch(function (error) {
               delBtn.disabled = false;
               toast('删除失败：' + error.message, 'error');
@@ -2119,10 +2138,9 @@
         loadDir();
       }
 
-      if (mode === 'backup') renderBackup();
-      else renderDownload();
+      renderTab();
     }).catch(function (error) {
-      setError(root, error, function () { renderNetdiskPanel(root, mode); });
+      setError(root, error, function () { renderNetdisk(root); });
     });
   }
 
@@ -5532,7 +5550,9 @@ function renderLivestreamSummary(root) {
           return;
         }
         var row = [item.start, item.end];
-        var rows = currentCutRows();
+        var rows;
+        try { rows = draft.text.trim() ? parseSegments(draft.text) : []; }
+        catch (error) { toast(error.message, 'warning'); return; }
         rows.push(row);
         draft.drafts.splice(index, 1);
         draft.selectedDraft = -1;
@@ -5562,7 +5582,9 @@ function renderLivestreamSummary(root) {
             toast('结束时间必须大于开始时间，请移动播放指针后重试', 'warning');
             return;
           }
-          var nextRows = currentCutRows();
+          var nextRows;
+          try { nextRows = draft.text.trim() ? parseSegments(draft.text) : []; }
+          catch (error) { toast(error.message, 'warning'); return; }
           var newRow = [start, position];
           nextRows.push(newRow);
           draft.pendingStart = null;
@@ -8005,14 +8027,6 @@ function renderLivestreamSummary(root) {
           });
       });
       host.appendChild(themeCard);
-
-      var backupHost = h('div');
-      host.appendChild(h('div', { class: 'card', style: 'margin-top:12px' },
-        h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '备份与恢复'),
-        h('div', { class: 'muted small', style: 'margin-bottom:8px' },
-          '备份到网盘；计划时间仍在「任务」页管理。配置与资产备份沿用桌面端全局设置。'),
-        backupHost));
-      renderNetdiskPanel(backupHost, 'backup');
 
       var deps = h('details', { class: 'card', style: 'margin-top:12px' });
       deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
@@ -11238,7 +11252,7 @@ function renderMusicTag(root) {
               }, text);
             }),
           h('span', { class: 'muted small' },
-            '桌面端采样 / 快照 / 导出与子进程明细仍在桌面端'))));
+            '实时采样与快照在桌面端操作；已保存报告可在下方下载'))));
       var cards = h('div', {
         class: 'grid cols-4', style: 'margin-bottom:12px'
       });

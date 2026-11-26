@@ -15,7 +15,6 @@ import contextlib
 import functools
 import hashlib
 import json
-import math
 import os
 import platform
 import re
@@ -36,6 +35,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 
 from .client import CancelledError, ChatClient, ChatError, _content
+from .local_options import normalize_options
 
 _OWNER = "fmjj.optional-local-llm"
 _SCHEMA = 1
@@ -278,19 +278,26 @@ def _relative_name(name):
     return text
 
 
-def _entry_ready(root, kind, identifier, *, verify=False, cancel=None):
+def _entry_ready(root, kind, identifier, *, verify=False, cancel=None, progress=None):
     folder = _within(root, "runtimes" if kind == "runtime" else "models", identifier)
     value = _read_manifest(folder, kind, identifier)
     if not value:
         return None
     try:
+        checked, total = 0, sum(item["size"] for item in value["files"])
         for item in value["files"]:
             path = _within(folder, item["filename"])
             if not path.is_file() or path.stat().st_size != int(item["size"]):
                 return None
             if verify:
-                if _sha_file(path, cancel) != item["sha256"]:
+                def update(percent, previous=checked, size=item["size"], name=item["filename"]):
+                    stage = "运行模块" if kind == "runtime" else "模型"
+                    _report(progress, (previous + size * percent // 100) * 100 // total,
+                            f"正在校验{stage}：{PurePosixPath(name).name}（{percent}%）")
+
+                if _sha_file(path, cancel, progress=update) != item["sha256"]:
                     return None
+            checked += item["size"]
         if kind == "runtime":
             if value.get("version") != _TAG or value.get("archive_sha256") != _RUNTIMES[identifier]["sha256"]:
                 return None
@@ -335,8 +342,9 @@ def status(*, root=None):
                     "GPU 模块需要显卡驱动支持 Vulkan。"}
 
 
-def _sha_file(path, cancel=None):
+def _sha_file(path, cancel=None, progress=None):
     digest = hashlib.sha256()
+    total, done, last_report = path.stat().st_size, 0, 0.0
     with path.open("rb") as stream:
         while True:
             _check_cancel(cancel)
@@ -344,6 +352,11 @@ def _sha_file(path, cancel=None):
             if not chunk:
                 break
             digest.update(chunk)
+            done += len(chunk)
+            now = time.monotonic()
+            if progress and (now - last_report >= 0.5 or done == total):
+                progress(done * 100 // max(1, total))
+                last_report = now
     return digest.hexdigest()
 
 
@@ -612,7 +625,7 @@ def install_runtime(backend, *, progress=None, cancel=None, root=None):
     base = _root(root)
     with _Guard(base):
         _check_cancel(cancel)
-        if _entry_ready(base, "runtime", backend, verify=True, cancel=cancel):
+        if _entry_ready(base, "runtime", backend, verify=True, cancel=cancel, progress=progress):
             return next(i for i in status(root=base)["runtimes"] if i["id"] == backend)
         temporary = Path(tempfile.mkdtemp(prefix=".install-", dir=base))
         try:
@@ -659,7 +672,7 @@ def download_model(model_id, *, progress=None, cancel=None, root=None):
         _check_cancel(cancel)
         existing_dir = _within(base, "models", identifier)
         existing = _read_manifest(existing_dir, "model", identifier)
-        ready = _entry_ready(base, "model", identifier, verify=True, cancel=cancel)
+        ready = _entry_ready(base, "model", identifier, verify=True, cancel=cancel, progress=progress)
         expected_files = {(f["filename"], f["size"], f["sha256"]) for f in item["files"]}
         same_asset = bool(existing) and {
             (f["filename"], f["size"], f["sha256"]) for f in existing["files"]} == expected_files
@@ -798,30 +811,16 @@ def remove_model(model_id, *, root=None):
 
 
 def _options(options):
-    value = dict(options or {})
-    backend = str(value.get("backend") or "cpu")
-    if backend not in _RUNTIMES:
-        raise RuntimeErrorBase("请选择 CPU 或 Vulkan GPU 模块")
-    result = {"backend": backend, "model": _safe_name(value.get("model"), gguf=True)}
-    for key, default, lo, hi in (("context", 16384, 1024, 131072), ("threads", 0, 0, 256),
-                                 ("gpu_layers", 99, 0, 999), ("batch", 256, 1, 2048),
-                                 ("max_tokens", 2048, 1, 32768)):
-        try:
-            number = int(value.get(key, default))
-        except (ValueError, TypeError):
-            raise RuntimeErrorBase(f"{key} 必须为整数") from None
-        if not lo <= number <= hi:
-            raise RuntimeErrorBase(f"{key} 超出支持范围")
-        result[key] = number
     try:
-        temperature = float(value.get("temperature", 0.3))
-    except (ValueError, TypeError):
-        raise RuntimeErrorBase("temperature 必须为数字") from None
-    if not math.isfinite(temperature) or not 0 <= temperature <= 2:
-        raise RuntimeErrorBase("temperature 超出支持范围")
-    if result["max_tokens"] >= result["context"] or result["batch"] > result["context"]:
-        raise RuntimeErrorBase("输出长度与批量大小必须小于上下文容量")
-    result["temperature"] = temperature
+        result = normalize_options(options)
+    except (ValueError, TypeError) as exc:
+        # normalize_options 的错误已带中文字段名；保留统一校验语义。
+        raise RuntimeErrorBase(str(exc)) from None
+    if not result["model"]:
+        raise RuntimeErrorBase("请选择已安装的本地 GGUF 模型")
+    result["model"] = _safe_name(result["model"], gguf=True)
+    if result["batch"] > result["context"]:
+        raise RuntimeErrorBase("批处理大小不能超过上下文长度")
     return result
 
 
@@ -913,8 +912,10 @@ class LocalSession:
         try:
             opts = self.options
             _report(self.progress, 0, "正在校验本地推理组件…")
-            runtime = _entry_ready(self.root, "runtime", opts["backend"], verify=True, cancel=self.cancel)
-            model = _entry_ready(self.root, "model", opts["model"], verify=True, cancel=self.cancel)
+            runtime = _entry_ready(self.root, "runtime", opts["backend"], verify=True, cancel=self.cancel,
+                                   progress=lambda p, m: _report(self.progress, p * 2 // 100, m))
+            model = _entry_ready(self.root, "model", opts["model"], verify=True, cancel=self.cancel,
+                                 progress=lambda p, m: _report(self.progress, 2 + p * 3 // 100, m))
             if not runtime:
                 raise RuntimeErrorBase("所选运行模块未安装或校验失败，请在全局设置中安装")
             if not model:

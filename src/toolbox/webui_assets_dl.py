@@ -464,8 +464,11 @@ def _target_media_files(root: Path, row: dict) -> list[dict]:
 
 
 def _remember_download(root: Path, rel: str, entry: dict, paths, query) -> list:
-    """消费下载器已知产出，直接合并内存媒体与目标状态，不清空后全盘扫描。"""
+    """合并下载产出；缺少路径回执时只补查目标目录，不全盘扫描。"""
     root = root.resolve()
+    if not paths:
+        paths = [(item["path"], item["type"])
+                 for item in _target_media_files(root, entry)]
     additions, public = [], []
     for value in paths or []:
         if not isinstance(value, (list, tuple)) or not value:

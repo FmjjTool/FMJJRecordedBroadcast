@@ -4566,6 +4566,7 @@ class AssetPage(BasePage):
 
     def _db_reload_tables(self, *, preserve_page: bool = False):
         """刷新平台表下拉（含行数），保持当前选择。"""
+        self._db_authors_seq = getattr(self, "_db_authors_seq", 0) + 1
         if getattr(self, "_db_loading", False):
             self._db_refresh_pending = True
             self._db_preserve_pending = (preserve_page or
@@ -4719,13 +4720,16 @@ class AssetPage(BasePage):
 
     def _db_reload_authors(self, *, preserve_page: bool = False):
         plat = self._db_platform()
+        self._db_authors_seq = getattr(self, "_db_authors_seq", 0) + 1
+        authors_seq = self._db_authors_seq
 
         def work():
             from toolbox import increment_db
             return increment_db.list_authors(plat)
 
         def done(authors, err):
-            if err or plat != self._db_platform():
+            if (err or authors_seq != self._db_authors_seq
+                    or plat != self._db_platform()):
                 return
             prev = self.db_author_sel.currentText()
             prev_author = "" if prev.startswith("全部") else prev.split("（")[0].strip()

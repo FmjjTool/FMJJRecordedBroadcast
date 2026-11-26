@@ -170,10 +170,13 @@ class ImageCapture:
         self._page = page
         self._pending = OrderedDict()
         self._bodies = OrderedDict()
+        self._ready = set()
         self._bytes = 0
         self._closed = False
         self._handler = self._on_response
+        self._finished_handler = self._on_finished
         page.on("response", self._handler)
+        page.on("requestfinished", self._finished_handler)
 
     def _on_response(self, response) -> None:
         if self._closed:
@@ -193,8 +196,19 @@ class ImageCapture:
             self._pending[key] = response
             self._pending.move_to_end(key)
             while len(self._pending) > MAX_CAPTURE_IMAGES:
-                self._pending.popitem(last=False)
+                old_key, _old_response = self._pending.popitem(last=False)
+                self._ready.discard(old_key)
         except Exception:  # noqa: BLE001 - 不打印响应/地址/请求头
+            return
+
+    def _on_finished(self, request) -> None:
+        if self._closed:
+            return
+        try:
+            key = _sha(str(request.url))
+            if key in self._pending:
+                self._ready.add(key)
+        except Exception:  # noqa: BLE001 - 请求已销毁时不影响采集
             return
 
     def get(self, url: str, is_cancelled=None) -> bytes | None:
@@ -207,7 +221,20 @@ class ImageCapture:
         if cached is not None:
             self._bodies.move_to_end(key)
             return cached
+        if key in self._pending and key not in self._ready:
+            # response 事件发生在响应头到达时。仅在请求确已结束后读 body，
+            # 避免未完成的长响应阻塞取消；短暂等待让浏览器处理在途的原图。
+            deadline = time.monotonic() + 1.5
+            while key not in self._ready and time.monotonic() < deadline:
+                _check_cancelled(is_cancelled)
+                try:
+                    self._page.wait_for_timeout(100)
+                except Exception:
+                    return None
+            if key not in self._ready:
+                return None
         response = self._pending.pop(key, None)
+        self._ready.discard(key)
         if response is None:
             return None
         try:
@@ -237,10 +264,12 @@ class ImageCapture:
         self._closed = True
         try:
             self._page.remove_listener("response", self._handler)
+            self._page.remove_listener("requestfinished", self._finished_handler)
         except Exception:  # noqa: BLE001 - 页面已关闭时仍清空内存
             pass
         self._pending.clear()
         self._bodies.clear()
+        self._ready.clear()
         self._bytes = 0
         self._page = None
 
@@ -361,7 +390,7 @@ def _embedded_image(page, url: str, is_cancelled=None) -> bytes:
         raise ValueError("页面内图片数据无效") from exc
 
 
-_SOURCES_JS = """({selectors, max, position}) => {
+_SOURCES_JS = r"""({selectors, max, position}) => {
     const root = selectors.map(s => document.querySelector(s)).find(Boolean);
     if (!root) return {items: [], missing: true};
     let scroller = root;
@@ -373,21 +402,63 @@ _SOURCES_JS = """({selectors, max, position}) => {
     scroller = scroller || document.scrollingElement || document.documentElement;
     if (position !== null) scroller.scrollTop = position;
     const items = [];
-    const elements = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 12000)];
+    const metadata = element => ['class', 'data-type', 'data-block-type', 'data-node-type',
+        'data-tid', 'data-testid', 'role'].map(key => element.getAttribute(key) || '').join(' ');
+    const imageBlock = element => /(?:^|[\s_-])(?:image|img|picture|photo)(?:[\s_-]|$)|image(?:block|container|wrapper|content)/i.test(metadata(element));
+    const excluded = element => {
+        for (let parent = element, depth = 0; parent && depth < 14; parent = parent.parentElement, depth++) {
+            if (parent !== root && /^(BUTTON|NAV|ASIDE)$/.test(parent.tagName || '')) return true;
+            const value = metadata(parent);
+            if (/(?:^|[\s_-])(?:attachment|attach|file|icon|avatar|toolbar|sidebar|menu|tooltip|popover|placeholder|loading|spinner|skeleton|emoji|resize|handle|comment)(?:[\s_-]|$)|(?:file|attachment)(?:card|preview|icon|wrapper|block)|(?:toolbar|avatar|placeholder|skeleton)/i.test(value)) return true;
+            if (parent.matches('a[download],[role="toolbar"],[role="menu"],[role="tooltip"]')) return true;
+            if (parent === root) break;
+        }
+        return false;
+    };
+    const decorativeUrl = src => {
+        if (/^data:image\/(?:svg|x-icon)/i.test(src)) return true;
+        try {
+            const path = new URL(src, location.href).pathname;
+            return /(?:^|\/)(?:icons?|file[-_]?icons?|filetypes?|attachment[-_]?icons?|placeholders?|loading|spinner|emoji)(?:\/|[_.-])|\.(?:svg|ico)$/i.test(path)
+                || /(?:^|[/_.-])(?:file[-_]?type|attach[-_]?file|default[-_]?file)(?:[/_.-]|$)/i.test(path);
+        } catch (_) { return true; }
+    };
+    // 背景图只检查显式图像节点，不再扫描正文内所有元素的背景样式。
+    const candidates = 'img,[data-block-type],[data-node-type],[data-type],[data-tid],[class*="image"],[class*="Image"],[class*="picture"],[class*="photo"]';
+    const elements = Array.from(root.querySelectorAll(candidates)).slice(0, 12000);
     for (let index = 0; index < elements.length && items.length < max; index++) {
         const element = elements[index];
-        if (element.closest('button,[role=button],[class*=toolbar],[class*=avatar]')) continue;
+        if (excluded(element)) continue;
+        const style = getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
         const block = element.closest('[data-block-id]');
         const node = (block ? block.getAttribute('data-block-id') : '') + ':' + index;
+        let explicit = imageBlock(element);
+        for (let parent = element.parentElement, depth = 0; !explicit && parent && parent !== root && depth < 6;
+             parent = parent.parentElement, depth++) explicit = imageBlock(parent);
         if (element.tagName === 'IMG') {
-            const src = element.currentSrc || element.getAttribute('data-src') || element.src || '';
-            if (src) items.push({src: src.length <= 28000000 ? src : 'unsupported:large', node});
+            const lazy = element.getAttribute('data-src') || element.getAttribute('data-original') || element.getAttribute('data-lazy-src') || '';
+            let src = element.currentSrc || element.src || lazy;
+            if (lazy && (!src || decorativeUrl(src) || (element.naturalWidth <= 2 && element.naturalHeight <= 2))) src = lazy;
+            if (!src || decorativeUrl(src)) continue;
+            const width = element.naturalWidth || rect.width, height = element.naturalHeight || rect.height;
+            if (!lazy && width <= 2 && height <= 2) continue;
+            if (!explicit && ((width <= 64 && height <= 64) || (rect.width <= 64 && rect.height <= 64))) continue;
+            if (/\.(?:docx?|xlsx?|pptx?|pdf|zip|rar|7z)(?:\s|$)/i.test(element.alt || '')) continue;
+            items.push({src: src.length <= 28000000 ? src : 'unsupported:large', node, classification: 'body-image-v2'});
+            continue;
         }
-        const background = getComputedStyle(element).backgroundImage || '';
-        const matcher = /url\\(["']?([^"')]+)["']?\\)/g;
+        if (!imageBlock(element)) continue;
+        const background = style.backgroundImage || '';
+        const matcher = /url\(["']?([^"')]+)["']?\)/g;
         let match;
         while ((match = matcher.exec(background)) && items.length < max) {
-            try { items.push({src: new URL(match[1], location.href).href, node: node + ':bg'}); } catch (_) {}
+            try {
+                const src = new URL(match[1], location.href).href;
+                if (!decorativeUrl(src)) items.push({src, node: node + ':bg', classification: 'body-image-v2'});
+            } catch (_) {}
         }
     }
     return {items, top: scroller.scrollTop, height: scroller.clientHeight,
@@ -468,7 +539,8 @@ def _atomic_write(target: Path, content: bytes) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
-def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=None) -> list[dict]:
+def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=None,
+                        capture=None) -> list[dict]:
     """抓取一页正文图片；单图失败返回占位，取消直接传播，文字不被替换。"""
     _check_cancelled(is_cancelled)
     sources = _page_sources(page, doc, is_cancelled)
@@ -479,7 +551,7 @@ def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=N
     if index_path.is_file() and index_path.stat().st_size <= 512 * 1024:
         try:
             saved = json.loads(index_path.read_text(encoding="utf-8"))
-            cache = saved.get("images", {}) if saved.get("schema") == 1 else {}
+            cache = saved.get("images", {}) if saved.get("schema") == _SELECTION_VERSION else {}
             if not isinstance(cache, dict):
                 cache = {}
         except (OSError, ValueError, AttributeError):
@@ -490,12 +562,13 @@ def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=N
         _check_cancelled(is_cancelled)
         key = _identity(source)
         item = {"key": key, "name": f"图片_{number:03d}", "path": "", "status": "failed",
-                "error": "", "width": 0, "height": 0}
+                "error": "", "width": 0, "height": 0, "classification": "body-image-v2"}
         _emit(on_status, f"正在保存正文图片 {number}/{len(sources)}")
         try:
             previous = cache.get(key)
-            if isinstance(previous, dict) and str(previous.get("path") or "").startswith(
-                    folder.relative_to(root).as_posix() + "/"):
+            if (isinstance(previous, dict) and previous.get("classification") == "body-image-v2"
+                    and str(previous.get("path") or "").startswith(
+                    folder.relative_to(root).as_posix() + "/")):
                 try:
                     cached = safe_image_path(previous.get("path"), root)
                     content = cached.read_bytes()
@@ -511,8 +584,10 @@ def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=N
             if time.monotonic() > deadline or total_bytes >= MAX_PAGE_BYTES:
                 raise ValueError("已达到单页图片采集限额")
             url = str(source.get("src") or "")
-            content = (_embedded_image(page, url, is_cancelled) if url.startswith(("blob:", "data:"))
-                       else _http_image(url, is_cancelled))
+            content = capture.get(url, is_cancelled) if capture is not None else None
+            if content is None:
+                content = (_embedded_image(page, url, is_cancelled) if url.startswith(("blob:", "data:"))
+                           else _http_image(url, is_cancelled))
             _check_cancelled(is_cancelled)
             total_bytes += len(content)
             if total_bytes > MAX_PAGE_BYTES:
@@ -545,7 +620,7 @@ def collect_page_images(page, doc: dict, page_id, on_status=None, is_cancelled=N
     _check_cancelled(is_cancelled)
     if sources:
         try:
-            _atomic_write(index_path, json.dumps({"schema": 1, "images": cache}, ensure_ascii=False).encode("utf-8"))
+            _atomic_write(index_path, json.dumps({"schema": _SELECTION_VERSION, "images": cache}, ensure_ascii=False).encode("utf-8"))
         except OSError:
             _emit(on_status, "正文图片已保存，缓存索引未能更新")
     return results

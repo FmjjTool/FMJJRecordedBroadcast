@@ -36,7 +36,6 @@ from gui_qt.common import FlowLayout, post_to_main, run_bg
 from gui_qt.local_llm_panel import LocalLlmComponentsPanel
 from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
-from gui_qt.pages.quark_backup import QuarkBackupPage
 from gui_qt.toolbox_common import ToolSectionCard
 
 
@@ -421,18 +420,13 @@ class GlobalSettingsPage(BasePage):
         # ---- 备份与恢复 ----
         card = self._section_card("备份与恢复", "package")
         backup_note = QLabel(
-            "配置、资产与网盘备份统一在本卡片管理；网盘文件下载在「网络库」页，"
+            "配置与资产备份都在本卡片完成；备份到网盘与网盘文件下载在「网络库」页，"
             "计划任务仍在「任务」页管理。")
         backup_note.setProperty("role", "caption")
         backup_note.setWordWrap(True)
         card.content_layout.addWidget(backup_note)
         self.backup_panel = BackupPanel(app, self)
         card.content_layout.addWidget(self.backup_panel)
-        cloud_title = QLabel("备份到网盘")
-        cloud_title.setProperty("role", "sectionTitle")
-        card.content_layout.addWidget(cloud_title)
-        self.cloud_backup_page = QuarkBackupPage(app)
-        card.content_layout.addWidget(self.cloud_backup_page)
         v.addWidget(card)
 
         # ---- 关于 ----
@@ -531,7 +525,6 @@ class GlobalSettingsPage(BasePage):
     def on_theme_changed(self):
         for card, icon in self._section_cards:
             card.set_icon(icon)
-        self.cloud_backup_page.on_theme_changed()
         self.local_llm_panel.on_theme_changed()
         self.scroll.sync_content()
 
@@ -550,7 +543,6 @@ class GlobalSettingsPage(BasePage):
 
     # ---- 逻辑 ----
     def on_show(self):
-        self.cloud_backup_page.reload()
         cfg = load_convert_config()
         # 工作目录
         self.workdir_entry.setText(cfg.get("work_dir", ""))
@@ -590,12 +582,10 @@ class GlobalSettingsPage(BasePage):
 
     def on_hide(self):
         self._skel_timer.stop()
-        self.cloud_backup_page.on_hide()
 
     def shutdown(self):
         self.on_hide()
         self.local_llm_panel.cancel()
-        self.cloud_backup_page.shutdown()
 
     def has_active_tasks(self):
         return self._dep_downloading or self.local_llm_panel.is_busy()

@@ -447,84 +447,233 @@ def _clean_preview_text(text: str) -> str:
 
 AIO_SIDEBAR = "#sc-sidebar-section"
 AIO_TREE_NODE = f"{AIO_SIDEBAR} .sc-tree-node"
-_AIO_EXPANDED_CLASS = "css-xxkc6x"  # 展开态箭头（哈希类名，改版时靠点击前后节点数兜底判断）
+_AIO_TOGGLE = (':scope > div > [data-tid="sc-button"], '
+               '[data-tid="sc-tree-expand"], [aria-expanded], '
+               '.sc-tree-switcher')
+_AIO_TREE_JS = """() => {
+    const root = document.querySelector('#sc-sidebar-section');
+    if (!root) return [];
+    const rows = Array.from(root.querySelectorAll('.sc-tree-node, [role="treeitem"]'));
+    const seen = new Set();
+    return rows.map(e => {
+        const wrap = e.closest('[data-block-id]') || e;
+        const id = wrap.getAttribute('data-block-id') || e.getAttribute('data-page-id') || '';
+        if (!id || seen.has(id)) return null;
+        seen.add(id);
+        const title = e.querySelector('.sc-page-item-rich-title, .sc-page-title');
+        const arrow = e.querySelector(':scope > div > [data-tid="sc-button"], '
+            + '[data-tid="sc-tree-expand"], [aria-expanded], .sc-tree-switcher');
+        let expanded = null;
+        for (const candidate of [e, wrap, arrow]) {
+            if (!candidate) continue;
+            for (const name of ['aria-expanded', 'data-expanded', 'data-state']) {
+                const value = String(candidate.getAttribute(name) || '').toLowerCase();
+                if (['true', 'open', 'expanded'].includes(value)) expanded = true;
+                if (['false', 'closed', 'collapsed'].includes(value)) expanded = false;
+            }
+            const label = (candidate.getAttribute('aria-label') || '') + ' '
+                + (candidate.getAttribute('title') || '');
+            if (/收起|collapse/i.test(label)) expanded = true;
+            else if (/展开|expand/i.test(label)) expanded = false;
+        }
+        const ariaLevel = parseInt(e.getAttribute('aria-level') || wrap.getAttribute('aria-level'));
+        const pad = parseInt(getComputedStyle(e).paddingLeft) || 8;
+        return {id, title: (title ? title.innerText : e.innerText || '').trim(),
+            level: Number.isFinite(ariaLevel) ? Math.max(0, ariaLevel - 1)
+                : Math.max(0, Math.round((pad - 8) / 12)),
+            expanded, toggle: !!arrow};
+    }).filter(Boolean);
+}"""
+_AIO_SCROLL_JS = """(position) => {
+    const root = document.querySelector('#sc-sidebar-section');
+    if (!root) return {top: 0, max: 0, height: 0};
+    let box = null;
+    const candidates = [root, ...root.querySelectorAll('*')];
+    for (let p = root.parentElement, n = 0; p && n < 5; p = p.parentElement, n++) {
+        if (p === document.body || p === document.documentElement) break;
+        candidates.push(p);
+    }
+    for (const e of candidates) {
+        if (e.clientHeight > 0 && e.scrollHeight > e.clientHeight + 2
+                && /auto|scroll/.test(getComputedStyle(e).overflowY)) {
+            if (!box || e.clientHeight > box.clientHeight) box = e;
+        }
+    }
+    box = box || root;
+    if (position !== null) box.scrollTop = position;
+    return {top: box.scrollTop, max: Math.max(0, box.scrollHeight - box.clientHeight),
+        height: box.clientHeight};
+}"""
+_AIO_FIND_NODE_JS = """(id) => {
+    const root = document.querySelector('#sc-sidebar-section');
+    if (!root) return null;
+    return Array.from(root.querySelectorAll('.sc-tree-node, [role="treeitem"]')).find(e => {
+        const wrap = e.closest('[data-block-id]') || e;
+        return (wrap.getAttribute('data-block-id') || e.getAttribute('data-page-id')) === id;
+    }) || null;
+}"""
+
+
+def _aio_tree_items(page) -> list[dict]:
+    return page.evaluate(_AIO_TREE_JS) or []
+
+
+def _aio_scroll(page, position=None) -> dict:
+    return page.evaluate(_AIO_SCROLL_JS, position) or {"top": 0, "max": 0, "height": 0}
+
+
+def _aio_node(page, page_id: str):
+    # 参数传递而不是把外部页面 ID 拼进 CSS，避免引号或相似 ID 定位到其它页。
+    handle = page.evaluate_handle(_AIO_FIND_NODE_JS, str(page_id))
+    return handle.as_element()
 
 
 def _aio_pages(page) -> list[dict]:
-    """侧栏页面树 → [{id,title,level}]（调用前需先展开全部节点）。"""
+    """当前 DOM 窗口中的页面；不能据此判定整个目录完整。"""
     try:
-        return page.evaluate("""() => Array.from(
-            document.querySelectorAll('#sc-sidebar-section .sc-tree-node')
-        ).map(e => {
-            const wrap = e.closest('[data-block-id]');
-            const title = e.querySelector('.sc-page-item-rich-title');
-            const pad = parseInt(getComputedStyle(e).paddingLeft) || 8;
-            return {
-                id: wrap ? wrap.getAttribute('data-block-id') : '',
-                title: title ? (title.innerText || '').trim() : '',
-                level: Math.max(0, Math.round((pad - 8) / 12)),
-            };
-        }).filter(x => x.id)""")
+        return [{key: item[key] for key in ("id", "title", "level")}
+                for item in _aio_tree_items(page)]
     except Exception:  # noqa: BLE001
         return []
 
 
-def _expand_aio_tree(page, is_cancelled=None) -> tuple[int, bool]:
-    """展开左侧页面树（含多级子页面），返回 (页面节点数, 是否完整展开)。"""
-    done: set[str] = set()
-    complete = True
-    for _ in range(300):
-        body_images._check_cancelled(is_cancelled)
-        nodes = page.query_selector_all(AIO_TREE_NODE)
-        target = None
-        for index, node in enumerate(nodes):
-            arrow = node.query_selector(':scope > div > [data-tid="sc-button"]')
+def _merge_aio_items(collected: list[dict], visible: list[dict]) -> None:
+    """按重叠窗口中的邻居合并，保留虚拟树与展开后插入的目录顺序。"""
+    by_id = {item["id"]: item for item in collected}
+    for index, item in enumerate(visible):
+        page_id = item["id"]
+        value = {key: item[key] for key in ("id", "title", "level")}
+        if page_id in by_id:
+            by_id[page_id].update(value)
+            continue
+        previous = next((visible[i]["id"] for i in range(index - 1, -1, -1)
+                         if visible[i]["id"] in by_id), None)
+        following = next((row["id"] for row in visible[index + 1:]
+                          if row["id"] in by_id), None)
+        if previous is not None:
+            insertion = next(i for i, row in enumerate(collected)
+                             if row["id"] == previous) + 1
+        elif following is not None:
+            insertion = next(i for i, row in enumerate(collected)
+                             if row["id"] == following)
+        else:
+            insertion = len(collected)
+        collected.insert(insertion, value)
+        by_id[page_id] = value
+
+
+def _aio_expand_visible(page, visible: list[dict], attempted: set[str],
+                        eligible: set[str] | None = None) -> bool:
+    """优先读语义展开态；未知态只作一次有界探测，不依赖哈希类名。"""
+    for index, item in enumerate(visible):
+        page_id = item["id"]
+        if (not item.get("toggle") or page_id in attempted
+                or (eligible is not None and page_id not in eligible)):
+            continue
+        expanded = item.get("expanded")
+        # 后面已有更深一层的行，是展开态的行为证据。
+        if expanded is True or (index + 1 < len(visible)
+                                and visible[index + 1]["level"] > item["level"]):
+            continue
+        attempted.add(page_id)
+        try:
+            node = _aio_node(page, page_id)
+            arrow = node.query_selector(_AIO_TOGGLE) if node is not None else None
             if arrow is None:
                 continue
-            pid = node.evaluate(
-                "e => { const w = e.closest('[data-block-id]');"
-                " return w ? w.getAttribute('data-block-id') : ''; }")
-            key = pid or f"__anon_{index}"
-            if key in done:
-                continue
-            target = (arrow, key)
-            break
-        if target is None:
-            break
-        arrow, key = target
-        try:
-            if _AIO_EXPANDED_CLASS in (arrow.get_attribute("class") or ""):
-                done.add(key)
-                continue
-            before = len(nodes)
-            arrow.click()
-            after = before
-            deadline = time.time() + 2
-            while time.time() < deadline:
-                page.wait_for_timeout(150)
-                after = len(page.query_selector_all(AIO_TREE_NODE))
-                if after != before:
+            before_ids = {row["id"] for row in visible}
+            arrow.click(timeout=2000)
+            for _ in range(5):
+                page.wait_for_timeout(100)
+                after = _aio_tree_items(page)
+                current = next((row for row in after if row["id"] == page_id), {})
+                if current.get("expanded") is True or {row["id"] for row in after} != before_ids:
                     break
-            if after < before:
-                # 误点了展开态：再点一次恢复，避免把已显示的子页面收起来
-                arrow.click()
-                page.wait_for_timeout(450)
-        except Exception:  # noqa: BLE001 - 单个节点异常不影响整体展开
-            complete = False
-        done.add(key)
-    else:
-        complete = False  # 节点太多没展开完：本次不做删除判定
+            if expanded is None and len(after) < len(visible):
+                # 无语义状态且探测实际收起了目录，恢复后不再猜测。
+                node = _aio_node(page, page_id)
+                arrow = node.query_selector(_AIO_TOGGLE) if node is not None else None
+                if arrow is not None:
+                    arrow.click(timeout=2000)
+                    page.wait_for_timeout(150)
+            return True
+        except Exception:  # noqa: BLE001 - 保留已经收集到的目录，不把失败当完整
+            continue
+    return False
 
+
+def _expand_aio_tree(page, is_cancelled=None,
+                     collected: list[dict] | None = None) -> tuple[int, bool]:
+    """展开并跨滚动窗口收集目录；DOM 没有全量凭据，永不据此删除历史页。
+
+    找不到箭头、到达滚动底部或节点数稳定都只能证明当前渲染窗口稳定，
+    不能证明云端页面树完整。返回的 complete 固定 False，直至有权威全量目录接口。
+    """
+    found = collected if collected is not None else []
+    attempted: set[str] = set()
+    deadline = time.monotonic() + 45
     try:
-        fully_expanded = page.evaluate("""() => Array.from(
-            document.querySelectorAll('#sc-sidebar-section .sc-tree-node')
-        ).every(e => {
-            const arrow = e.querySelector(':scope > div > [data-tid="sc-button"]');
-            return !arrow || arrow.className.includes('css-xxkc6x');
-        })""")
-    except Exception:  # noqa: BLE001 - 类名改版时按不完整处理（宁可不删）
-        fully_expanded = False
-    return len(page.query_selector_all(AIO_TREE_NODE)), bool(complete and fully_expanded)
+        previous_count = -1
+        for _sweep in range(3):
+            _aio_scroll(page, 0)
+            page.wait_for_timeout(100)
+            for _step in range(400):
+                body_images._check_cancelled(is_cancelled)
+                if time.monotonic() >= deadline or len(found) >= 2000:
+                    return len(found), False
+                visible = _aio_tree_items(page)
+                _merge_aio_items(found, visible)
+                if _aio_expand_visible(page, visible, attempted):
+                    continue
+                scroll = _aio_scroll(page)
+                if scroll["top"] >= scroll["max"] - 1:
+                    break
+                _aio_scroll(page, min(scroll["max"], scroll["top"]
+                                     + max(40, scroll["height"] * 0.75)))
+                page.wait_for_timeout(100)
+            if len(found) == previous_count:
+                break
+            previous_count = len(found)
+        # 把祖先 ID 固定在本次目录记录上，后续切页/图片滚动不依赖旧DOM句柄。
+        ancestors: list[dict] = []
+        for item in found:
+            while ancestors and ancestors[-1]["level"] >= item["level"]:
+                ancestors.pop()
+            item["ancestors"] = [parent["id"] for parent in ancestors]
+            ancestors.append(item)
+    except body_images.BodyImagesCancelled:
+        raise
+    except Exception:  # noqa: BLE001 - 页面树改版或中途卸载：保留部分目录，绝不推断删除
+        pass
+    return len(found), False
+
+
+def _locate_aio_node(page, item: dict, is_cancelled=None):
+    """图片加载与切页可能重绘虚拟树；每次按稳定 ID 从目录中重新定位。"""
+    target = str(item["id"])
+    deadline = time.monotonic() + 15
+    attempted: set[str] = set()
+    for _sweep in range(2):
+        _aio_scroll(page, 0)
+        page.wait_for_timeout(80)
+        for _step in range(300):
+            body_images._check_cancelled(is_cancelled)
+            if time.monotonic() >= deadline:
+                return None
+            node = _aio_node(page, target)
+            if node is not None:
+                return node
+            visible = _aio_tree_items(page)
+            if _aio_expand_visible(page, visible, attempted,
+                                   set(item.get("ancestors", []))):
+                continue
+            scroll = _aio_scroll(page)
+            if scroll["top"] >= scroll["max"] - 1:
+                break
+            _aio_scroll(page, min(scroll["max"], scroll["top"]
+                                 + max(40, scroll["height"] * 0.75)))
+            page.wait_for_timeout(80)
+    return None
 
 
 def _aio_page_text(page, selectors, prev_text: str, is_cancelled=None) -> str:
@@ -560,7 +709,7 @@ def _aio_page_text(page, selectors, prev_text: str, is_cancelled=None) -> str:
 
 
 def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
-                    is_cancelled=None) -> list[dict]:
+                    is_cancelled=None, capture=None) -> list[dict]:
     """逐页点击侧栏切换，抓取每篇正文（进度通过 on_status 汇报）。"""
     selectors = PREVIEW_SELECTORS["aio"] + ("#workbench-content-container",)
     results: list[dict] = []
@@ -572,24 +721,25 @@ def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
         text, error, images = "", "", []
         try:
             body_images._check_cancelled(is_cancelled)
-            entry = page.query_selector(
-                f'#sc-sidebar-section [data-block-id="{item["id"]}"] .sc-page-item-rich-title')
-            if entry is None:
+            node = _locate_aio_node(page, item, is_cancelled)
+            if node is None:
                 raise RuntimeError("侧栏中找不到该页面")
-            entry.click()
+            entry = node.query_selector(".sc-page-item-rich-title, .sc-page-title") or node
+            entry.click(timeout=4000)
             page.wait_for_function(
-                "pid => location.search.includes('p=' + pid)",
-                arg=item["id"], timeout=8000)
+                "pid => new URLSearchParams(location.search).get('p') === pid",
+                arg=str(item["id"]), timeout=8000)
             text = _aio_page_text(page, selectors, prev, is_cancelled)
             prev = text or prev
             images = body_images.collect_page_images(
-                page, doc or {}, item["id"], on_status, is_cancelled)
+                page, doc or {}, item["id"], on_status, is_cancelled,
+                capture=capture)
         except body_images.BodyImagesCancelled as exc:
             # 本页尚未完成时不交给存档；携带此前已经读完的页面供外层保留。
             exc.completed_pages = list(results)
             raise
-        except Exception as exc:  # noqa: BLE001 - 单页失败继续抓其余页面
-            error = str(exc)[:120]
+        except Exception:  # noqa: BLE001 - 单页失败继续抓其余页面，不输出URL或本地路径
+            error = "页面未能完成读取，已保留旧存档，可重新抓取"
         results.append({**item, "order": i, "text": _clean_preview_text(text), "error": error,
                         "images": images})
     return results
@@ -653,8 +803,11 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
     with sync_playwright() as p:
         browser = pw_launch(p, headless=True, args=_LAUNCH_ARGS)
         context = _new_context(browser, state if state.exists() else None)
+        capture = None
         try:
             page = context.new_page()
+            # 必须早于 goto：正文图片的首批响应可能在正文选择器出现之前完成。
+            capture = body_images.capture_page_responses(page)
             page.set_default_timeout(20_000)
             page.goto(doc["url"], wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
             body_images._check_cancelled(is_cancelled)
@@ -677,11 +830,15 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
                 completed_pages = []
                 try:
                     _emit(on_status, "正在展开文档页面列表……")
-                    _, tree_complete = _expand_aio_tree(page, is_cancelled)
-                    pages = _aio_pages(page)
-                    if len(pages) > 1:
+                    pages = []
+                    _, tree_complete = _expand_aio_tree(page, is_cancelled, pages)
+                    if not pages:
+                        pages = _aio_pages(page)
+                    if pages:
                         _emit(on_status, f"发现 {len(pages)} 篇页面，正在逐篇读取……")
-                        results = _read_aio_pages(page, pages, on_status, doc, is_cancelled)
+                        _emit(on_status, "目录完整性尚未确认，本次只更新已读取页面并保留其余历史页")
+                        results = _read_aio_pages(page, pages, on_status, doc,
+                                                  is_cancelled, capture=capture)
                         completed_pages = results
                         body_images._check_cancelled(is_cancelled)
                         return _finish_preview(doc, page, join_pages(results),
@@ -713,7 +870,7 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
                 except Exception:  # noqa: BLE001
                     page_id = "main"
             images = body_images.collect_page_images(
-                page, doc, page_id, on_status, is_cancelled)
+                page, doc, page_id, on_status, is_cancelled, capture=capture)
             body_images._check_cancelled(is_cancelled)
             if not text and not images:
                 raise RuntimeError("没有读取到文档正文，页面可能尚未加载完成或结构已改版")
@@ -723,9 +880,13 @@ def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
                                    complete=(kind != "aio"))
         finally:
             try:
-                context.close()
+                if capture is not None:
+                    capture.close()
             finally:
-                browser.close()
+                try:
+                    context.close()
+                finally:
+                    browser.close()
 
 
 # ==================== 对外接口 ====================

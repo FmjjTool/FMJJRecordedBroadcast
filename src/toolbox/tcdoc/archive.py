@@ -156,6 +156,9 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
     doc_key = str(doc.get("key") or "")
     if not doc_key:
         raise ValueError("文档缺少 key，无法存档")
+    # AIO 页面树可折叠、可虚拟化；DOM 中未返回的页不能据此判定云端已删除。
+    # 在存储边界再次保护，避免旧采集器误报 complete=True 导致批量丢页。
+    complete = bool(complete and str(doc.get("kind") or "").lower() != "aio")
     path = init_db(path)
     now = now_str()
     stats = {"pages": len(pages), "chars": len(text or ""),
@@ -171,6 +174,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
                    "FROM pages WHERE doc_key=?", (doc_key,))}
         old_assets = {row[0]: row[1] for row in conn.execute(
             "SELECT page_id, images_json FROM page_assets WHERE doc_key=?", (doc_key,))}
+        next_order = max((int(item.get("order") or 0) for item in old.values()), default=0) + 1
         seen: set[str] = set()
         for index, item in enumerate(pages, 1):
             page_id = str(item.get("id") or f"p{index}")
@@ -182,8 +186,13 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
             content = str(item.get("text") or "")
             h = _hash(title, content)
             prev = old.get(page_id)
-            page_order = int(item.get("order") or (
-                prev.get("order") if prev and not complete else index))
+            if not complete:
+                # 部分目录的序号只是当前窗口内的位置，不能覆盖已存全局顺序。
+                page_order = int(prev.get("order") or index) if prev else next_order
+                if prev is None:
+                    next_order += 1
+            else:
+                page_order = int(item.get("order") or index)
             previous_images = old_assets.get(page_id)
             images_json = (_image_json(_keep_downloaded_images(
                                item.get("images") or [], previous_images))
@@ -231,6 +240,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
                     "ON CONFLICT(doc_key,page_id) DO UPDATE SET images_json=excluded.images_json",
                     (doc_key, page_id, images_json))
 
+        stats["retained"] = len(set(old) - seen) if not complete else 0
         if complete:
             for page_id, prev in old.items():
                 if page_id in seen:

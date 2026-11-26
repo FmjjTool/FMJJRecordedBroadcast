@@ -527,6 +527,20 @@ class LivestreamSummaryPage(BasePage):
 
     # ==================== 执行 ====================
 
+    def _model_settings_ready(self, settings) -> bool:
+        if settings.mode == "local":
+            if not settings.local["model"]:
+                self.app.toast("请选择已准备的本地模型", "warning")
+                return False
+        elif settings.mode == "ai":
+            if not settings.model:
+                self.app.toast("请填写模型名称后再继续", "warning")
+                return False
+            if not is_local_base_url(settings.base_url) and not ls_config.has_api_key():
+                self.app.toast("请先填写并保存模型接口的 API Key", "warning")
+                return False
+        return True
+
     def _start(self):
         if self._running:
             self.app.toast("总结正在进行中", "info")
@@ -537,8 +551,7 @@ class LivestreamSummaryPage(BasePage):
         if not self._save_settings(quiet=True):
             return
         settings = self._collect_settings()
-        if settings.mode == "local" and not settings.local["model"]:
-            self.app.toast("请选择已准备的本地模型", "warning")
+        if not self._model_settings_ready(settings):
             return
 
         self._running = True
@@ -644,8 +657,7 @@ class LivestreamSummaryPage(BasePage):
         settings = self._collect_settings()
         if settings.mode == "rule":
             return
-        if settings.mode == "local" and not settings.local["model"]:
-            self.app.toast("请选择已准备的本地模型", "warning")
+        if not self._model_settings_ready(settings):
             return
         self._running = True
         self._cancel = threading.Event()

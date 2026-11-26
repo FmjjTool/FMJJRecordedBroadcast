@@ -45,7 +45,7 @@ _CFG_KEYS = {
 # 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
 _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
-    "quark": "global_settings", "webwiki": "localwiki", "fangroups": "fan_groups",
+    "quark": "netdisk", "webwiki": "localwiki", "fangroups": "fan_groups",
     "info": "info_accounts",
     "chaohua": "weibo_chaohua", "douyin_index": "douyin_index",
 }
