@@ -387,8 +387,7 @@ class EditorPage(BasePage):
         preview_area.setMinimumHeight(260)
         self.video = QVideoWidget()
         self.video.setMinimumHeight(100)
-        self.video.setObjectName("editorVideo")
-        self.video.setStyleSheet("QVideoWidget#editorVideo { background: palette(base); }")
+        self.video.setStyleSheet("background: #000;")
         preview_layout.addWidget(self.video, 3)
 
         self.player = QMediaPlayer(self)

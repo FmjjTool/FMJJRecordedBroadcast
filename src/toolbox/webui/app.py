@@ -532,6 +532,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/music-tag/lyric/apply", start_tag_lyric_apply)
 
     server.get("/api/performance", lambda req: performance.overview())
+    server.post("/api/performance/settings",
+                lambda req: performance.save_settings(dict(req.json or {})))
 
     server.get("/api/tools/organize/overview",
                lambda req: tool_service.organize_overview())

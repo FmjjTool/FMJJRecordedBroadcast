@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
         self._tray_menu = None
         self._tray_hint_shown = False
         self.available_update = None   # 已发现但尚未安装的版本（供设置页展示）
-        self.performance_monitor = None  # 用户开启后才创建，服务归主程序持有。
+        self.performance_monitor = None  # 手动开启或按已保存选项启动，服务归主程序持有。
         self.lifecycle_policy = PagePolicy.CORE
         self.task_manager = common.TASKS
         self.page_lifecycle = PageLifecycleManager(self)
@@ -397,6 +397,12 @@ class MainWindow(QMainWindow):
         """事件循环就绪后的启动收尾：构造首个真实页面 + 重依赖初始化。"""
         if self._closed:
             return
+        # 在首个页面构造前恢复性能采样，无需先打开诊断页。
+        from gui_qt.performance_monitor import start_automatic_monitoring
+        try:
+            start_automatic_monitoring(self)
+        except Exception:
+            self.toast("自动开始性能检测失败，请在性能页重试", "error")
         if first_key in PAGE_CLASSES:
             self.show_page(first_key)
         # 骨架退场

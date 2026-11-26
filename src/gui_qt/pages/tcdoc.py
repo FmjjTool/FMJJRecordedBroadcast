@@ -25,13 +25,15 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from threading import Event
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QTextBrowser,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -42,6 +44,7 @@ from gui_qt.pages.tcdoc_bridge import TcDocBridgePanel
 from gui_qt.skeleton import LoadingSkeleton
 from toolbox import tcdoc as tc_engine
 from toolbox.tcdoc import config as tc_cfg, storage, tables
+from toolbox.tcdoc import preview_content
 
 DAILY_COLS = [("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
@@ -141,6 +144,7 @@ class _DocPreviewPanel(QWidget):
         self._pages: list[dict] = []
         self._full_text = ""
         self._summary = ""
+        self._cancel_fetch = Event()
 
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 8, 6, 6)
@@ -151,17 +155,21 @@ class _DocPreviewPanel(QWidget):
         bar.addWidget(QLabel("页面"))
         self.page_combo = QComboBox()
         self.page_combo.setMinimumWidth(220)
+        self.page_combo.setEditable(True)
+        self.page_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.page_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.page_combo.setMinimumContentsLength(8)
         self.page_combo.setToolTip("切换该 AI 文档里的子页面；默认「全部」合并显示")
         self.page_combo.currentIndexChanged.connect(self._on_page_changed)
         self.page_combo.hide()
         bar.addWidget(self.page_combo)
         self.kind_label = QLabel("")
-        self.kind_label.setStyleSheet("color: #888;")
+        self.kind_label.setProperty("role", "muted")
         bar.addWidget(self.kind_label)
         bar.addStretch(1)
         self.fetch_btn = QPushButton("抓取正文")
-        self.fetch_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.fetch_btn.setToolTip("从腾讯文档读取全部子页面并自动存档（AI 文档约需 1 分钟）")
+        self.fetch_btn.setProperty("variant", "primary")
+        self.fetch_btn.setToolTip("读取全部子页面并下载正文图片，保存后可离线预览")
         self.fetch_btn.clicked.connect(lambda *_: self.load())
         bar.addWidget(self.fetch_btn)
         self.export_btn = QPushButton("导出")
@@ -170,11 +178,31 @@ class _DocPreviewPanel(QWidget):
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._export)
         bar.addWidget(self.export_btn)
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setToolTip("取消本次正文与图片抓取，保留已有存档")
+        self.cancel_btn.clicked.connect(self._cancel_download)
+        self.cancel_btn.hide()
+        bar.addWidget(self.cancel_btn)
         v.addLayout(bar)
 
-        self.text_view = QPlainTextEdit()
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        v.addWidget(self.progress)
+
+        self.text_view = QTextBrowser()
         self.text_view.setReadOnly(True)
+        self.text_view.setOpenLinks(False)
+        self.text_view.setOpenExternalLinks(False)
+        self.text_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.text_view.anchorClicked.connect(self._open_body_image)
         self.text_view.setPlaceholderText("本地暂无正文存档，点「抓取正文」开始")
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(100)
+        self._resize_timer.timeout.connect(lambda: self._render_current(preserve_scroll=True))
+        self.text_view.viewport().installEventFilter(self)
         self._text_stack = QStackedWidget()
         self._text_stack.addWidget(self.text_view)
         self._skeleton = LoadingSkeleton(text="正在读取本地正文…")
@@ -182,7 +210,7 @@ class _DocPreviewPanel(QWidget):
         v.addWidget(self._text_stack, 1)
 
         self.status = QLabel("")
-        self.status.setStyleSheet("color: #888;")
+        self.status.setProperty("role", "muted")
         self.status.setTextFormat(Qt.PlainText)
         v.addWidget(self.status)
 
@@ -194,6 +222,9 @@ class _DocPreviewPanel(QWidget):
         if same and (self._pages or self._loading):
             self._doc = dict(doc)
             return
+        self._cancel_fetch.set()
+        self.cancel_btn.hide()
+        self.progress.hide()
         self._req += 1
         self._loading = False
         self._loading_key = ""
@@ -226,8 +257,7 @@ class _DocPreviewPanel(QWidget):
 
         def work():
             cached = tc_engine.archive.pages_of(doc["key"])
-            pages = [{"id": p["id"], "title": p["title"], "level": p["level"],
-                      "text": p["text"], "error": ""} for p in cached]
+            pages = [{**p, "error": ""} for p in cached]
             last = max((p.get("fetched_at") or "" for p in cached), default="")
             snap = tc_engine.archive.snapshot_path(doc)
             return pages, tc_engine.collector.join_pages(pages), last, str(snap) if snap.exists() else ""
@@ -259,9 +289,14 @@ class _DocPreviewPanel(QWidget):
         key = doc.get("key") or ""
         self._loading = True
         self._loading_key = key
+        self._cancel_fetch = Event()
+        cancel_fetch = self._cancel_fetch
         self.fetch_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
-        self.status.setText("正在打开文档并抓取正文……")
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.show()
+        self.progress.show()
+        self.status.setText("正在抓取正文与图片…")
         self.status.setToolTip("")
         self.text_view.setPlaceholderText("正在抓取正文……")
         self._skeleton.setText("正在抓取正文…")
@@ -269,20 +304,25 @@ class _DocPreviewPanel(QWidget):
 
         def work():
             return tc_engine.collector.preview(
-                doc, on_status=lambda s: post_to_main(self._on_status, s))
+                doc, on_status=lambda s: post_to_main(self._on_status, s, req),
+                is_cancelled=cancel_fetch.is_set)
 
         def done(result, err):
             if req != self._req or getattr(self._page_owner, "_closed", False):
                 return
             self._loading = False
             self._loading_key = ""
+            self.cancel_btn.hide()
+            self.progress.hide()
             if not self._doc or self._doc.get("key") != key:
                 return
             self.fetch_btn.setEnabled(True)
             self.fetch_btn.setText("重新抓取")
             self._text_stack.setCurrentWidget(self.text_view)
             if err:
-                self.status.setText(f"{err}"[:200])
+                from toolbox.tcdoc.body_images import BodyImagesCancelled
+                cancelled = cancel_fetch.is_set() or isinstance(err, BodyImagesCancelled)
+                self.status.setText("已取消，已有存档保留" if cancelled else f"抓取失败：{err}"[:200])
                 if not self._pages:
                     self.text_view.setPlaceholderText("抓取失败，可点「重新抓取」重试")
                 self.export_btn.setEnabled(bool(self._full_text.strip()))
@@ -313,7 +353,7 @@ class _DocPreviewPanel(QWidget):
     def _apply_pages(self, pages: list[dict], text: str, summary: str, tooltip: str = ""):
         self._pages = pages
         self._full_text = text
-        self._summary = summary
+        self._summary = summary + " · " + preview_content.image_summary(pages)
         if len(pages) > 1:
             self.page_combo.blockSignals(True)
             self.page_combo.clear()
@@ -330,9 +370,9 @@ class _DocPreviewPanel(QWidget):
             self.page_combo.clear()
             self.page_combo.blockSignals(False)
             self.page_combo.hide()
-        self.text_view.setPlainText(text)
+        self._render_current()
         self.text_view.verticalScrollBar().setValue(0)
-        self.status.setText(summary)
+        self.status.setText(self._summary)
         self.status.setToolTip(tooltip or "")
         self.export_btn.setEnabled(bool(text.strip()))
         self.fetch_btn.setText("重新抓取")
@@ -344,30 +384,67 @@ class _DocPreviewPanel(QWidget):
     def _on_page_changed(self, _index):
         idx = self.page_combo.currentData()
         if idx is None or idx < 0 or idx >= len(self._pages):
-            self.text_view.setPlainText(self._full_text)
             self.status.setText(self._summary)
         else:
             item = self._pages[idx]
             body = item.get("error") or item.get("text") or "（空白页）"
-            self.text_view.setPlainText(body)
             if item.get("error"):
                 note = "抓取失败"
-            elif not (item.get("text") or "").strip():
+            elif not (item.get("text") or "").strip() and not item.get("images"):
                 note = "空白页"
             else:
                 note = f"{len(body)} 字"
-            self.status.setText(f"第 {idx + 1}/{len(self._pages)} 篇 · {note}")
+            self.status.setText(f"第 {idx + 1}/{len(self._pages)} 篇 · {note} · "
+                                + preview_content.image_summary([item]))
+        self._render_current()
         self.text_view.verticalScrollBar().setValue(0)
 
-    def _on_status(self, text: str):
-        if self._loading and self._loading_key == (self._doc or {}).get("key", ""):
+    def _on_status(self, text: str, request: int | None = None):
+        if (self._loading and (request is None or request == self._req)
+                and self._loading_key == (self._doc or {}).get("key", "")):
             self.status.setText(f"{text}")
+
+    def _cancel_download(self):
+        self._cancel_fetch.set()
+        self.cancel_btn.setEnabled(False)
+        self.status.setText("正在取消…")
+
+    def _visible_pages(self):
+        index = self.page_combo.currentData()
+        return ([self._pages[index]] if index is not None and 0 <= index < len(self._pages)
+                else self._pages)
+
+    def _render_current(self, preserve_scroll=False):
+        if not self._pages:
+            return
+        scrollbar = self.text_view.verticalScrollBar()
+        fraction = scrollbar.value() / max(1, scrollbar.maximum())
+        self.text_view.setHtml(preview_content.html_for_pages(
+            self._visible_pages(), max_width=max(80, self.text_view.viewport().width() - 24)))
+        if preserve_scroll:
+            scrollbar.setValue(round(fraction * scrollbar.maximum()))
+
+    def _open_body_image(self, url):
+        for page in self._visible_pages():
+            for image in page.get("images") or []:
+                try:
+                    path = preview_content.local_image_path(image)
+                except (OSError, ValueError):
+                    continue
+                if url == QUrl.fromLocalFile(str(path)):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+                    return
+
+    def eventFilter(self, obj, event):
+        if obj is self.text_view.viewport() and event.type() == QEvent.Resize:
+            self._resize_timer.start()
+        return super().eventFilter(obj, event)
 
     # ==================== 导出 ====================
 
     def _export(self):
         """导出当前预览；多篇 AI 文档提供「合并 / 每篇一个文件」两种方式。"""
-        if not (self._full_text or "").strip() or not self._doc:
+        if not self._pages or not self._doc:
             return
         idx = self.page_combo.currentData()
         if len(self._pages) > 1:

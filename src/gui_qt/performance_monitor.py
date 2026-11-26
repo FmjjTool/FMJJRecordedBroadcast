@@ -6,7 +6,22 @@ from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QWidget, QTableView
 
 from gui_qt import common
-from toolbox.performance import PerformanceRecorder, child_process_memory, process_memory
+from toolbox.performance import (
+    PerformanceRecorder, auto_start_enabled, child_process_memory, process_memory,
+)
+
+
+def get_performance_monitor(app):
+    """主程序和诊断页复用同一采样服务，不依赖页面是否已经构造。"""
+    if app.performance_monitor is None:
+        app.performance_monitor = PerformanceMonitor(app)
+    return app.performance_monitor
+
+
+def start_automatic_monitoring(app):
+    """只在软件启动收尾时恢复普通采样，始终不自动启用分配追踪。"""
+    if auto_start_enabled():
+        get_performance_monitor(app).start(trace=False)
 
 
 class PerformanceMonitor(QObject):

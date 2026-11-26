@@ -1,4 +1,4 @@
-"""性能诊断入口：用户手动开启，切走后由主程序继续采样。"""
+"""性能诊断入口：支持可选的启动自动监控，切走后由主程序继续采样。"""
 
 import json
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
 from gui_qt import table_sort
 from gui_qt.common import run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.performance_monitor import PerformanceMonitor
+from gui_qt.performance_monitor import get_performance_monitor
+from toolbox.performance import auto_start_enabled, save_auto_start
 
 
 def _mb(value):
@@ -65,18 +66,28 @@ class _MemoryChart(QWidget):
 class PerformancePage(BasePage):
     def __init__(self, app):
         super().__init__(app)
-        if app.performance_monitor is None:
-            app.performance_monitor = PerformanceMonitor(app)
-        self.monitor = app.performance_monitor
+        self.monitor = get_performance_monitor(app)
         self._visible = False
         self._snapshot_busy = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        bar = QHBoxLayout()
+        options = QHBoxLayout()
+        options.setSpacing(12)
+        self.auto_start_cb = QCheckBox("启动软件后自动监控")
+        self.auto_start_cb.setChecked(auto_start_enabled())
+        self.auto_start_cb.setToolTip(
+            "勾选后立即开始普通采样，并在以后启动软件时自动开始；仅软件运行期间生效。"
+            "取消勾选只关闭下次自动开启，当前采样请点停止检测；不自动追踪 Python 分配")
+        self.auto_start_cb._toast_bound = True  # 保存成功后反馈，失败时不显示通用成功提示。
+        self.auto_start_cb.clicked.connect(self._set_auto_start)
+        options.addWidget(self.auto_start_cb)
         self.trace_cb = QCheckBox("追踪 Python 分配（较慢）")
         self.trace_cb.setToolTip("仅追踪开启后的 Python 分配；Qt、解码图片及子进程内存不在其覆盖范围内")
-        bar.addWidget(self.trace_cb)
+        options.addWidget(self.trace_cb)
+        options.addStretch(1)
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
         self.start_btn = QPushButton("开始检测")
         self.start_btn.clicked.connect(self._start)
         bar.addWidget(self.start_btn)
@@ -100,6 +111,7 @@ class PerformancePage(BasePage):
         tv = QVBoxLayout(top)
         tv.setContentsMargins(12, 10, 12, 10)
         tv.setSpacing(6)
+        tv.addLayout(options)
         tv.addLayout(bar)
         tv.addWidget(self.status)
         layout.addWidget(top)
@@ -163,6 +175,7 @@ class PerformancePage(BasePage):
             sorter.reapply()
 
     def on_show(self):
+        self.auto_start_cb.setChecked(auto_start_enabled())
         self._visible = True
         self._timer.start()
         self._render()
@@ -177,6 +190,23 @@ class PerformancePage(BasePage):
         except Exception as exc:  # noqa: BLE001 - 诊断失败不影响功能页面
             self.app.toast(str(exc), "error")
             return
+        self._render()
+
+    def _set_auto_start(self, enabled):
+        try:
+            save_auto_start(enabled)
+        except Exception:
+            self.auto_start_cb.setChecked(not enabled)
+            self.app.toast("保存自动监控设置失败，请重试", "error")
+            return
+        if enabled:
+            try:
+                self.monitor.start(trace=False)
+            except Exception:
+                self.app.toast("已保存自动监控设置，本次开始检测失败，请重试", "error")
+                self._render()
+                return
+        self.app.toast("已开启启动自动监控" if enabled else "已关闭启动自动监控", "success" if enabled else "info")
         self._render()
 
     def _stop(self):
@@ -230,7 +260,7 @@ class PerformancePage(BasePage):
                                 f" · 私有提交 {_mb(latest.get('private'))} MB · 可切走继续检测")
         else:
             self.status.setText(f"已停止 · 保留 {len(samples)} 次采样，可导出；开始检测将建立新记录" if samples
-                                else "未开始；默认不运行采样或 Python 分配追踪")
+                                else "未开始；可手动开始或勾选自动监控，Python 分配追踪需单独开启")
         self.chart.samples = [sample for sample in samples if sample["seconds"] >= latest.get("seconds", 0) - 600]
         self.chart.update()
         current = self.tabs.currentWidget()

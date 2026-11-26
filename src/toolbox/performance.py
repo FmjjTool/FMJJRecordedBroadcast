@@ -13,6 +13,27 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def auto_start_enabled() -> bool:
+    """配置主数据由 config_manager 独占写入；旧配置缺省关闭，无需迁移。"""
+    from toolbox.config_manager import load_convert_config
+
+    return load_convert_config().get("performance_auto_start") is True
+
+
+def save_auto_start(enabled: bool) -> bool:
+    """桌面与 Web 共用同一开关，只通过配置 owner 保存并回读确认。"""
+    from toolbox.config_manager import load_convert_config, save_convert_config
+
+    if type(enabled) is not bool:
+        raise ValueError("自动监控选项必须为开启或关闭")
+    config = load_convert_config()
+    config["performance_auto_start"] = enabled
+    save_convert_config(config)
+    if auto_start_enabled() != enabled:
+        raise OSError("保存自动监控设置失败，请重试")
+    return enabled
+
+
 @lru_cache(maxsize=1)
 def _windows_api():
     import ctypes as c

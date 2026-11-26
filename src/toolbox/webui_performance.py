@@ -1,4 +1,4 @@
-"""WebUI 性能诊断（只读）：本机 CPU / 内存 / 磁盘 / 当前服务进程读数。
+"""WebUI 性能诊断：本机只读读数与桌面启动自动监控选项。
 
 桌面端「性能诊断」的采样、快照、导出与子进程明细仍只在桌面端。
 """
@@ -11,6 +11,19 @@ import shutil
 import sys
 import threading
 from pathlib import Path
+
+
+FIELDS = {
+    "auto_start": {"type": "bool", "label": "启动桌面软件后自动监控", "default": False},
+}
+
+
+def save_settings(payload: dict) -> dict:
+    from toolbox.performance import save_auto_start
+
+    if set(payload) != set(FIELDS):
+        raise ValueError("请提供自动监控选项")
+    return {"auto_start": save_auto_start(payload["auto_start"])}
 
 
 def _cpu_percent() -> float | None:
@@ -124,16 +137,18 @@ def _disks() -> list[dict]:
 
 
 def overview() -> dict:
-    from toolbox.performance import process_memory
+    from toolbox.performance import auto_start_enabled, process_memory
 
     memory = _memory()
     percent = None
     if memory:
         percent = memory.get("percent")
     process = process_memory()
-    note = ("只读本机读数：桌面端「性能诊断」的采样曲线、Python 分配快照、"
-            "页面耗时与导出报告仍在桌面端。")
+    note = ("本机读数只读；自动监控选项将在下次启动桌面软件时生效，不控制当前桌面进程。"
+            "桌面端采样曲线、Python 分配快照、页面耗时与导出报告仍在桌面端。")
     return {
+        "fields": FIELDS,
+        "settings": {"auto_start": auto_start_enabled()},
         "cpu": {"percent": _cpu_percent(), "cores": os.cpu_count()},
         "memory": memory,
         "disks": _disks(),

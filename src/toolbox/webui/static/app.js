@@ -7434,9 +7434,9 @@ function renderLivestreamSummary(root) {
       });
       host.appendChild(themeCard);
 
-      var deps = h('div', { class: 'card', style: 'margin-top:12px' });
-      deps.appendChild(h('div', { class: 'row-title', style: 'margin-bottom:8px' }, '依赖与组件'));
-      var depHost = h('div');
+      var deps = h('details', { class: 'card', style: 'margin-top:12px' });
+      deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
+      var depHost = h('div', { style: 'margin-top:8px' });
       deps.appendChild(depHost);
       host.appendChild(deps);
       depHost.replaceChildren(h('div', { class: 'loading' }, '正在检测依赖…'));
@@ -10269,7 +10269,30 @@ function renderMusicTag(root) {
       var cpu = data.cpu || {};
       var mem = data.memory || {};
       var proc = data.process || {};
+      var settings = data.settings || {};
+      var options = h('div', { class: 'toolbar', style: 'margin-bottom:8px' });
+      Object.keys(data.fields || {}).forEach(function (name) {
+        var field = data.fields[name];
+        var input = h('input', { type: 'checkbox', name: name,
+          checked: settings[name] == null ? field.default : settings[name] });
+        options.appendChild(h('label', { class: 'check' }, input, field.label));
+        input.addEventListener('change', function () {
+          var previous = settings[name];
+          var payload = {};
+          payload[name] = input.checked;
+          input.disabled = true;
+          post('/api/performance/settings', payload).then(function (saved) {
+            settings[name] = saved[name];
+            input.checked = saved[name];
+            toast('已保存，下次启动桌面软件时生效', 'success');
+          }).catch(function (error) {
+            input.checked = previous;
+            toast('保存自动监控设置失败：' + error.message + '，请重试', 'error');
+          }).finally(function () { input.disabled = false; });
+        });
+      });
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
+        options,
         h('div', { class: 'toolbar' },
           ['开始检测', '停止检测', '记录标记', 'Python 快照', '导出报告']
             .map(function (text) {
@@ -11322,6 +11345,7 @@ function renderMusicTag(root) {
         var current = (data.docs || []).filter(function (doc) {
           return doc.key === data.selected;
         })[0] || {};
+        var isTableDoc = current.kind === 'sheet' || current.kind === 'smartsheet';
         var jobHost = h('div');
         var latest = data.latest || {};
         var latestText = latest.ts
@@ -11334,6 +11358,7 @@ function renderMusicTag(root) {
           class: 'btn primary', type: 'button'
         }, '立即采集');
         var syncBtn = h('button', { class: 'btn', type: 'button' }, '表格同步');
+        syncBtn.hidden = !isTableDoc;
         var openBtn = h('button', { class: 'btn', type: 'button' }, '打开链接');
         openBtn.disabled = !current.url;
         openBtn.addEventListener('click', function () {
@@ -11373,7 +11398,7 @@ function renderMusicTag(root) {
         var tabs = h('div', { class: 'tabs' });
         var tabHost = h('div');
         var TABS = [
-          ['bridge', '中间层同步'], ['sync', '表格同步'],
+          ['bridge', '中间层同步'], ['sync', isTableDoc ? '表格同步' : '正文预览'],
           ['daily', '历史记录'], ['snapshot', '采集明细'],
           ['revision', '修订记录'], ['members', '成员名单'],
           ['docs', '文档管理'], ['writeback', '映射回写'],
@@ -11412,7 +11437,10 @@ function renderMusicTag(root) {
 
         function renderTab() {
           tabHost.replaceChildren();
-          if (state.tcdoc.tab === 'sync') renderSyncTab();
+          if (state.tcdoc.tab === 'sync') {
+            if (isTableDoc) renderSyncTab();
+            else renderBodyTab();
+          }
           else if (state.tcdoc.tab === 'daily') renderDailyTab();
           else if (state.tcdoc.tab === 'snapshot') renderSnapshotTab();
           else if (state.tcdoc.tab === 'revision') renderRevisionTab();
@@ -12046,6 +12074,162 @@ function renderMusicTag(root) {
           }).catch(function (error) {
             setError(tableHost, error, renderBridgeTab);
           });
+        }
+
+        function renderBodyTab() {
+          var docKey = state.tcdoc.docKey;
+          var pages = [];
+          var busy = false;
+          var pageSelect = h('select', { class: 'select grow', 'aria-label': '正文页面' });
+          var exportText = h('button', { class: 'btn', type: 'button', disabled: true,
+            title: '导出当前预览的文字；图片保留在本地存档中' }, '导出文字');
+          var fetchBody = h('button', { class: 'btn primary', type: 'button' }, '抓取正文');
+          var note = h('div', { class: 'muted small', style: 'margin:8px 0' });
+          var content = h('div', { class: 'card', style: 'max-height:65vh;overflow:auto' });
+          var toolbar = h('div', { class: 'toolbar' },
+            h('span', { class: 'muted small' }, '页面'), pageSelect,
+            h('span', { class: 'spacer' }), exportText, fetchBody);
+          tabHost.appendChild(toolbar);
+          tabHost.appendChild(note);
+          tabHost.appendChild(content);
+
+          function currentPages() {
+            if (pageSelect.value === 'all') return pages;
+            return pages.filter(function (item) { return item.id === pageSelect.value; });
+          }
+
+          function imageUrl(pageId, imageKey) {
+            return withToken('/api/tcdoc/body/image?doc_key=' + encodeURIComponent(docKey)
+              + '&page_id=' + encodeURIComponent(pageId)
+              + '&image_key=' + encodeURIComponent(imageKey));
+          }
+
+          function draw() {
+            content.replaceChildren();
+            var visible = currentPages();
+            if (!visible.length) {
+              content.appendChild(empty('本地暂无正文存档，点「抓取正文」保存文字与图片。'));
+              return;
+            }
+            visible.forEach(function (page) {
+              var section = h('section', { style: 'margin-bottom:16px' });
+              if (pages.length > 1) section.appendChild(h('div', {
+                class: 'row-title', style: 'margin-bottom:8px'
+              }, page.title || '未命名页面'));
+              section.appendChild(h('div', {
+                style: 'white-space:pre-wrap;overflow-wrap:anywhere'
+              }, page.text || '（空白页）'));
+              if (!page.images_captured) section.appendChild(h('div', {
+                class: 'muted small', style: 'margin-top:8px'
+              }, '旧存档仅含文字，点「重新抓取」补齐正文图片。'));
+              (page.images || []).forEach(function (item, index) {
+                var label = item.name || ('图片 ' + (index + 1));
+                var figure = h('figure', { style: 'margin:12px 0' });
+                if (item.status === 'downloaded') {
+                  var url = imageUrl(page.id, item.key);
+                  var picture = h('img', { src: url, alt: label, loading: 'lazy',
+                    decoding: 'async', referrerpolicy: 'no-referrer',
+                    style: 'display:block;max-width:100%;height:auto' });
+                  var original = h('a', { href: url, target: '_blank',
+                    rel: 'noopener noreferrer', title: '打开原图' }, picture);
+                  picture.addEventListener('error', function () {
+                    original.replaceWith(h('div', { class: 'error' },
+                      label + '：本地图片不可用，请重新抓取正文后重试。'));
+                  });
+                  figure.appendChild(original);
+                  if (item.error) figure.appendChild(h('div', {
+                    class: 'muted small', style: 'margin-top:4px'
+                  }, '本次图片更新失败，已保留上次图片：' + item.error));
+                } else {
+                  figure.appendChild(h('div', { class: 'error' },
+                    label + '：' + (item.error || '图片下载失败，请重新抓取后重试')));
+                }
+                figure.appendChild(h('figcaption', {
+                  class: 'muted small', style: 'margin-top:4px;overflow-wrap:anywhere'
+                }, label));
+                section.appendChild(figure);
+              });
+              content.appendChild(section);
+            });
+            content.scrollTop = 0;
+          }
+
+          function applyBody(result) {
+            if (state.tcdoc.docKey !== docKey || !toolbar.isConnected) return;
+            pages = result.pages || [];
+            var selected = pageSelect.value;
+            pageSelect.replaceChildren(h('option', { value: 'all' },
+              '全部（' + pages.length + ' 篇）'));
+            pages.forEach(function (page) {
+              pageSelect.appendChild(h('option', { value: page.id }, page.title || '未命名页面'));
+            });
+            if (pages.some(function (page) { return page.id === selected; })) pageSelect.value = selected;
+            pageSelect.disabled = pages.length < 2;
+            exportText.disabled = !pages.length || busy;
+            fetchBody.textContent = pages.length ? '重新抓取' : '抓取正文';
+            var images = result.images || {};
+            note.textContent = (result.last ? '本地存档于 ' + result.last + ' · ' : '')
+              + '共 ' + pages.length + ' 篇 · 图片 ' + (images.downloaded || 0)
+              + ' / ' + (images.total || 0) + ' 张'
+              + (images.failed ? ' · ' + images.failed + ' 张失败，可重新抓取重试' : '');
+            draw();
+          }
+
+          function loadBody() {
+            setLoading(content, '正在读取本地正文与图片…');
+            api('/api/tcdoc/body?doc_key=' + encodeURIComponent(docKey))
+              .then(applyBody).catch(function (error) {
+                if (toolbar.isConnected) setError(content, error, loadBody);
+              });
+          }
+
+          pageSelect.addEventListener('change', draw);
+          exportText.addEventListener('click', function () {
+            var visible = currentPages();
+            if (!visible.length) return;
+            var text = visible.map(function (page) {
+              return '# ' + (page.title || current.name || '文档') + '\n\n' + page.text;
+            }).join('\n\n');
+            var blobUrl = URL.createObjectURL(new Blob(['\ufeff' + text], {
+              type: 'text/markdown;charset=utf-8'
+            }));
+            var link = h('a', { href: blobUrl,
+              download: (current.name || '正文').replace(/[<>:"/\\|?*]/g, '_') + '.md' });
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 2000);
+          });
+          fetchBody.addEventListener('click', function () {
+            if (busy) return;
+            busy = true;
+            fetchBody.disabled = true;
+            exportText.disabled = true;
+            fetchBody.textContent = '抓取中…';
+            post('/api/tcdoc/body/fetch', { doc_key: docKey }).then(function (result) {
+              watchJob(jobHost, result.job, function (job) {
+                busy = false;
+                applyBody(job.result || {});
+              }, { cancelable: true, onSettled: function (job) {
+                busy = false;
+                fetchBody.disabled = false;
+                exportText.disabled = !pages.length;
+                fetchBody.textContent = pages.length ? '重新抓取' : '抓取正文';
+                if (job.status === 'cancelled') {
+                  note.textContent = '已取消，已下载的图片保留；可重新抓取继续。';
+                } else if (job.status === 'error') {
+                  note.textContent = '抓取失败：' + (job.error || '请稍后重试');
+                }
+              } });
+            }).catch(function (error) {
+              busy = false;
+              fetchBody.disabled = false;
+              exportText.disabled = !pages.length;
+              fetchBody.textContent = pages.length ? '重新抓取' : '抓取正文';
+              note.textContent = '抓取失败：' + error.message;
+            });
+          });
+          loadBody();
         }
 
         function renderSyncTab() {

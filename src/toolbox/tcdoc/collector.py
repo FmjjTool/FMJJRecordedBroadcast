@@ -23,6 +23,7 @@ from toolbox.browser import launch as pw_launch
 
 from . import config as cfg_mod
 from . import session
+from . import body_images
 
 PAGE_TIMEOUT = 90_000
 LOGIN_TIMEOUT = 900
@@ -468,11 +469,12 @@ def _aio_pages(page) -> list[dict]:
         return []
 
 
-def _expand_aio_tree(page) -> tuple[int, bool]:
+def _expand_aio_tree(page, is_cancelled=None) -> tuple[int, bool]:
     """展开左侧页面树（含多级子页面），返回 (页面节点数, 是否完整展开)。"""
     done: set[str] = set()
     complete = True
     for _ in range(300):
+        body_images._check_cancelled(is_cancelled)
         nodes = page.query_selector_all(AIO_TREE_NODE)
         target = None
         for index, node in enumerate(nodes):
@@ -525,7 +527,7 @@ def _expand_aio_tree(page) -> tuple[int, bool]:
     return len(page.query_selector_all(AIO_TREE_NODE)), bool(complete and fully_expanded)
 
 
-def _aio_page_text(page, selectors, prev_text: str) -> str:
+def _aio_page_text(page, selectors, prev_text: str, is_cancelled=None) -> str:
     """切页后等正文渲染完：内容非空、与上一篇不同，并稳定一小段时间再取。
 
     子页面里的代码块 / 附件 / 子页面列表是分批渲染的，看到第一段文字就返回会截断，
@@ -534,6 +536,7 @@ def _aio_page_text(page, selectors, prev_text: str) -> str:
     start = time.time()
     last, stable_since = "", 0.0
     while True:
+        body_images._check_cancelled(is_cancelled)
         text = _preview_text(page, selectors)
         now = time.time()
         elapsed = now - start
@@ -556,16 +559,18 @@ def _aio_page_text(page, selectors, prev_text: str) -> str:
         page.wait_for_timeout(150)
 
 
-def _read_aio_pages(page, pages: list[dict], on_status) -> list[dict]:
+def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
+                    is_cancelled=None) -> list[dict]:
     """逐页点击侧栏切换，抓取每篇正文（进度通过 on_status 汇报）。"""
     selectors = PREVIEW_SELECTORS["aio"] + ("#workbench-content-container",)
     results: list[dict] = []
     prev = ""
     total = len(pages)
     for i, item in enumerate(pages, 1):
+        body_images._check_cancelled(is_cancelled)
         title = item.get("title") or f"第 {i} 篇"
         _emit(on_status, f"正在读取第 {i}/{total} 篇：{title}")
-        text, error = "", ""
+        text, error, images = "", "", []
         try:
             entry = page.query_selector(
                 f'#sc-sidebar-section [data-block-id="{item["id"]}"] .sc-page-item-rich-title')
@@ -575,11 +580,16 @@ def _read_aio_pages(page, pages: list[dict], on_status) -> list[dict]:
             page.wait_for_function(
                 "pid => location.search.includes('p=' + pid)",
                 arg=item["id"], timeout=8000)
-            text = _aio_page_text(page, selectors, prev)
+            text = _aio_page_text(page, selectors, prev, is_cancelled)
             prev = text or prev
+            images = body_images.collect_page_images(
+                page, doc or {}, item["id"], on_status, is_cancelled)
+        except body_images.BodyImagesCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - 单页失败继续抓其余页面
             error = str(exc)[:120]
-        results.append({**item, "text": _clean_preview_text(text), "error": error})
+        results.append({**item, "text": _clean_preview_text(text), "error": error,
+                        "images": images})
     return results
 
 
@@ -606,8 +616,9 @@ def _finish_preview(doc: dict, page, text: str, pages: list[dict],
     return result
 
 
-def preview(doc: dict, on_status=None) -> dict:
+def preview(doc: dict, on_status=None, is_cancelled=None) -> dict:
     """打开文档并提取正文（软件内只读预览；表格类请在「表格同步」里看）。"""
+    body_images._check_cancelled(is_cancelled)
     sync_playwright = _sync_api()
     state = cfg_mod.state_path()
     _emit(on_status, "正在打开文档……")
@@ -618,6 +629,7 @@ def preview(doc: dict, on_status=None) -> dict:
             page = context.new_page()
             page.set_default_timeout(20_000)
             page.goto(doc["url"], wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+            body_images._check_cancelled(is_cancelled)
             # 预览不需要等完整初始化：给标题栏 15 秒，正文由下面的轮询等待
             try:
                 page.wait_for_selector("#workbench-titlebar", timeout=15_000)
@@ -636,37 +648,45 @@ def preview(doc: dict, on_status=None) -> dict:
             if kind == "aio":
                 try:
                     _emit(on_status, "正在展开文档页面列表……")
-                    _, tree_complete = _expand_aio_tree(page)
+                    _, tree_complete = _expand_aio_tree(page, is_cancelled)
                     pages = _aio_pages(page)
                     if len(pages) > 1:
                         _emit(on_status, f"发现 {len(pages)} 篇页面，正在逐篇读取……")
-                        results = _read_aio_pages(page, pages, on_status)
+                        results = _read_aio_pages(page, pages, on_status, doc, is_cancelled)
+                        body_images._check_cancelled(is_cancelled)
                         return _finish_preview(doc, page, join_pages(results),
                                                results, complete=tree_complete)
+                except body_images.BodyImagesCancelled:
+                    raise
                 except Exception:  # noqa: BLE001 - 页面树异常时退回单篇预览
                     tree_complete = False
 
             text = ""
             deadline = time.time() + 15
             while True:
+                body_images._check_cancelled(is_cancelled)
                 text = _preview_text(page, selectors)
                 if len(text.strip()) >= 80 or time.time() > deadline:
                     break
                 page.wait_for_timeout(800)
-            if not text.strip():
+            # 容器存在但无文字可能是纯图片页，不用整页导航文案冒充正文。
+            if not text.strip() and not any(page.query_selector(selector) is not None
+                                            for selector in selectors):
                 text = _body_text(page, 200_000)
             text = _clean_preview_text(text)
-            if not text:
-                raise RuntimeError("没有读取到文档正文，页面可能尚未加载完成或结构已改版")
-
             page_id = "main"
             if kind == "aio":
                 try:
                     page_id = (parse_qs(urlparse(page.url).query).get("p") or ["main"])[0]
                 except Exception:  # noqa: BLE001
                     page_id = "main"
+            images = body_images.collect_page_images(
+                page, doc, page_id, on_status, is_cancelled)
+            body_images._check_cancelled(is_cancelled)
+            if not text and not images:
+                raise RuntimeError("没有读取到文档正文，页面可能尚未加载完成或结构已改版")
             page_item = {"id": page_id, "title": doc.get("name") or page.title(),
-                         "level": 0, "text": text, "error": ""}
+                         "level": 0, "text": text, "error": "", "images": images}
             return _finish_preview(doc, page, text, [page_item],
                                    complete=(kind != "aio"))
         finally:

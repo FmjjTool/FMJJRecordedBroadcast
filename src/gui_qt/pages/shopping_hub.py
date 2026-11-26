@@ -1,6 +1,6 @@
-"""购物解析合并页：一个输入框，按链接头自动识别淘宝 / 抖音商城 / B站小店。
+"""购物解析合并页：一个输入框，在勾选平台内自动识别并解析。
 
-- 全页只有一份输入框，不选平台、不切页签：粘贴后按每行链接头判断平台。
+- 全页只有一份输入框，平台范围外置多选，默认全部勾选。
 - 识别规则：
     淘宝      taobao.com / tmall.com / tb.cn / 淘口令
     抖音商城  v.douyin.com / haohuo.jinritemai.com / douyin.com / 【抖音商城】分享文案
@@ -8,16 +8,15 @@
 - 识别后自动切到对应结果面板，并调用该子页原有解析流程；
   三个子页仍是原来的 BasePage，落盘目录与导出格式不变：
     download/淘宝商品/ · download/抖音商品/ · download/B站小店/
-- 一次只解析一个平台：混合粘贴时按「第一行识别出的平台」解析，其余条数在提示里说明；
+- 一次只解析一个平台：混合粘贴时按「首个勾选且识别出的平台」解析，其余条数在提示里说明；
   抖音本身就支持一行一条批量解析。
 """
 
 from __future__ import annotations
 
-import re
-
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QStackedWidget,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QStackedWidget,
     QVBoxLayout,
 )
 
@@ -25,32 +24,12 @@ from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_shop_page import BiliShopPage
 from gui_qt.pages.douyin_shop_page import DouyinShopPage
 from gui_qt.pages.shopping_page import ShoppingPage
+from toolbox.shopping_parse import (
+    PLATFORM_LABELS, SHOPPING_PLATFORM_OPTIONS, detect_platform,
+    plan_shopping_parse,
+)
 
-PLATFORM_LABELS = {"taobao": "淘宝", "douyin": "抖音商城", "bili": "B站小店"}
 _TAB_INDEX = {"taobao": 0, "douyin": 1, "bili": 2}
-
-# 只看链接头，够用即可：真正的合法性由各平台解析器负责兜底
-_DOUYIN_RE = re.compile(
-    r"(?:v\.douyin\.com|haohuo\.jinritemai\.com|(?:www\.|m\.)?douyin\.com/|【抖音商城】)",
-    re.I)
-_BILI_RE = re.compile(
-    r"(?:b23\.tv|mall\.bilibili\.com|bilibili\.com/h5/mall|space\.bilibili\.com)", re.I)
-_BILI_UID_RE = re.compile(r"^\d{3,}$")
-_TAOBAO_RE = re.compile(r"(?:taobao\.com|tmall\.com|tb\.cn)", re.I)
-
-
-def detect_platform(line: str) -> str:
-    """按链接头判断平台：taobao / douyin / bili，识别不到返回空串。"""
-    text = (line or "").strip()
-    if not text:
-        return ""
-    if _DOUYIN_RE.search(text):
-        return "douyin"
-    if _BILI_RE.search(text) or _BILI_UID_RE.match(text):
-        return "bili"
-    if _TAOBAO_RE.search(text):
-        return "taobao"
-    return ""
 
 
 class ShoppingHubPage(BasePage):
@@ -59,18 +38,18 @@ class ShoppingHubPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._panels = {}
+        self.platform_checks = {}
+        self._syncing_controls = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         top = QFrame()
-        top.setStyleSheet(
-            "QFrame { background: palette(base); border: 1px solid palette(shadow);"
-            " border-radius: 8px; }")
+        top.setProperty("variant", "toolbar")
         tv = QVBoxLayout(top)
-        tv.setContentsMargins(10, 8, 10, 8)
-        tv.setSpacing(6)
+        tv.setContentsMargins(12, 12, 12, 12)
+        tv.setSpacing(8)
 
         self.input_edit = QPlainTextEdit()
         self.input_edit.setPlaceholderText(
@@ -81,18 +60,31 @@ class ShoppingHubPage(BasePage):
         self.input_edit.textChanged.connect(self._update_hint)
         tv.addWidget(self.input_edit)
 
-        row = QHBoxLayout()
-        self.parse_btn = QPushButton("解析")
-        self.parse_btn.setStyleSheet(
-            "background: palette(highlight); color: palette(highlighted-text);"
-            " padding: 6px 16px; border-radius: 4px;")
-        self.parse_btn.clicked.connect(self._parse)
-        row.addWidget(self.parse_btn)
+        platforms_row = QHBoxLayout()
+        platforms_row.setSpacing(8)
+        platforms_row.addWidget(QLabel("平台范围"))
+        for key, label in SHOPPING_PLATFORM_OPTIONS:
+            check = QCheckBox(label)
+            check.setChecked(True)
+            check.setObjectName(f"shoppingPlatform_{key}")
+            check.setToolTip(f"仅解析已勾选平台的链接；取消后不请求{label}")
+            check.toggled.connect(self._platforms_changed)
+            self.platform_checks[key] = check
+            platforms_row.addWidget(check)
+        platforms_row.addStretch(1)
+        tv.addLayout(platforms_row)
 
-        self.hint_label = QLabel("自动识别：淘宝 / 抖音商城 / B站小店（看链接头，不用选平台）")
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.parse_btn = QPushButton("解析")
+        self.parse_btn.setProperty("variant", "primary")
+        self.parse_btn.clicked.connect(self._parse)
+
+        self.hint_label = QLabel("仅在勾选的平台内自动识别链接")
         self.hint_label.setStyleSheet("color: palette(placeholder-text);")
         self.hint_label.setWordWrap(True)
         row.addWidget(self.hint_label, 1)
+        row.addWidget(self.parse_btn)
         tv.addLayout(row)
         layout.addWidget(top)
 
@@ -107,86 +99,76 @@ class ShoppingHubPage(BasePage):
             page.embed_input()
             self.stack.addWidget(page)
             self._panels[key] = page
+            # 三个原有子页在解析、详情和导出期间均禁用自己的解析按钮。
+            # 监听显式禁用状态即可同步外置筛选，不增加第二套任务状态。
+            page.parse_btn.installEventFilter(self)
         layout.addWidget(self.stack, 1)
+        self._sync_platform_controls()
+        self._update_hint()
 
     # ==================== 入口 ====================
 
     def _parse(self):
+        if any(self._panel_busy(page) for page in self._panels.values()):
+            return
         text = self.input_edit.toPlainText().strip()
-        if not text:
-            self._set_hint("先粘贴链接：淘宝店铺/商品 · 抖音商城分享文案 · B站小店链接或 UP主 UID",
-                           warn=True)
+        try:
+            plan = plan_shopping_parse(text, self._selected_platforms())
+        except ValueError as exc:
+            self._set_hint(str(exc), warn=True)
             return
-
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        groups = {"taobao": [], "douyin": [], "bili": []}
-        unknown = []
-        first_platform = ""
-        for line in lines:
-            platform = detect_platform(line)
-            if not platform:
-                unknown.append(line)
-                continue
-            groups[platform].append(line)
-            if not first_platform:
-                first_platform = platform
-
-        if not first_platform:
-            self._set_hint(
-                "没识别到平台：支持 taobao.com / tmall.com、v.douyin.com 分享文案、"
-                "b23.tv / mall.bilibili.com / space.bilibili.com / 纯数字 UID", warn=True)
-            self.app.toast("没识别到链接平台", "warning")
-            return
-
-        self.stack.setCurrentIndex(_TAB_INDEX[first_platform])
-        page = self._panels[first_platform]
-        label = PLATFORM_LABELS[first_platform]
-
-        if first_platform == "douyin":
-            # 抖音解析器本身就支持多行，一次全给它
-            page.submit_text("\n".join(groups["douyin"]))
-            self._set_hint(f"已识别 {label}：{len(groups['douyin'])} 条分享文案")
-        else:
-            page.submit_text(groups[first_platform][0])
-            extra = len(groups[first_platform]) - 1
-            msg = f"已识别 {label}：{groups[first_platform][0][:48]}"
-            if extra > 0:
-                msg += f"（另有 {extra} 条{label}链接未处理：{label}一次解析一条）"
-            self._set_hint(msg)
-
-        skipped = [f"{PLATFORM_LABELS[key]} {len(items)} 条"
-                   for key, items in groups.items()
-                   if key != first_platform and items]
-        if skipped:
-            self.hint_label.setText(
-                self.hint_label.text() + "；另识别到 " + "、".join(skipped) +
-                "，一次只解析一个平台")
-        if unknown:
-            self.hint_label.setText(
-                self.hint_label.text() + f"；{len(unknown)} 条未识别平台，已跳过")
+        self.stack.setCurrentIndex(_TAB_INDEX[plan["platform"]])
+        self._set_hint(plan["summary"])
+        self._panels[plan["platform"]].submit_text(plan["text"])
+        self._sync_platform_controls()
 
     def _update_hint(self):
         text = self.input_edit.toPlainText().strip()
-        if not text:
-            self._set_hint("自动识别：淘宝 / 抖音商城 / B站小店（看链接头，不用选平台）")
+        selected = self._selected_platforms()
+        if not selected:
+            self._set_hint("请至少勾选一个平台", warn=True)
             return
-        counts = {"taobao": 0, "douyin": 0, "bili": 0}
-        unknown = 0
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            platform = detect_platform(line)
-            if platform:
-                counts[platform] += 1
-            else:
-                unknown += 1
-        found = [f"{PLATFORM_LABELS[key]} {n} 条" for key, n in counts.items() if n]
-        if found:
-            extra = f"，未识别 {unknown} 条" if unknown else ""
-            self._set_hint("识别为：" + "、".join(found) + extra)
-        else:
-            self._set_hint("暂未识别到平台，确认链接头是否在支持列表内", warn=True)
+        if not text:
+            labels = " / ".join(PLATFORM_LABELS[key] for key in selected)
+            self._set_hint(f"仅在勾选的平台内自动识别：{labels}")
+            return
+        try:
+            plan = plan_shopping_parse(text, selected)
+            self._set_hint(plan["summary"])
+        except ValueError as exc:
+            self._set_hint(str(exc), warn=True)
+
+    def _selected_platforms(self):
+        return [key for key, check in self.platform_checks.items() if check.isChecked()]
+
+    @staticmethod
+    def _panel_busy(page):
+        return page.parse_btn.testAttribute(Qt.WA_ForceDisabled)
+
+    def _platforms_changed(self):
+        self._sync_platform_controls()
+        self._update_hint()
+
+    def _sync_platform_controls(self):
+        if self._syncing_controls:
+            return
+        self._syncing_controls = True
+        try:
+            selected = self._selected_platforms()
+            busy = any(self._panel_busy(page) for page in self._panels.values())
+            self.parse_btn.setEnabled(not busy and bool(selected))
+            for check in self.platform_checks.values():
+                check.setEnabled(not busy)
+            for key, page in self._panels.items():
+                page.setEnabled(key in selected)
+        finally:
+            self._syncing_controls = False
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.EnabledChange and any(
+                watched is page.parse_btn for page in self._panels.values()):
+            self._sync_platform_controls()
+        return super().eventFilter(watched, event)
 
     def _set_hint(self, text: str, warn: bool = False):
         self.hint_label.setText(text)

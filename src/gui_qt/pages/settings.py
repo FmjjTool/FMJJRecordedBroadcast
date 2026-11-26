@@ -15,7 +15,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QTimeEdit, QVBoxLayout, QWidget, QFrame,
+    QMessageBox, QPushButton, QScrollArea, QTimeEdit, QToolButton, QVBoxLayout,
+    QWidget, QFrame,
 )
 from PySide6.QtGui import QPixmap
 
@@ -78,6 +79,54 @@ class _SettingsScrollArea(QScrollArea):
         if need <= 0:
             need = body.sizeHint().height()
         body.setMinimumHeight(max(need, self.viewport().height()))
+
+
+class _ComponentsSectionCard(ToolSectionCard):
+    """设置页组件区：整行标题切换展开状态，不影响其他页面的共享卡片。"""
+
+    def __init__(self, title, icon):
+        super().__init__(title, icon=icon)
+        layout = self.layout()
+        layout.removeItem(self.heading_layout)
+        layout.removeItem(self.content_layout)
+
+        self.toggle_button = QPushButton(self)
+        self.toggle_button.setObjectName("settingsComponentsToggle")
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setCursor(Qt.PointingHandCursor)
+        self.toggle_button.setAccessibleName(title)
+        self.toggle_button.setMinimumHeight(24)
+        self.toggle_button.setStyleSheet(
+            "QPushButton#settingsComponentsToggle { background: transparent;"
+            " border: 1px solid transparent; padding: 0; }"
+            "QPushButton#settingsComponentsToggle:hover {"
+            " background: palette(alternate-base); border-radius: 6px; }"
+            "QPushButton#settingsComponentsToggle:focus {"
+            " border: 1px solid palette(highlight); }")
+        header = QHBoxLayout(self.toggle_button)
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addLayout(self.heading_layout, 1)
+        for label in (self.icon_label, self.title_label):
+            if label is not None:
+                label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._arrow = QToolButton(self.toggle_button)
+        self._arrow.setAutoRaise(True)
+        self._arrow.setFocusPolicy(Qt.NoFocus)
+        self._arrow.setAttribute(Qt.WA_TransparentForMouseEvents)
+        header.addWidget(self._arrow)
+        layout.addWidget(self.toggle_button)
+
+        self.content_widget = QWidget(self)
+        self.content_widget.setLayout(self.content_layout)
+        layout.addWidget(self.content_widget)
+        self.toggle_button.toggled.connect(self._set_expanded)
+        self._set_expanded(False)
+
+    def _set_expanded(self, expanded):
+        self.content_widget.setVisible(expanded)
+        self._arrow.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.toggle_button.setToolTip("收起组件" if expanded else "展开组件")
+        self.updateGeometry()
 
 
 class GlobalSettingsPage(BasePage):
@@ -286,7 +335,12 @@ class GlobalSettingsPage(BasePage):
         v.addWidget(card)
 
         # ---- 运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）----
-        card = self._section_card("运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）", "chip")
+        card = _ComponentsSectionCard(
+            "运行环境与组件（FFmpeg / 依赖 / 模型 / Skill）", "chip")
+        self.components_card = card
+        self._section_cards.append((card, "chip"))
+        card.toggle_button.toggled.connect(
+            lambda _expanded: QTimer.singleShot(0, self.scroll.sync_content))
 
         # FFmpeg 位置（可选；系统 PATH 优先，未找到时才用这里指定的位置）
         ff_row = QHBoxLayout()

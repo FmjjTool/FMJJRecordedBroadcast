@@ -286,6 +286,8 @@ DEFAULT_CONVERT_CONFIG_DICT = {
     "ffmpeg_path": "",
     # 关闭主窗口时隐藏到系统托盘，程序在后台继续运行（任务/录制不中断）
     "close_to_tray": True,
+    # 性能诊断：启动桌面软件后自动普通采样；不自动开启 Python 分配追踪
+    "performance_auto_start": False,
     # 软件更新：启动后静默检查 GitHub Releases（每天最多一次）+ 上次检查时间戳
     # + 用户选择「稍后」时忽略的版本号（避免同版本反复提示）
     "auto_check_update": True,

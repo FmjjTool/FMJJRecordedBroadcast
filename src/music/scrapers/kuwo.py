@@ -134,24 +134,7 @@ class KuwoScraper(BaseScraper):
                 pass
 
         # 文件格式：接口两种形态——dict(含直链) 或 "MP3128|OGG192|ALFLAC|..." 字符串
-        formats = info.get("formats", {}) or {}
-        files = []
-        if isinstance(formats, str):
-            for code in formats.split("|"):
-                m = re.fullmatch(r"(MP3|OGG|WMA|AAC)(\d+)", code)
-                if m:
-                    files.append(FileInfo(quality=f"{m.group(2)}kbps",
-                                          extension=m.group(1).lower(),
-                                          bitrate=int(m.group(2))))
-                elif code in ("ALFLAC", "FLAC"):
-                    files.append(FileInfo(quality="FLAC", extension="flac"))
-                elif code == "APE":
-                    files.append(FileInfo(quality="APE", extension="ape"))
-        else:
-            for qlabel, qkey in [("128kbps","128kbps"),("192kbps","192kbps"),("320kbps","320kbps"),("FLAC","flac"),("APE","ape")]:
-                url = formats.get(qkey, "")
-                if url:
-                    files.append(FileInfo(quality=qlabel, url=url, extension=qkey.replace("kbps","mp3") if "kbps" in qkey else qkey.lower()))
+        files = _parse_formats(info.get("formats"))
 
         return SongInfo(
             song_id=song_id,
@@ -522,6 +505,31 @@ class KuwoScraper(BaseScraper):
 
 
 # ------------------------------------------------------------------
+
+def _parse_formats(formats) -> list[FileInfo]:
+    """详情格式元数据；码率统一 bps，音频扩展名不夹带数字。"""
+    files = []
+    if isinstance(formats, str):
+        for code in formats.upper().split("|"):
+            match = re.fullmatch(r"(MP3|OGG|WMA|AAC)(\d+)", code)
+            if match:
+                files.append(FileInfo(quality=f"{match.group(2)}kbps",
+                                      extension=match.group(1).lower(),
+                                      bitrate=int(match.group(2)) * 1000))
+            elif code in ("ALFLAC", "FLAC", "APE"):
+                ext = "flac" if code in ("ALFLAC", "FLAC") else "ape"
+                files.append(FileInfo(quality=ext.upper(), extension=ext))
+    elif isinstance(formats, dict):
+        for key in ("128kbps", "192kbps", "320kbps", "flac", "ape"):
+            url = formats.get(key)
+            if not isinstance(url, str) or not url:
+                continue
+            rate = int(key[:-4]) * 1000 if key.endswith("kbps") else 0
+            ext = "mp3" if rate else key
+            files.append(FileInfo(quality=key if rate else key.upper(),
+                                  url=url, extension=ext, bitrate=rate))
+    return files
+
 
 def _parse_minfo(minfo: str) -> list[FileInfo]:
     """解析 nplserver MINFO 音质串：level:p,bitrate:300,format:ogg,size:6.18Mb;..."""
