@@ -311,6 +311,8 @@ class EditorPage(BasePage):
         self._refresh_files(self.files.index(current) if current in self.files else 0)
         self.segments = segments
         self.partial_segments = partial_segments
+        self._next_partial_id = max(
+            (row["id"] for row in partial_segments), default=0) + 1
         self._pending_start = pending_start
         self.detect_points = points
         self._refresh_segments()
@@ -412,12 +414,15 @@ class EditorPage(BasePage):
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(4)
         left.addWidget(_OptionGrid([
-            self._btn("刷新", self._refresh_folders),
-            self._btn("添加文件", self._add_files),
-            self._btn("添加文件夹", self._add_folder)], columns=3, cell_width=88))
+            self._btn("添加文件", self._add_files, small=True),
+            self._btn("添加文件夹", self._add_folder, small=True)],
+            columns=2, cell_width=88))
         row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        row2.addWidget(self._btn("刷新", self._refresh_folders, small=True))
         row2.addWidget(self._btn("按名排序", self._sort_by_name, small=True))
         queue_more = QPushButton("更多")
+        queue_more.setStyleSheet("padding: 2px 8px;")
         queue_more.setProperty("menuButton", True)
         queue_menu = QMenu(queue_more)
         for label, slot in (("上移", lambda: self._move(-1)),
@@ -545,11 +550,11 @@ class EditorPage(BasePage):
         preview_layout.addWidget(_OptionGrid([
             self.play_btn, self.set_start_btn, self.set_end_btn, self.preview_more_btn],
             columns=4, cell_width=80))
-        self.remove_start_btn = self._btn("删起点", self._remove_start_mark, small=True)
+        self.remove_start_btn = self._btn("删除起点", self._remove_start_mark, small=True)
         self.remove_start_btn.setToolTip("删除选中片段的起点；保留终点待重新标记")
-        self.remove_end_btn = self._btn("删终点", self._remove_end_mark, small=True)
+        self.remove_end_btn = self._btn("删除终点", self._remove_end_mark, small=True)
         self.remove_end_btn.setToolTip("删除选中片段的终点；保留起点待重新标记")
-        self.remove_seg_btn = self._btn("删选中", self._remove_segment, small=True)
+        self.remove_seg_btn = self._btn("删除选中", self._remove_segment, small=True)
         self.remove_seg_btn.setToolTip("删除选中的整段或单个待补标记")
         self.clear_seg_btn = self._btn("清除标记", self._clear_segments, small=True, danger=True)
         self.clear_seg_btn.setToolTip("清除当前视频全部片段、待补标记与未完成起点")
@@ -606,6 +611,8 @@ class EditorPage(BasePage):
         self.seg_list.currentRowChanged.connect(self._sync_timeline)
         self.seg_list.itemDoubleClicked.connect(
             self._seek_to_segment_item)
+        self.seg_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.seg_list.customContextMenuRequested.connect(self._show_segment_menu)
         self.operation_splitter.addWidget(preview_area)
 
         self.tabs = QTabWidget()
@@ -1353,7 +1360,7 @@ class EditorPage(BasePage):
         return True
 
     def _set_start(self):
-        if not self.current_path or self._duration_ms <= 0:
+        if self.running or not self.current_path or self._duration_ms <= 0:
             return
         position = self.slider.value()
         data = self._selected_segment_data()
@@ -1377,7 +1384,7 @@ class EditorPage(BasePage):
         self._log(f"起点: {_fmt_ms(self._pending_start)}")
 
     def _set_end(self):
-        if not self.current_path or self._duration_ms <= 0:
+        if self.running or not self.current_path or self._duration_ms <= 0:
             return
         end = self.slider.value()
         data = self._selected_segment_data()
@@ -1467,7 +1474,6 @@ class EditorPage(BasePage):
             self.seg_list.setCurrentRow(0)
         self.seg_list.blockSignals(False)
         self._sync_timeline()
-        self._refresh_action_buttons()
 
     def _sync_timeline(self, _row=None):
         data = self._selected_segment_data()
@@ -1493,6 +1499,33 @@ class EditorPage(BasePage):
                 f"片段 {selected + 1} / {len(self.segments)} · 起 {_fmt_ms(start)} → 终 {_fmt_ms(end)}")
         else:
             self.segment_status.setText("移动播放指针并标记开始 / 结束；未选中待补标记时结束从 00:00 开始")
+        self._refresh_action_buttons()
+
+    def _show_segment_menu(self, position):
+        if self.running:
+            return
+        item = self.seg_list.itemAt(position)
+        if item is None:
+            return
+        self.seg_list.setCurrentItem(item)
+        data = self._selected_segment_data()
+        if not data:
+            return
+        self._refresh_action_buttons()
+        menu = QMenu(self.seg_list)
+        icon = line_icon("trash", theme.color("text"), 16)
+        for label, button, slot in (
+                ("删除起点", self.remove_start_btn, self._remove_start_mark),
+                ("删除终点", self.remove_end_btn, self._remove_end_mark)):
+            action = menu.addAction(icon, label)
+            action.setEnabled(button.isEnabled())
+            action.triggered.connect(slot)
+        menu.addSeparator()
+        label = "删除片段" if data.get("kind") == "segment" else "删除标记"
+        action = menu.addAction(icon, label)
+        action.setEnabled(self.remove_seg_btn.isEnabled())
+        action.triggered.connect(self._remove_segment)
+        menu.exec(self.seg_list.viewport().mapToGlobal(position))
 
     def _seek_to_segment_item(self, item):
         data = item.data(Qt.UserRole) if item is not None else None
@@ -1515,6 +1548,8 @@ class EditorPage(BasePage):
         self._remove_mark("end")
 
     def _remove_mark(self, endpoint, data=None):
+        if self.running or endpoint not in ("start", "end"):
+            return
         data = self._selected_segment_data() if data is None else data
         if not data:
             return
@@ -1544,6 +1579,8 @@ class EditorPage(BasePage):
             self._log("已删除未完成起点")
 
     def _remove_segment(self):
+        if self.running:
+            return
         data = self._selected_segment_data()
         if not data:
             return
@@ -1577,6 +1614,8 @@ class EditorPage(BasePage):
         self._remove_mark(marker.get("endpoint", "start"), data)
 
     def _clear_segments(self):
+        if self.running:
+            return
         self.segments = []
         self.partial_segments = []
         self._pending_start = None
@@ -1959,6 +1998,8 @@ class EditorPage(BasePage):
         if not self.current_path:
             self.app.toast("先在左侧选择要切割的文件", "warning")
             return
+        if not self._check_complete_markers():
+            return
         if not self.segments:
             self.app.toast("请先在预览区添加片段", "warning")
             return
@@ -2063,6 +2104,8 @@ class EditorPage(BasePage):
             self.app.toast("无法读取视频时长", "warning")
             return
         self.segments = segments_from_points(self.detect_points, duration)
+        self.partial_segments = []
+        self._pending_start = None
         self._refresh_segments()
         self._log(f"已按切点生成 {len(self.segments)} 个片段")
 
@@ -2070,7 +2113,15 @@ class EditorPage(BasePage):
         self.detect_points = []
         self.points_list.clear()
 
+    def _check_complete_markers(self):
+        if self.partial_segments or self._pending_start is not None:
+            self.app.toast("还有未完成标记，请先补齐起点 / 终点或删除该标记", "warning")
+            return False
+        return True
+
     def _export_target(self, suffix: str) -> Optional[Path]:
+        if self.running or not self._check_complete_markers():
+            return None
         if not self.segments:
             self.app.toast("还没有片段", "warning")
             return None
@@ -2112,11 +2163,15 @@ class EditorPage(BasePage):
         except Exception as exc:  # noqa: BLE001
             self.app.toast(f"导入失败: {exc}", "error")
             return
+        self.partial_segments = []
+        self._pending_start = None
         self._refresh_segments()
         self._log(f"已导入 {len(self.segments)} 个片段: {Path(path).name}")
 
     def _write_chapters(self):
         if self.running:
+            return
+        if not self._check_complete_markers():
             return
         if not self.current_path or not self.segments:
             self.app.toast("先添加片段", "warning")

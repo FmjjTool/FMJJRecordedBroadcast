@@ -5683,13 +5683,22 @@ function renderLivestreamSummary(root) {
 
       function showPointMenu(event, entries) {
         pointMenu.hidden = true;
+        if (pointMenu._dismissEvents) pointMenu._dismissEvents.abort();
         if (running || selected.size !== 1 || !entries.length) return;
         var draft = currentCutDraft();
+        var dismissEvents = new AbortController();
+        pointMenu._dismissEvents = dismissEvents;
+        function dismiss() {
+          pointMenu.hidden = true;
+          dismissEvents.abort();
+          if (pointMenu._dismissEvents === dismissEvents) pointMenu._dismissEvents = null;
+        }
         pointMenu.replaceChildren();
         entries.forEach(function (entry) {
           pointMenu.appendChild(h('button', {
             class: 'btn mini', type: 'button', role: 'menuitem',
             onclick: function () {
+              dismiss();
               if (!running && selected.size === 1 && currentCutDraft() === draft) entry.run();
             }
           }, entry.label));
@@ -5702,6 +5711,18 @@ function renderLivestreamSummary(root) {
         pointMenu.style.left = Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8)) + 'px';
         pointMenu.style.top = Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8)) + 'px';
         pointMenu.firstChild.focus({ preventScroll: true });
+        window.requestAnimationFrame(function () {
+          if (!dismissEvents.signal.aborted) {
+            window.addEventListener('scroll', dismiss, { capture: true, signal: dismissEvents.signal });
+          }
+        });
+        window.addEventListener('resize', dismiss, { signal: dismissEvents.signal });
+        document.addEventListener('pointerdown', function (outsideEvent) {
+          if (!pointMenu.contains(outsideEvent.target)) dismiss();
+        }, { capture: true, signal: dismissEvents.signal });
+        document.addEventListener('keydown', function (keyEvent) {
+          if (keyEvent.key === 'Escape') dismiss();
+        }, { signal: dismissEvents.signal });
       }
 
       function openCutItemMenu(event, index, draftIndex) {
