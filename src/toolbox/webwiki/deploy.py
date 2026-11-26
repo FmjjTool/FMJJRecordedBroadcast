@@ -234,16 +234,29 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
     return f"{ok}/{len(items)}"
 
 
-def deploy_all(root: Path | None = None, token: str = "", log=print) -> Path:
-    """一键部署：拉代码 → 装依赖 → 读监控数据重建站点库 → 构建前端。"""
+def deploy_all(root: Path | None = None, token: str = "", log=print,
+               progress=None, cancel=None) -> Path:
+    """一键部署：拉代码 → 装依赖 → 读监控数据重建站点库 → 构建前端。
+
+    progress(step, total, label) 用于界面进度；cancel() 返回真时在步骤之间停止。
+    """
     from . import gitops
 
     root = Path(root or config.root_dir())
-    gitops.ensure_repo("webwiki-api", token, log, root)
-    gitops.ensure_repo("webwiki", token, log, root)
-    python = ensure_python_env(root, log)
-    sync_docs(root, log)
-    ensure_node_deps(root, log)
-    build_frontend(root, log)
-    warm_covers(root, log)
-    return python
+    steps = [
+        ("拉取代码", lambda: (gitops.ensure_repo("webwiki-api", token, log, root),
+                          gitops.ensure_repo("webwiki", token, log, root))),
+        ("安装依赖", lambda: (ensure_python_env(root, log),
+                          ensure_node_deps(root, log))),
+        ("重建站点数据", lambda: sync_docs(root, log)),
+        ("构建前端", lambda: build_frontend(root, log)),
+    ]
+    total = len(steps)
+    for index, (label, run) in enumerate(steps, start=1):
+        if cancel is not None and cancel():
+            raise RuntimeError(f"已停止（{label}前）")
+        if progress is not None:
+            progress(index, total, label)
+        log(f"[{index}/{total}] {label}")
+        run()
+    return ensure_python_env(root, log)

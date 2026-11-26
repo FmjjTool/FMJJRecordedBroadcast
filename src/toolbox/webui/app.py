@@ -52,7 +52,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     netdisk = NetdiskService(jobs)
     publish = PublishService(jobs)
     shopping = ShoppingService(jobs)
-    localwiki = LocalWikiService()
+    localwiki = LocalWikiService(jobs)
     livestream_summary = LivestreamSummaryService(jobs)
     image_sorter = ImageSorterService()
     rename_batch = RenameBatchService()
@@ -323,6 +323,27 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/netdisk/cloud/download", start_netdisk_cloud_download)
 
     server.get("/api/localwiki", lambda req: localwiki.overview())
+
+    def start_wiki_deploy(req):
+        return localwiki.start_deploy(dict(req.json or {}))
+    server.post("/api/tools/localwiki/deploy", start_wiki_deploy)
+
+    def start_wiki_rebuild(req):
+        return localwiki.start_rebuild(dict(req.json or {}))
+    server.post("/api/tools/localwiki/rebuild", start_wiki_rebuild)
+
+    def start_wiki_collect(req):
+        return localwiki.start_collect(dict(req.json or {}))
+    server.post("/api/tools/localwiki/collect", start_wiki_collect)
+
+    server.post("/api/tools/localwiki/service/start",
+                lambda req: localwiki.start_service())
+    server.post("/api/tools/localwiki/service/stop",
+                lambda req: localwiki.stop_service())
+
+    def save_wiki_password(req):
+        return localwiki.save_password(dict(req.json or {}))
+    server.post("/api/tools/localwiki/password", save_wiki_password)
 
     server.get("/api/livestream-summary",
                lambda req: livestream_summary.overview())

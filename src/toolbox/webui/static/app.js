@@ -2911,7 +2911,7 @@ function renderLivestreamSummary(root) {
       var stats = h('div', { class: 'grid cols-4', style: 'margin-bottom:12px' });
       stats.appendChild(statCard('GitHub 登录',
         data.github.logged_in ? '已登录' : '未登录',
-        '拉取与部署在桌面端'));
+        '登录后可部署'));
       stats.appendChild(statCard('服务状态',
         service.site_running ? '运行中'
           : (service.api_running ? 'API 运行中' : '未运行'),
@@ -2922,6 +2922,85 @@ function renderLivestreamSummary(root) {
       stats.appendChild(statCard('本地图片', fmtNumber(d.local_images),
         '优先使用本地图'));
       root.appendChild(stats);
+
+      var wikiJobHost = h('div', { style: 'margin-bottom:12px' });
+      var deployBtn = h('button', { class: 'btn primary', type: 'button' },
+        '一键部署并启动');
+      var rebuildBtn = h('button', { class: 'btn', type: 'button' },
+        '重建站点数据');
+      var startBtn = h('button', { class: 'btn', type: 'button' },
+        '启动服务');
+      var stopBtn = h('button', { class: 'btn', type: 'button' },
+        '停止服务');
+      var collectBtn = h('button', { class: 'btn', type: 'button' },
+        '采集今日');
+      var openSiteBtn = h('button', { class: 'btn', type: 'button' },
+        '打开站点');
+      var wikiBusy = false;
+
+      function wikiAction(button, url, body, confirmText) {
+        if (wikiBusy) return;
+        if (confirmText && !window.confirm(confirmText)) return;
+        wikiBusy = true;
+        var label = button.textContent;
+        button.disabled = true;
+        button.textContent = '执行中…';
+        post(url, body || {}).then(function (result) {
+          if (!result || !result.job) {
+            toast((result && result.summary) || '已完成', 'success');
+            wikiBusy = false;
+            button.disabled = false;
+            button.textContent = label;
+            renderLocalWiki(root);
+            return;
+          }
+          watchJob(wikiJobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            toast(outcome.summary || '已完成', 'success');
+            renderLocalWiki(root);
+          }, {
+            cancelable: true,
+            onSettled: function (job) {
+              wikiBusy = false;
+              button.disabled = false;
+              button.textContent = label;
+              if (job.status === 'error') {
+                toast('执行失败：' + (job.error || '未知错误'), 'error');
+              }
+            }
+          });
+        }).catch(function (error) {
+          wikiBusy = false;
+          button.disabled = false;
+          button.textContent = label;
+          toast('执行失败：' + error.message, 'error');
+        });
+      }
+
+      deployBtn.addEventListener('click', function () {
+        wikiAction(deployBtn, '/api/tools/localwiki/deploy', { confirmed: true },
+          '一键部署会：拉取 webwiki / webwiki-api 最新代码 → 安装 Python 与'
+          + ' Node 依赖 → 重建站点数据 → 构建前端 → 重启本地站点服务。'
+          + '需要桌面端已登录 GitHub。确认继续？');
+      });
+      rebuildBtn.addEventListener('click', function () {
+        wikiAction(rebuildBtn, '/api/tools/localwiki/rebuild',
+          { confirmed: true },
+          '将重新读取本地腾讯文档快照并重建站点数据库、重新构建前端。确认继续？');
+      });
+      startBtn.addEventListener('click', function () {
+        wikiAction(startBtn, '/api/tools/localwiki/service/start', {});
+      });
+      stopBtn.addEventListener('click', function () {
+        if (!window.confirm('停止本地站点服务？WebUI 本身不受影响。')) return;
+        wikiAction(stopBtn, '/api/tools/localwiki/service/stop', {});
+      });
+      collectBtn.addEventListener('click', function () {
+        wikiAction(collectBtn, '/api/tools/localwiki/collect', {});
+      });
+      openSiteBtn.addEventListener('click', function () {
+        if (service.url) window.open(service.url, '_blank', 'noopener');
+      });
 
       var repoText = (data.repos || []).map(function (repo) {
         return repo.text;
@@ -2948,17 +3027,9 @@ function renderLivestreamSummary(root) {
               + (d.live ? ' / 直播记录 ' + num(d.live) : ''))
             : '-')),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('button', {
-            class: 'btn primary', type: 'button', disabled: true
-          }, '一键部署并启动'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '采集今日'),
-          h('button', {
-            class: 'btn', type: 'button', disabled: true
-          }, '打开后台'),
-          h('span', { class: 'muted small' },
-            '部署 / 启动 / 采集 / 改端口在桌面端'))));
+          deployBtn, rebuildBtn, startBtn, stopBtn, collectBtn, openSiteBtn,
+          h('span', { class: 'muted small' }, '改端口仍在桌面端')),
+        wikiJobHost));
 
       var analyticsCard = h('div', {
         class: 'card', style: 'margin-bottom:12px'
@@ -2973,10 +3044,40 @@ function renderLivestreamSummary(root) {
         metric('打开', num(latest.sessions)),
         metric('浏览量', num(latest.pageviews)),
         metric('在线', num(latest.online))));
+      var pwdInput = h('input', {
+        class: 'input', type: 'password', placeholder: '后台访问密码',
+        style: 'flex:1;min-width:140px'
+      });
+      var pwdBtn = h('button', { class: 'btn', type: 'button' },
+        data.has_password ? '更新密码' : '保存密码');
+      pwdBtn.addEventListener('click', function () {
+        if (!pwdInput.value.trim()) {
+          toast('请填写后台密码', 'warning');
+          return;
+        }
+        pwdBtn.disabled = true;
+        post('/api/tools/localwiki/password',
+          { password: pwdInput.value }).then(function (result) {
+            pwdInput.value = '';
+            toast(result.summary || '已保存', 'success');
+          }).catch(function (error) {
+            toast('保存失败：' + error.message, 'error');
+          }).then(function () { pwdBtn.disabled = false; });
+      });
+      var collectBtn2 = h('button', { class: 'btn primary', type: 'button' },
+        '采集今日');
+      collectBtn2.addEventListener('click', function () {
+        wikiAction(collectBtn2, '/api/tools/localwiki/collect', {});
+      });
+      analyticsCard.appendChild(h('div', { class: 'toolbar',
+        style: 'margin-bottom:8px' },
+        h('span', { class: 'muted small' },
+          data.has_password ? '后台密码已保存（加密，不回显）' : '尚未保存后台密码'),
+        pwdInput, pwdBtn, collectBtn2));
       analyticsCard.appendChild(h('div', {
         class: 'muted small', style: 'margin-bottom:8px'
       }, a.has_today ? '今日已采集'
-        : '今日未采集（桌面端「采集今日」）'));
+        : '今日未采集（点「采集今日」立即采集）'));
       var history = a.history || [];
       if (history.length) {
         var head = h('tr', null,
@@ -3043,7 +3144,7 @@ function renderLivestreamSummary(root) {
           h('span', { class: 'muted small' }, '源文档'), docSelect, openDoc),
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '站点数据直接读取「腾讯文档」已同步的本地表格；'
-          + '密码设置与「采集今日」在桌面端。')));
+          + '改端口仍在桌面端。')));
     }).catch(function (error) {
       setError(root, error, function () { renderLocalWiki(root); });
     });

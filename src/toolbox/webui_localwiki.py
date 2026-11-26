@@ -1,11 +1,17 @@
-"""WebUI 资料站（只读）：部署状态、站点访问统计与源文档链接。
+"""WebUI 资料站：部署状态、站点访问统计、源文档链接，以及部署 / 启停 / 采集。
 
-不拉代码、不部署、不启动服务、不采集统计；这些仍在桌面端。
+可执行：一键部署并启动（拉取私有仓库 → 装依赖 → 重建站点数据 → 构建前端 → 启动）、
+重建站点数据、启动 / 停止服务、采集今日统计、保存后台密码。
+GitHub 登录态、后台密码都复用桌面端已保存的凭据，不在页面回显。
 """
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
+
+_SERVICE = None
+_LOCK = threading.Lock()
 
 
 def _webwiki():
@@ -13,6 +19,15 @@ def _webwiki():
                                  credentials as wiki_creds, deploy,
                                  gitops, localimages, server)
     return analytics, wiki_cfg, wiki_creds, deploy, gitops, localimages, server
+
+
+def _service():
+    global _SERVICE
+    _, wiki_cfg, _, _, _, _, server = _webwiki()
+    with _LOCK:
+        if _SERVICE is None:
+            _SERVICE = server.SiteService(wiki_cfg.root_dir())
+        return _SERVICE
 
 
 def _ts(value) -> str:
@@ -147,5 +162,88 @@ def overview() -> dict:
             } for row in fetch_log],
         },
         "docs": docs,
-        "note": "只读：拉取代码、一键部署、启动 / 停止服务、采集统计与改端口仍在桌面端。",
+        "has_password": bool(analytics.has_password()),
+        "note": "可一键部署并启动、重建数据、启停服务与采集今日；改端口仍在桌面端。",
     }
+
+
+def deploy(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """一键部署并启动：拉代码 → 装依赖 → 重建站点数据 → 构建前端 → 启动服务。"""
+    analytics, wiki_cfg, wiki_creds, deploy_mod, _gitops, _images, server = \
+        _webwiki()
+    log = on_log or (lambda _msg: None)
+    creds = wiki_creds.load() or {}
+    token = str(creds.get("token") or "")
+    if not token:
+        raise ValueError("未登录 GitHub：请先在桌面端「资料站」登录")
+    root = wiki_cfg.root_dir()
+    cancel = is_cancelled or (lambda: False)
+
+    svc = _service()
+    if svc.running:
+        log("停止旧服务…")
+        svc.stop(log)
+
+    deploy_mod.deploy_all(
+        root, token, log,
+        progress=lambda step, total, label: log(f"[{step}/{total}] {label}"),
+        cancel=lambda: bool(cancel()))
+    if cancel():
+        raise ValueError("已取消部署")
+    log("启动服务…")
+    url = svc.start(log)
+    return {"url": url, "status": svc.status(),
+            "summary": "部署完成，站点已启动：" + url}
+
+
+def rebuild(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """只重建站点数据并构建前端（不拉代码、不装依赖）。"""
+    _a, wiki_cfg, _c, deploy_mod, _g, _i, _s = _webwiki()
+    log = on_log or (lambda _msg: None)
+    root = wiki_cfg.root_dir()
+    cancel = is_cancelled or (lambda: False)
+    log("重建站点数据…")
+    deploy_mod.sync_docs(root, log)
+    if cancel():
+        raise ValueError("已取消")
+    log("构建前端…")
+    deploy_mod.build_frontend(root, log)
+    return {"summary": "站点数据与前端已重建（如服务在运行，刷新页面即可）"}
+
+
+def start_service() -> dict:
+    svc = _service()
+    url = svc.start(lambda msg: None)
+    return {"url": url, "status": svc.status(), "summary": "服务已启动：" + url}
+
+
+def stop_service() -> dict:
+    svc = _service()
+    svc.stop(lambda msg: None)
+    return {"status": svc.status(), "summary": "服务已停止"}
+
+
+def collect_today(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    analytics, wiki_cfg, _c, _d, _g, _i, _s = _webwiki()
+    log = on_log or (lambda _msg: None)
+    scope = str(payload.get("scope") or wiki_cfg.analytics_scope() or "human")
+    row = analytics.collect(scope=scope, log=log)
+    return {
+        "date": row.get("date") or "",
+        "visitors": row.get("visitors"),
+        "sessions": row.get("sessions"),
+        "pageviews": row.get("pageviews"),
+        "online": row.get("online"),
+        "summary": (f"{row.get('date')} 访客 {row.get('visitors')} · "
+                    f"打开 {row.get('sessions')} · 浏览量 {row.get('pageviews')}"),
+    }
+
+
+def save_password(payload: dict) -> dict:
+    analytics, _c, _creds, _d, _g, _i, _s = _webwiki()
+    password = str(payload.get("password") or "").strip()
+    if not password:
+        raise ValueError("请填写后台密码")
+    if not analytics.save_password(password):
+        raise ValueError("密码保存失败（本机加密存储不可用）")
+    return {"has_password": True, "summary": "后台密码已保存（加密）"}
