@@ -21,6 +21,40 @@ from toolbox.browser import launch as pw_launch
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
+TICKET_PLATFORM_OPTIONS = (
+    ("damai", "大麦"),
+    ("showstart", "秀动"),
+    ("bilibili", "B站会员购"),
+)
+_TICKET_PLATFORM_LABELS = dict(TICKET_PLATFORM_OPTIONS)
+_TICKET_PLATFORM_ALIASES = {
+    **{key: key for key, _label in TICKET_PLATFORM_OPTIONS},
+    "bilibili_show": "bilibili",
+    "bili": "bilibili",
+}
+
+
+def ticket_platform_key(value: str) -> str:
+    """搜索键 / 演出实体平台键 → 统一的平台键；未知值返回空串。"""
+    return _TICKET_PLATFORM_ALIASES.get(str(value or "").strip(), "")
+
+
+def normalize_ticket_platforms(platforms=None) -> tuple[str, ...]:
+    """校验平台白名单；省略时全选，显式空列表不回退到全选。"""
+    if platforms is None:
+        return tuple(key for key, _label in TICKET_PLATFORM_OPTIONS)
+    if not isinstance(platforms, (list, tuple, set, frozenset)):
+        raise ValueError("平台选择格式无效，请重新勾选平台")
+    selected = set()
+    for value in platforms:
+        key = ticket_platform_key(value) if isinstance(value, str) else ""
+        if not key:
+            raise ValueError("平台只支持大麦 / 秀动 / B站会员购")
+        selected.add(key)
+    if not selected:
+        raise ValueError("请至少勾选一个平台")
+    return tuple(key for key, _label in TICKET_PLATFORM_OPTIONS if key in selected)
+
 
 @dataclass
 class TicketTier:
@@ -960,12 +994,20 @@ def detect_ticket_platform(url: str) -> tuple:
     return None, None
 
 
-def parse_ticket_url(url: str, keyword: str = "", *, scope: str = "all") -> list:
+def parse_ticket_url(url: str, keyword: str = "", *, scope: str = "all",
+                     platforms=None) -> list:
     """统一入口：URL 或关键词 → [ShowEvent]。
 
     scope='recent' 时只保留今天及以后的演出；无 URL 时用关键词走 B站会员购搜索。
+    platforms 为本次允许请求的平台，None 保持兼容全选；在请求前校验。
     """
+    selected = normalize_ticket_platforms(platforms)
     kind, pid = detect_ticket_platform(url)
+    key = ticket_platform_key((kind or "").split("_", 1)[0])
+    if not key and not kind and keyword.strip():
+        key = "bilibili"
+    if key and key not in selected:
+        raise ValueError(f"链接所属平台「{_TICKET_PLATFORM_LABELS[key]}」未勾选")
     if kind == "damai_artist":
         _name, events = parse_damai_artist(pid)
     elif kind == "damai_item":
@@ -1493,10 +1535,11 @@ def search_tickets_by_keyword(keyword: str, *,
                               platform: str = "all",
                               damai_artist_id: str = "",
                               showstart_artist_id: str = "",
-                              scope: str = "all") -> tuple:
+                              scope: str = "all", platforms=None) -> tuple:
     """跨平台统一关键词搜索 → ([ShowEvent], {platform: error_or_count})。
 
     platform: 'all' | 'bilibili' | 'damai' | 'showstart' —— 多平台时分别走各平台通道
+    platforms: 允许请求的平台列表；提供时优先于旧单平台参数，None 兼容旧调用。
     scope: 'all'（含历史）| 'recent'（只在售/即将开演）
 
     平台特性：
@@ -1510,6 +1553,9 @@ def search_tickets_by_keyword(keyword: str, *,
 
     失败时不抛错，会把错误信息塞到第二项 dict 里，方便 UI 多平台结果汇总展示。
     """
+    selected = normalize_ticket_platforms(
+        None if platform == "all" else [platform]
+    ) if platforms is None else normalize_ticket_platforms(platforms)
     keyword = (keyword or "").strip()
     if not keyword:
         return [], {"_error": "请输入关键词"}
@@ -1519,7 +1565,7 @@ def search_tickets_by_keyword(keyword: str, *,
     diag: dict = {}
 
     # 1. B 站会员购（主路径，API 关键词搜索）
-    if platform in ("all", "bilibili"):
+    if "bilibili" in selected:
         try:
             bili = search_bilibili_show(keyword)
             if scope == "recent":
@@ -1530,11 +1576,11 @@ def search_tickets_by_keyword(keyword: str, *,
             diag["bilibili"] = f"失败: {str(e)[:80]}"
 
     # 2. 大麦
-    if platform in ("all", "damai"):
+    if "damai" in selected:
         results.extend(_damai_scope_events(keyword, scope, damai_artist_id, diag))
 
     # 3. 秀动
-    if platform in ("all", "showstart"):
+    if "showstart" in selected:
         results.extend(_showstart_scope_events(
             keyword, scope, showstart_artist_id, diag))
 
