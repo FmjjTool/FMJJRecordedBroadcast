@@ -16,8 +16,7 @@ class TicketsService:
     def start_parse(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
-        if not str(payload.get("text") or "").strip():
-            raise ValueError("请输入票务链接或关键词")
+        payload = webui_tickets.prepare_payload(payload)
         job = self.jobs.submit(
             "tickets_parse",
             lambda task: webui_tickets.parse(
@@ -28,8 +27,7 @@ class TicketsService:
     def start_export(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
-        if not str(payload.get("text") or "").strip():
-            raise ValueError("请先解析演出后再导出")
+        payload = webui_tickets.prepare_payload(payload)
         job = self.jobs.submit(
             "tickets_export",
             lambda task: self._export_job(task, dict(payload)))

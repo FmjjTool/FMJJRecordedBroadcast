@@ -1537,6 +1537,13 @@ class CoverMakerPage(BasePage):
         trow.addWidget(self.load_tpl_btn, 1)
         lv.addLayout(trow)
 
+        self.automation_btn = QPushButton("批量补封面")
+        self.automation_btn.setProperty("variant", "secondary")
+        self.automation_btn.setToolTip("识别本地视频标题与日期，按当前样式生成同名封面，已有封面跳过")
+        self.automation_btn.clicked.connect(self._on_batch_cover)
+        self._register_icon(self.automation_btn, "robot")
+        lv.addWidget(self.automation_btn)
+
         lv.addStretch(1)
         scroll.setWidget(body)
         return scroll
@@ -1898,6 +1905,35 @@ class CoverMakerPage(BasePage):
 
     # ---------- 模板 ----------
 
+    def _template_snapshot(self, include_text: bool = False) -> Dict[str, Any]:
+        """把当前画布参数交给模板与无界面批量用例，不传递 Qt 页面状态。"""
+        return {
+            "version": TEMPLATE_VERSION,
+            "bg": str(self._bg_path) if self._bg_path else "",
+            "fields": {key: state.to_dict(include_text=include_text)
+                       for key, state in self.states.items()},
+            "fit_mode": self.fit_mode,
+            "y_shift": round(float(self.y_shift), 4),
+            "export_resolution": self.res_combo.currentText(),
+            "jpg_quality": self.quality_slider.value(),
+        }
+
+    def _on_batch_cover(self):
+        from shiboken6 import isValid
+        from gui_qt.cover_automation_dialog import CoverAutomationDialog
+
+        existing = getattr(self, "_automation_dialog", None)
+        if existing is not None and isValid(existing):
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        if self._bg_path is None:
+            self._toast("请先选择底图，再批量补封面", "warning")
+            return
+        self._automation_dialog = CoverAutomationDialog(self._template_snapshot(include_text=True), self)
+        self._automation_dialog.show()
+
     def _on_save_template(self):
         name, ok = QInputDialog.getText(self, "保存模板", "模板名称：",
                                         text="我的封面样式")
@@ -1912,9 +1948,7 @@ class CoverMakerPage(BasePage):
                 QMessageBox.StandardButton.No)
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        payload = {"version": TEMPLATE_VERSION,
-                   "bg": str(self._bg_path) if self._bg_path else "",
-                   "fields": template_dict_from_states(self.states)}
+        payload = self._template_snapshot()
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -1940,6 +1974,24 @@ class CoverMakerPage(BasePage):
                 self._bg_path = bg_file
             else:
                 warnings.append(f"模板底图已不存在：{bg_file.name}，保留当前底图")
+        if isinstance(data, dict):
+            fit = data.get("fit_mode")
+            if fit in (FIT_CROP, FIT_CONTAIN):
+                self.fit_combo.setCurrentIndex(0 if fit == FIT_CROP else 1)
+            resolution = data.get("export_resolution")
+            if resolution in EXPORT_RESOLUTIONS:
+                self.res_combo.setCurrentText(resolution)
+            if "y_shift" in data:
+                try:
+                    self.y_spin.setValue(max(-0.3, min(0.3, float(data["y_shift"]))) * 100.0)
+                except (TypeError, ValueError):
+                    warnings.append("模板整体位置无效，保留当前位置")
+            if "jpg_quality" in data:
+                try:
+                    self.quality_slider.setValue(max(JPG_QUALITY_MIN, min(JPG_QUALITY_MAX,
+                                                                          int(data["jpg_quality"]))))
+                except (TypeError, ValueError):
+                    warnings.append("模板 JPG 质量无效，保留当前质量")
         for key in FIELD_KEYS:
             self.panels[key].set_state(self.states[key])
         self._render_preview()

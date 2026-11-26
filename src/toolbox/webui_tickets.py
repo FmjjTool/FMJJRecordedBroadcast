@@ -42,6 +42,8 @@ def _count_images(folder: Path) -> int:
 
 
 def overview() -> dict:
+    import tickets as tickets_mod
+
     base = _base()
     payload = {}
     if (base / "_latest.json").is_file():
@@ -80,6 +82,8 @@ def overview() -> dict:
             })
     folders.sort(key=lambda item: item["mtime"], reverse=True)
     return {
+        "platform_options": [{"key": key, "label": label}
+                             for key, label in tickets_mod.TICKET_PLATFORM_OPTIONS],
         "saved_at": str(payload.get("saved_at") or ""),
         "events": events,
         "total": len(events),
@@ -106,13 +110,23 @@ def _event_row(event) -> dict:
     }
 
 
+def prepare_payload(payload: dict) -> dict:
+    """在提交后台任务前校验平台范围，显式空选不能退回全部。"""
+    import tickets as tickets_mod
+
+    selected = tickets_mod.normalize_ticket_platforms(payload.get("platforms"))
+    text = str(payload.get("text") or "").strip() or "封茗囧菌"
+    return {"text": text, "platforms": list(selected),
+            "scope": "recent" if payload.get("scope") == "recent" else "all"}
+
+
 def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
     """解析票务链接或关键词，保存中间层缓存并返回演出列表。"""
     import tickets as tickets_mod
 
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        raise ValueError("请输入票务链接或关键词")
+    payload = prepare_payload(payload)
+    text = payload["text"]
+    platforms = payload["platforms"]
     scope = str(payload.get("scope") or "all")
     if scope not in ("all", "recent"):
         scope = "all"
@@ -127,7 +141,7 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
         kind, _ = tickets_mod.detect_ticket_platform(text)
         if kind:
             say(f"识别为 {kind} 链接，开始解析…")
-            result = tickets_mod.parse_ticket_url(text, scope=scope)
+            result = tickets_mod.parse_ticket_url(text, scope=scope, platforms=platforms)
         else:
             looks_like_url = ("://" in text or "/" in text
                               or any(ch.isdigit() for ch in text[:5]))
@@ -135,8 +149,9 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
                 raise ValueError(
                     "无法识别的票务链接（支持大麦艺人/演出、秀动艺人/事件、"
                     "B站会员购搜索/项目）")
-            say("按关键词三平台搜索…")
-            result = tickets_mod.search_tickets_by_keyword(text, scope=scope)
+            say("按关键词在勾选的平台内搜索…")
+            result = tickets_mod.search_tickets_by_keyword(
+                text, scope=scope, platforms=platforms)
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001 - 平台接口异常类型较多
@@ -158,6 +173,7 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
         "events": rows,
         "total": len(rows),
         "scope": scope,
+        "platforms": platforms,
         "scope_label": scope_cn,
         "diag": {str(key): value for key, value in (diag or {}).items()},
         "summary": f"解析到 {len(rows)} 场演出（{scope_cn}）",
@@ -171,16 +187,17 @@ def export(payload: dict, on_log=None, is_cancelled=None) -> dict:
     """按当前条件解析并导出全量 JSON（含演出图片下载）。"""
     import tickets as tickets_mod
 
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        raise ValueError("请输入票务链接或关键词")
+    payload = prepare_payload(payload)
+    text = payload["text"]
+    platforms = payload["platforms"]
     scope = "recent" if str(payload.get("scope")) == "recent" else "all"
     if is_cancelled and is_cancelled():
         raise ValueError("任务已取消")
     try:
         kind, _ = tickets_mod.detect_ticket_platform(text)
-        raw = (tickets_mod.parse_ticket_url(text, scope=scope) if kind
-               else tickets_mod.search_tickets_by_keyword(text, scope=scope))
+        raw = (tickets_mod.parse_ticket_url(text, scope=scope, platforms=platforms) if kind
+               else tickets_mod.search_tickets_by_keyword(
+                   text, scope=scope, platforms=platforms))
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001

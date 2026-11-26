@@ -89,6 +89,8 @@ class _ComponentsSectionCard(ToolSectionCard):
         layout = self.layout()
         layout.removeItem(self.heading_layout)
         layout.removeItem(self.content_layout)
+        self.heading_layout.setParent(None)
+        self.content_layout.setParent(None)
 
         self.toggle_button = QPushButton(self)
         self.toggle_button.setObjectName("settingsComponentsToggle")

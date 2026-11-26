@@ -480,6 +480,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tickets.start_export(dict(req.json or {}))
     server.post("/api/tickets/export", start_tickets_export)
 
+    server.get("/api/tools/shopping/options", lambda req: shopping.options())
+
     def start_shopping_parse(req):
         return shopping.start_parse(dict(req.json or {}))
     server.post("/api/tools/shopping/parse", start_shopping_parse)

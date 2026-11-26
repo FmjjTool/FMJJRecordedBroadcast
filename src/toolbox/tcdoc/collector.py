@@ -611,6 +611,13 @@ def _finish_preview(doc: dict, page, text: str, pages: list[dict],
     try:
         from . import archive
         result["save"] = archive.save_preview(doc, pages, text, complete=complete)
+        # 失败页/暂时缺失的图片由存档层保留；立即用实际提交结果展示，
+        # 不让本次失败的临时清单遮住旧的完整正文和图片。
+        stored_pages = archive.pages_of(str(doc.get("key") or ""))
+        if stored_pages:
+            result["pages"] = stored_pages
+            result["text"] = (join_pages(stored_pages) if len(stored_pages) > 1
+                              else str(stored_pages[0].get("text") or ""))
     except Exception as exc:  # noqa: BLE001 - 本地存档失败不能挡住预览
         result["save_error"] = str(exc)[:200]
     return result

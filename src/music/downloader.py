@@ -1,14 +1,7 @@
 """
-四平台音乐下载器（QQ/酷狗/酷我/5sing）。
+音乐下载用例：统一选择最高可用档，并保留平台实际返回的音质与试听状态。
 
-直链策略（2026-08 实测）：
-- 酷狗: m.kugou.com getSongInfo playInfo → sharefs 直链（免费歌 128k 全曲，游客上限即 128k）
-- 酷我: Web playUrl（Secret 头，算法见 utils.kuwo_secret）→ 免费歌 320k MP3 全曲；
-        VIP 歌回退 antiserver convert_url3 wma → 11.3s 试听（下载后按时长判别）
-- 5sing: mobileapi getSongUrl → hqurl 192k / lqurl 128k 全曲，游客可用
-- QQ: vkey 接口游客+普通 Cookie 均被拒（860100005），仅支持解析，不支持下载
-
-download_song_smart：失败/仅试听时自动换源（酷我→酷狗→网易云），跨平台找同名免费曲。
+平台授权与文件定位由适配器处理；指定档位不静默降低，自动换源保留音质要求。
 """
 
 from __future__ import annotations
@@ -56,12 +49,69 @@ def _detect_preview(content: bytes, expected_seconds: int) -> bool:
         return False
     try:
         import io
-        from mutagen.mp3 import MP3
-        real = MP3(io.BytesIO(content)).info.length
+        import mutagen
+        audio = mutagen.File(io.BytesIO(content))
+        real = audio.info.length
     except Exception:
         # 无法解析时长时，按大小粗判：128k 试听约 180KB
         return expected_seconds > 60 and len(content) < 400_000
-    return real < _PREVIEW_SECONDS
+    return real < _PREVIEW_SECONDS or real + 5 < expected_seconds * 0.5
+
+
+def normalize_quality(quality: str = "") -> str:
+    """兼容桌面旧值及 Web 音质值；空值统一为最高可用。"""
+    value = str(quality or "").strip().lower()
+    value = {"": "highest", "default": "highest", "lossless": "flac",
+             "exhigh": "320k", "higher": "192k", "standard": "128k",
+             "sq": "320k", "hq": "192k", "lq": "128k",
+             "128": "128k", "320": "320k"}.get(value, value)
+    if value not in {"highest", "flac", "320k", "192k", "128k"}:
+        raise ValueError("不支持该音质，请重新选择")
+    return value
+
+
+def _quality_matches(requested: str, ext: str, actual: str) -> bool:
+    if requested == "highest":
+        return True
+    lossless = ext.lower() in (".flac", ".ape")
+    if requested == "flac":
+        return lossless
+    if lossless:
+        return True
+    rate = re.search(r"(\d+(?:\.\d+)?)\s*k", actual, re.I)
+    return bool(rate and float(rate.group(1)) >= int(requested[:-1]) * 0.95)
+
+
+def _audio_details(content: bytes, ext: str) -> tuple[str, str]:
+    """从媒体头确认格式/码率，不以所选音质冒充实际音质。"""
+    import io
+    import mutagen
+    if content.startswith(b"fLaC"):
+        ext = ".flac"
+    elif content.startswith(b"MAC "):
+        ext = ".ape"
+    elif content.startswith(b"OggS"):
+        ext = ".ogg"
+    elif content.startswith(b"RIFF") and content[8:12] == b"WAVE":
+        ext = ".wav"
+    elif content.startswith(b"ID3") or (len(content) > 1 and content[0] == 255 and content[1] & 224 == 224):
+        ext = ".mp3"
+    elif content[4:8] == b"ftyp":
+        ext = ".m4a"
+    try:
+        audio = mutagen.File(io.BytesIO(content))
+        if audio is not None:
+            kinds = {"FLAC": ".flac", "MonkeysAudio": ".ape", "MP3": ".mp3",
+                     "MP4": ".m4a", "ASF": ".wma", "WAVE": ".wav"}
+            ext = kinds.get(type(audio).__name__, ext)
+            if ext in (".flac", ".ape"):
+                return ext, ext[1:].upper()
+            rate = getattr(audio.info, "bitrate", 0) or 0
+            if rate:
+                return ext, f"{round(rate / 1000)}kbps"
+    except Exception:
+        pass
+    return ext, ext[1:].upper() if ext in (".flac", ".ape") else ""
 
 
 def _save(content: bytes, base_name: str, ext: str, out_dir: str) -> str:
@@ -103,16 +153,19 @@ def _download_cover(cover_url: str, referer: str, audio_path: str) -> str:
 
 
 def _download_to(url: str, referer: str, base_name: str, ext: str, out_dir: str,
-                 expected_seconds: int = 0) -> DownloadResult:
+                 expected_seconds: int = 0, requested_quality: str = "highest") -> DownloadResult:
     with get_client(timeout=60) as client:
         resp = client.get(url, headers=make_headers(referer=referer))
     if resp.status_code != 200 or len(resp.content) < 1024:
         return DownloadResult(error_message=f"直链获取失败(HTTP {resp.status_code})")
+    if resp.content.lstrip()[:1] in (b"<", b"{", b"["):
+        return DownloadResult(error_message="下载失败：平台返回了错误页面，请稍后重试")
+    ext, actual = _audio_details(resp.content, ext)
+    if not _quality_matches(requested_quality, ext, actual):
+        return DownloadResult(error_message="下载失败：实际文件未达到所选音质，请选择最高可用或其他档位")
     preview = _detect_preview(resp.content, expected_seconds)
     path = _save(resp.content, base_name, ext, out_dir)
-    if preview:
-        return DownloadResult(success=True, file_path=path, is_preview=True)
-    return DownloadResult(success=True, file_path=path)
+    return DownloadResult(success=True, file_path=path, is_preview=preview, quality=actual)
 
 
 # ---------------------------------------------------------------------------
@@ -120,23 +173,8 @@ def _download_to(url: str, referer: str, base_name: str, ext: str, out_dir: str,
 
 
 def _url_kugou(song: SongInfo, quality: str) -> _UrlResult:
-    with get_client() as client:
-        resp = client.get(
-            "http://m.kugou.com/app/i/getSongInfo.php",
-            params={"cmd": "playInfo", "hash": song.song_id},
-            headers=make_headers(referer="http://m.kugou.com/"))
-    data = safe_json(resp.text) or {}
-    url = data.get("url") or ""
-    if not url:
-        if data.get("songName") is None and data.get("singerName") is None:
-            return _UrlResult(error="酷狗未找到该歌曲（可能已下架）")
-        priv = data.get("privilege") or data.get("128privilege")
-        if priv == 10 or data.get("pay_type") in (1, 3):
-            return _UrlResult(error="酷狗 VIP 付费歌曲，游客无法获取直链")
-        return _UrlResult(error="酷狗未返回播放直链（歌曲可能已下架）")
-    ext = (data.get("extName") or "mp3").lower()
-    return _UrlResult(url=url, ext=ext if ext.startswith(".") else f".{ext}",
-                      quality=f"{data.get('bitRate', 128)}kbps")
+    from .kugou_download import resolve_kugou_url
+    return resolve_kugou_url(song, quality)
 
 
 def _url_kuwo_web(song: SongInfo) -> _UrlResult:
@@ -162,15 +200,21 @@ def _url_kuwo_web(song: SongInfo) -> _UrlResult:
     url = (data.get("data") or {}).get("url") or ""
     if not url:
         return _UrlResult(error="")
-    return _UrlResult(url=url, ext=".mp3", quality="320kbps")
+    return _UrlResult(url=url, ext=".mp3")
 
 
 def _url_kuwo(song: SongInfo, quality: str) -> _UrlResult:
-    """酷我直链：320k 走 Web playUrl（Secret），128k / 失败回退 antiserver WMA。"""
+    """优先平台已提供的授权音质文件；兼容旧播放通道并检测实际媒体。"""
+    from .kuwo_download import resolve_url
+    resolved = resolve_url(song, quality)
+    if resolved.url or quality == "flac":
+        return resolved
     if quality != "128k":
         got = _url_kuwo_web(song)
         if got.url:
             return got
+        if quality != "highest":
+            return resolved
     with get_client() as client:
         resp = client.get(
             "https://antiserver.kuwo.cn/anti.s",
@@ -198,33 +242,38 @@ def _url_fivesing(song: SongInfo, quality: str) -> _UrlResult:
             headers=make_headers(referer="https://5sing.kugou.com/"))
     data = safe_json(resp.text) or {}
     payload = data.get("data") or {}
-    want_hq = quality != "lq"
-    url = (payload.get("hqurl") if want_hq else "") or payload.get("lqurl") or ""
-    if not url:
-        return _UrlResult(error="5sing 未返回播放直链")
-    ext = payload.get("hqext") or payload.get("lqext") or "mp3"
-    ext = (ext or "mp3").lower().lstrip(".")
-    tag = "192kbps" if url == payload.get("hqurl") else "128kbps"
-    return _UrlResult(url=url, ext=f".{ext}", quality=tag)
+    quality = normalize_quality(quality)
+    levels = {"320k": ("sq", "320kbps"), "192k": ("hq", "192kbps"),
+              "128k": ("lq", "128kbps")}
+    candidates = list(levels.values()) if quality == "highest" else [levels.get(quality)]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        prefix, tag = candidate
+        url = payload.get(f"{prefix}url") or ""
+        if url:
+            ext = str(payload.get(f"{prefix}ext") or "mp3").lower().lstrip(".")
+            return _UrlResult(url=url, ext=f".{ext}", quality=tag)
+    return _UrlResult(error="5sing 未提供所选音质，请选择最高可用或其他档位")
 
 
 def _url_qq(song: SongInfo, quality: str) -> _UrlResult:
-    return _UrlResult(error="QQ音乐直链接口已收紧（需 VIP 登录态），当前仅支持解析，暂不支持下载")
+    from .qq_download import resolve_url
+    return resolve_url(song, quality)
 
 
 def _url_kugou_lite(song: SongInfo, quality: str) -> _UrlResult:
     """酷狗概念版直链：v5/url（登录态 + 概念版免费 VIP 可下高音质/无损）。"""
-    from .scrapers.kugou_lite import KuGouLiteClient, QUALITY_MAP
-    q = QUALITY_MAP.get(quality, "128")
+    from .scrapers.kugou_lite import KuGouLiteClient
     try:
-        url, ext = KuGouLiteClient().song_url(song.song_id, q)
+        return KuGouLiteClient().song_url_details(
+            song.song_id, quality, album_id=song.album_id,
+            album_audio_id=song.extra.get("album_audio_id") or song.extra.get("AlbumAudioID") or 0,
+            metadata=song.extra)
     except RuntimeError as e:
         return _UrlResult(error=f"酷狗概念版：{e}")
     except Exception as e:
         return _UrlResult(error=f"酷狗概念版请求异常：{e}")
-    ext = (ext or "mp3").lower().lstrip(".")
-    tag = {"128": "128kbps", "320": "320kbps", "flac": "FLAC"}.get(q, q)
-    return _UrlResult(url=url, ext=f".{ext}", quality=tag)
 
 
 _RESOLVERS = {
@@ -256,14 +305,24 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
     if not song.song_id:
         return DownloadResult(error_message="缺少歌曲 ID")
 
+    try:
+        quality = normalize_quality(quality)
+    except ValueError as exc:
+        return DownloadResult(error_message=str(exc))
     got = resolver(song, quality)
     if got.error:
         return DownloadResult(error_message=got.error)
+    if not got.url:
+        return DownloadResult(error_message="平台未返回可下载的音频，请稍后重试")
+    if got.quality and not _quality_matches(quality, got.ext, got.quality):
+        return DownloadResult(error_message="平台未提供所选音质，请选择最高可用或其他档位")
 
     base = f"{_safe_name(song.singer)} - {_safe_name(song.song_name)}".strip()
     base = re.sub(r"\s+", " ", base)
-    referer = got.referer or _REFERERS[song.platform]
-    result = _download_to(got.url, referer, base, got.ext, out_dir, song.duration)
+    referer = getattr(got, "referer", "") or _REFERERS[song.platform]
+    result = _download_to(got.url, referer, base, got.ext, out_dir, song.duration, quality)
+    result.quality = result.quality or got.quality
+    result.is_preview = result.is_preview or got.is_preview
     if result.success and song.cover_url:
         _download_cover(song.cover_url, referer, result.file_path)
     return result
@@ -271,23 +330,17 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
 
 def quality_options(platform: str) -> list[tuple[str, str]]:
     """(值, 显示名) 列表。"""
+    highest = [("highest", "最高可用")]
     if platform == "5sing":
-        return [("hq", "192k 高音质"), ("lq", "128k 标准")]
-    if platform == "kugou":
-        return [("128k", "128k（游客上限）")]
-    if platform == "kuwo":
-        return [("320k", "320k MP3 高音质"), ("128k", "128k WMA")]
-    if platform == "kugou_lite":
-        return [("128k", "128k MP3"), ("320k", "320k MP3"), ("flac", "FLAC 无损")]
-    if platform == "qq":
-        return [("default", "默认（QQ 直链需 VIP，下载自动换源）")]
+        return highest + [("320k", "320k SQ"), ("192k", "192k HQ"), ("128k", "128k 标准")]
+    if platform in ("kugou", "kuwo", "kugou_lite", "qq"):
+        return highest + [("flac", "无损 FLAC / APE"), ("320k", "320k 高音质"), ("128k", "128k 标准")]
     return [("default", "默认")]
 
 
 def default_quality(platform: str) -> str:
     """平台默认音质（换源下载到其他平台时使用该平台最优档）。"""
-    return {"kuwo": "320k", "kugou": "128k", "5sing": "hq",
-            "kugou_lite": "320k"}.get(platform, "")
+    return "highest" if platform in _RESOLVERS else ""
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +425,7 @@ def _file_is_preview(path: str, expected_seconds: int) -> bool:
         return False
 
 
-def _try_netease(song: SongInfo, out_dir: str) -> Optional[DownloadResult]:
+def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest") -> Optional[DownloadResult]:
     """网易云兜底：用已存 Cookie 搜索下载（Cookie 在则可用，无则跳过）。"""
     try:
         from auth import get_netease_cookie
@@ -395,12 +448,18 @@ def _try_netease(song: SongInfo, out_dir: str) -> Optional[DownloadResult]:
         return None
     try:
         dl = MusicDownloader(download_dir=out_dir, cookie_string=content)
-        r = dl.download_music_file(int(best["id"]), "exhigh")
+        level = {"highest": "lossless", "flac": "lossless", "320k": "exhigh",
+                 "192k": "higher", "128k": "standard"}[quality]
+        r = dl.download_music_file(int(best["id"]), level)
     except Exception:
         return None
     if r and r.success and r.file_path:
+        with open(r.file_path, "rb") as stream:
+            ext, actual = _audio_details(stream.read(), os.path.splitext(r.file_path)[1])
+        if not _quality_matches(quality, ext, actual):
+            return None
         return DownloadResult(success=True, file_path=r.file_path,
-                              quality="exhigh", via_platform="网易云",
+                              quality=actual, via_platform="网易云",
                               is_preview=_file_is_preview(r.file_path, song.duration or 0))
     return None
 
@@ -408,6 +467,10 @@ def _try_netease(song: SongInfo, out_dir: str) -> Optional[DownloadResult]:
 def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
                         fallback: bool = True) -> DownloadResult:
     """下载一首歌，失败或仅试听时自动换源：酷我→酷狗→网易云。"""
+    try:
+        quality = normalize_quality(quality)
+    except ValueError as exc:
+        return DownloadResult(error_message=str(exc))
     result = download_song(song, out_dir, quality)
     if result.success and not result.is_preview:
         return result
@@ -423,7 +486,8 @@ def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
         if cand is None:
             continue
         try:
-            r = download_song(cand, out_dir, default_quality(pf))
+            target_quality = "320k" if quality == "192k" and pf != "5sing" else quality
+            r = download_song(cand, out_dir, target_quality)
         except Exception:
             continue
         if r.success and not r.is_preview:
@@ -432,7 +496,7 @@ def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
         if r.success and best is None:
             best = r
 
-    nr = _try_netease(song, out_dir)
+    nr = _try_netease(song, out_dir, quality)
     if nr is not None:
         if nr.success and not nr.is_preview:
             return nr

@@ -8948,13 +8948,39 @@ function renderLivestreamSummary(root) {
     });
   }
 
+  function buildParserPlatformRange(kind, options, changed) {
+    state.parserPlatforms = state.parserPlatforms || {};
+    var saved = state.parserPlatforms[kind];
+    var checks = [];
+    var row = h('div', { class: 'toolbar', style: 'margin-top:8px' },
+      h('span', { class: 'muted small' }, '平台范围'));
+    (options || []).forEach(function (item) {
+      var check = h('input', { type: 'checkbox', value: item.key,
+        checked: !Array.isArray(saved) || saved.indexOf(item.key) >= 0 });
+      checks.push(check);
+      check.addEventListener('change', function () {
+        state.parserPlatforms[kind] = selected();
+        changed();
+      });
+      row.appendChild(h('label', { class: 'check' }, check, item.label));
+    });
+    function selected() {
+      return checks.filter(function (check) { return check.checked; })
+        .map(function (check) { return check.value; });
+    }
+    return { element: row, selected: selected,
+      setBusy: function (busy) {
+        checks.forEach(function (check) { check.disabled = busy; });
+      } };
+  }
+
   function renderTickets(root) {
     setLoading(root, '正在读取票务缓存…');
     api('/api/tickets').then(function (data) {
       root.replaceChildren();
       var parseInput = h('input', {
         class: 'input grow',
-        placeholder: '票务链接或关键词（留空可按关键词搜索）'
+        placeholder: '票务链接或关键词（留空搜索封茗囧菌）'
       });
       var scopeSel = h('select', { class: 'select' },
         h('option', { value: 'recent' }, '近期（在售）'),
@@ -8964,11 +8990,18 @@ function renderLivestreamSummary(root) {
       var resultHost = h('div', { style: 'margin-top:8px' });
       var jobHost = h('div');
       var running = false;
+      var platformHint = h('div', { class: 'muted small', style: 'margin-top:6px' });
+      var platformPicker = buildParserPlatformRange(
+        'tickets', data.platform_options, sync);
 
       function sync() {
-        parseBtn.disabled = running;
-        exportBtn.disabled = running || !parseInput.value.trim();
-        parseBtn.textContent = running ? '处理中…' : '解析演出';
+        var emptySelection = !platformPicker.selected().length;
+        parseBtn.disabled = running || emptySelection;
+        exportBtn.disabled = running || emptySelection;
+        scopeSel.disabled = running;
+        platformPicker.setBusy(running);
+        platformHint.textContent = emptySelection ? '请至少勾选一个平台' : '';
+        parseBtn.textContent = running ? '解析中…' : '解析演出';
       }
       function drawEvents(rows) {
         if (!rows.length) {
@@ -9000,10 +9033,12 @@ function renderLivestreamSummary(root) {
       }
       parseBtn.addEventListener('click', function () {
         if (running) return;
+        if (!platformPicker.selected().length) { sync(); return; }
         running = true;
         sync();
         post('/api/tickets/parse', {
-          text: parseInput.value.trim(), scope: scopeSel.value
+          text: parseInput.value.trim(), scope: scopeSel.value,
+          platforms: platformPicker.selected()
         }).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
             running = false;
@@ -9030,14 +9065,12 @@ function renderLivestreamSummary(root) {
       });
       exportBtn.addEventListener('click', function () {
         if (running) return;
-        if (!parseInput.value.trim()) {
-          toast('请先填写链接或关键词', 'warning');
-          return;
-        }
+        if (!platformPicker.selected().length) { sync(); return; }
         running = true;
         sync();
         post('/api/tickets/export', {
-          text: parseInput.value.trim(), scope: scopeSel.value
+          text: parseInput.value.trim(), scope: scopeSel.value,
+          platforms: platformPicker.selected()
         }).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
             running = false;
@@ -9070,9 +9103,10 @@ function renderLivestreamSummary(root) {
           h('span', { style: 'flex:1' }),
           h('span', { class: 'muted small' },
             data.saved_at ? '最近解析 ' + data.saved_at : '尚未解析')),
+        platformPicker.element, platformHint,
         h('div', { class: 'muted small', style: 'margin-top:6px' },
           '支持大麦艺人/演出、秀动艺人/事件、B站会员购搜索或项目；'
-          + '也可直接输入关键词走三平台搜索。导出会把全量 JSON 与图片写入「票务演出」目录。'),
+          + '关键词与链接仅请求勾选的平台。导出按相同平台范围写入全量 JSON 与图片到「票务演出」目录。'),
         resultHost, jobHost));
       var events = data.events || [];
       if (!events.length) {
@@ -9156,10 +9190,10 @@ function renderLivestreamSummary(root) {
     root.appendChild(host);
 
     function buildShoppingParse(reload) {
-      var platformSel = h('select', { class: 'select' },
-        h('option', { value: 'taobao' }, '淘宝（店铺 / 商品）'),
-        h('option', { value: 'douyin' }, '抖音商品'),
-        h('option', { value: 'bili' }, 'B站小店'));
+      var platformPicker = null;
+      var platformHost = h('div');
+      var platformHint = h('div', { class: 'muted small', style: 'margin-top:6px' },
+        '正在读取平台范围…');
       var input = h('textarea', {
         class: 'textarea', rows: '3',
         placeholder: '店铺 / 商品链接或分享文案（抖音可一次多行/多条分享）'
@@ -9168,22 +9202,41 @@ function renderLivestreamSummary(root) {
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
+      function sync() {
+        var hasSelection = platformPicker && platformPicker.selected().length;
+        btn.disabled = running || !hasSelection;
+        btn.textContent = running ? '解析中…' : '开始解析';
+        if (platformPicker) {
+          platformPicker.setBusy(running);
+          platformHint.textContent = hasSelection
+            ? '在勾选平台内自动识别；混合输入一次解析首个匹配平台'
+            : '请至少勾选一个平台';
+        }
+      }
+      api('/api/tools/shopping/options').then(function (data) {
+        platformPicker = buildParserPlatformRange(
+          'shopping', data.platform_options, sync);
+        platformHost.replaceChildren(platformPicker.element);
+        sync();
+      }).catch(function (error) {
+        platformHint.textContent = '读取平台范围失败：' + error.message + '，请刷新后重试';
+      });
+      sync();
       btn.addEventListener('click', function () {
         if (running) return;
+        if (!platformPicker || !platformPicker.selected().length) { sync(); return; }
         if (!input.value.trim()) {
           toast('请粘贴链接或分享文案', 'warning');
           return;
         }
         running = true;
-        btn.disabled = true;
-        btn.textContent = '解析中…';
+        sync();
         post('/api/tools/shopping/parse', {
-          platform: platformSel.value, text: input.value
+          platforms: platformPicker.selected(), text: input.value
         }).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
             running = false;
-            btn.disabled = false;
-            btn.textContent = '开始解析';
+            sync();
             var outcome = job.result || {};
             toast(outcome.summary || '解析完成',
               outcome.failures && outcome.failures.length ? 'warning' : 'success');
@@ -9208,6 +9261,8 @@ function renderLivestreamSummary(root) {
             });
             resultHost.replaceChildren(
               h('div', { class: 'muted small', style: 'margin-bottom:6px' },
+                outcome.selection_note || ''),
+              h('div', { class: 'muted small', style: 'margin-bottom:6px' },
                 (outcome.shop && outcome.shop.name
                   ? outcome.shop.name + ' · ' : '') + items.length + ' 件商品'),
               h('div', { class: 'table-wrap' },
@@ -9218,8 +9273,7 @@ function renderLivestreamSummary(root) {
             cancelable: true,
             onSettled: function (job) {
               running = false;
-              btn.disabled = false;
-              btn.textContent = '开始解析';
+              sync();
               if (job.status === 'error') {
                 toast('解析失败：' + (job.error || '未知错误'), 'error');
               }
@@ -9227,17 +9281,17 @@ function renderLivestreamSummary(root) {
           });
         }).catch(function (error) {
           running = false;
-          btn.disabled = false;
-          btn.textContent = '开始解析';
+          sync();
           toast('解析失败：' + error.message, 'error');
         });
       });
       return h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'row-title' }, '解析商品'),
+        input, platformHost, platformHint,
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '平台'), platformSel, btn,
           h('span', { class: 'muted small' },
-            '淘宝需要登录态；抖音 / B站按公开接口解析。')),
+            '淘宝需要登录态；抖音 / B站按公开接口解析。'),
+          h('span', { style: 'flex:1' }), btn),
         input, resultHost, jobHost);
     }
 

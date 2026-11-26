@@ -9,14 +9,13 @@ class ShoppingService:
     def __init__(self, jobs=None):
         self.jobs = jobs
 
+    def options(self) -> dict:
+        return webui_shopping.options()
+
     def start_parse(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
-        platform = str(payload.get("platform") or "")
-        if platform not in ("taobao", "douyin", "bili"):
-            raise ValueError("平台只支持淘宝 / 抖音 / B站小店")
-        if not str(payload.get("text") or "").strip():
-            raise ValueError("请粘贴链接或分享文案")
+        payload = webui_shopping.prepare_payload(payload)
         job = self.jobs.submit(
             "shopping_parse",
             lambda task: webui_shopping.parse(

@@ -27,7 +27,7 @@ class UrlResult:
 _DETAIL_URL = "https://m.kuwo.cn/newh5/singles/songinfoandlrc"
 _QUALITIES = {"highest", "flac", "320k", "128k"}
 _AUDIO_FORMATS = {"flac", "ape", "wav", "mp3", "ogg", "aac", "m4a", "wma"}
-_LOSSLESS = {"flac", "ape", "wav"}
+_LOSSLESS = {"flac", "ape"}
 _MAX_DETAIL_CHARS = 2_000_000
 
 
@@ -78,7 +78,7 @@ def _bitrate(file: FileInfo) -> int:
 def _rank(file: FileInfo) -> tuple[int, int]:
     ext = _format(file)
     if ext in _LOSSLESS:
-        return 1, {"flac": 3, "ape": 2, "wav": 1}[ext]
+        return 1, {"flac": 3, "ape": 2}[ext]
     return 0, _bitrate(file)
 
 
@@ -90,7 +90,7 @@ def _pick(files: list[FileInfo], quality: str) -> UrlResult | None:
         rate = _bitrate(file)
         if not ext or not url:
             continue
-        if quality == "flac" and ext != "flac":
+        if quality == "flac" and ext not in _LOSSLESS:
             continue
         if quality in {"320k", "128k"}:
             if ext != "mp3" or rate != int(quality[:-1]) * 1000:
@@ -152,7 +152,8 @@ def resolve_url(song: SongInfo, quality: str = "highest") -> UrlResult:
         selected_rank = max((_rank(f) for f in files if _safe_audio_url(f.url)
                              and _format(f)), default=(-1, 0))
         if quality != "highest" or not any(
-                _format(f) and _rank(f) > selected_rank for f in files):
+                _format(f) and (not f.url or _safe_audio_url(f.url))
+                and _rank(f) > selected_rank for f in files):
             return selected
     detailed, error = _detail_files(song_id)
     selected = _pick(files + detailed, quality)
@@ -160,5 +161,5 @@ def resolve_url(song: SongInfo, quality: str = "highest") -> UrlResult:
         return selected
     if error:
         return UrlResult(error=error)
-    label = {"flac": "FLAC 无损", "320k": "320kbps MP3", "128k": "128kbps MP3"}.get(quality, "可用")
+    label = {"flac": "FLAC/APE 无损", "320k": "320kbps MP3", "128k": "128kbps MP3"}.get(quality, "可用")
     return UrlResult(error=f"酷我未提供{label}下载地址（可能受歌曲权限或接口限制）")

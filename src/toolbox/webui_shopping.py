@@ -9,11 +9,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_PLATFORMS = {
-    "taobao": "淘宝",
-    "douyin": "抖音",
-    "bili": "B站小店",
-}
+from toolbox.shopping_parse import (
+    SHOPPING_PLATFORM_OPTIONS, normalize_shopping_platforms, plan_shopping_parse,
+)
+
+
+def options() -> dict:
+    return {"platform_options": [{"key": key, "label": label}
+                                 for key, label in SHOPPING_PLATFORM_OPTIONS]}
+
+
+def prepare_payload(payload: dict) -> dict:
+    """兼容旧单平台参数，所有调用在读取登录态/网络请求前走同一计划。"""
+    requested = payload.get("platforms") if "platforms" in payload else (
+        [payload["platform"]] if payload.get("platform") else None)
+    selected = normalize_shopping_platforms(requested)
+    text = str(payload.get("text") or "").strip()
+    plan_shopping_parse(text, selected)
+    return {"text": text, "platforms": list(selected)}
 
 
 def _cookie(platform: str) -> str:
@@ -26,12 +39,9 @@ def _cookie(platform: str) -> str:
 
 def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
     """解析购物链接 / 分享文案，返回商品行并写入桌面同款产物目录。"""
-    platform = str(payload.get("platform") or "").strip()
-    if platform not in _PLATFORMS:
-        raise ValueError("平台只支持淘宝 / 抖音 / B站小店")
-    text = str(payload.get("text") or "").strip()
-    if not text:
-        raise ValueError("请粘贴店铺 / 商品链接或分享文案")
+    payload = prepare_payload(payload)
+    plan = plan_shopping_parse(payload["text"], payload["platforms"])
+    platform, text = plan["platform"], plan["text"]
     if is_cancelled and is_cancelled():
         raise ValueError("任务已取消")
 
@@ -40,10 +50,14 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
             on_log(str(message))
 
     if platform == "taobao":
-        return _parse_taobao(text, say, is_cancelled)
-    if platform == "douyin":
-        return _parse_douyin(text, say, is_cancelled)
-    return _parse_bili(text, say, is_cancelled)
+        result = _parse_taobao(text, say, is_cancelled)
+    elif platform == "douyin":
+        result = _parse_douyin(text, say, is_cancelled)
+    else:
+        result = _parse_bili(text, say, is_cancelled)
+    result["platforms"] = payload["platforms"]
+    result["selection_note"] = plan["summary"]
+    return result
 
 
 def _rows_from_products(products) -> list[dict]:
