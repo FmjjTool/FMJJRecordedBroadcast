@@ -230,7 +230,7 @@ HOME_INFO = [
 # 旧入口 / 外部链接兼容：旧 key → 现有 key
 ALIASES = {
     "test_page": "douyin_danmaku",
-    "quark_backup": "netdisk",
+    "quark_backup": "global_settings",
     "quark_download": "netdisk",
     "backup_center": "global_settings",
     "douyin_shop": "shopping",

@@ -108,7 +108,7 @@
         }
         var columns = [{ key: 'video', label: '视频' }, { key: 'title', label: '标题' },
           { key: 'date', label: '日期' }, { key: 'status', label: '状态' }];
-        var table = h('table', { class: 'table', style: 'width:100%;table-layout:fixed' });
+        var table = h('table', { class: 'table', style: 'width:100%;min-width:0;max-width:100%;table-layout:fixed' });
         var tr = h('tr'); tr.appendChild(h('th', { style: 'width:36px', text: '选' }));
         columns.forEach(function (column, index) {
           var th = h('th', { class: 'sortable', style: 'width:' + [27, 29, 22, 22][index] + '%;cursor:pointer',
@@ -126,7 +126,8 @@
           line.appendChild(h('td', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: row.video, text: row.video }));
           var reason = h('span', { title: row.reason || '' });
           function showStatus() {
-            var labels = { ready: '待生成', exists: '已跳过：已有封面', invalid: '需修正', conflict: '已跳过：同名冲突' };
+            var labels = { ready: '待生成', exists: '已跳过', invalid: '需修正', conflict: '已跳过',
+              generated: '已完成', skipped: '已跳过', failed: '失败' };
             reason.textContent = row._edited ? '已修正，开始时校验' : (labels[row.status] || row.status) + (row.reason ? '：' + row.reason : '');
           }
           ['title', 'date'].forEach(function (key) {
@@ -185,7 +186,7 @@
             var row = state.rows.find(function (candidate) { return candidate.video === item.video; });
             if (!row) return;
             row._selected = false; row._edited = false; row.reason = item.reason || '';
-            row.status = item.status === 'failed' ? 'invalid' : 'exists';
+            row.status = item.status === 'failed' ? 'invalid' : item.status;
           });
         }, { cancelable: true, onSettled: function () { state.busy = false; state.job = ''; draw(); } });
       }

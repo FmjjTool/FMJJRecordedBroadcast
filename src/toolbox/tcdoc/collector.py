@@ -590,7 +590,7 @@ def _read_aio_pages(page, pages: list[dict], on_status, doc=None,
             raise
         except Exception as exc:  # noqa: BLE001 - 单页失败继续抓其余页面
             error = str(exc)[:120]
-        results.append({**item, "text": _clean_preview_text(text), "error": error,
+        results.append({**item, "order": i, "text": _clean_preview_text(text), "error": error,
                         "images": images})
     return results
 

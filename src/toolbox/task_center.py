@@ -37,7 +37,7 @@ _CFG_KEYS = {
 # 任务 id → 页面 key（仅用于展示来源，不再作为设置入口）
 _PAGE_KEYS = {
     "tcdoc": "tcdoc", "tracker": "tracker", "music": "music_tracker",
-    "quark": "netdisk", "webwiki": "localwiki", "fangroups": "fan_groups",
+    "quark": "global_settings", "webwiki": "localwiki", "fangroups": "fan_groups",
     "info": "info_accounts",
 }
 # 站点访问统计的两个补采时间点（空 = 不启用）

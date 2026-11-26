@@ -35,6 +35,7 @@ from version import APP_VERSION
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.backup_panel import BackupPanel
 from gui_qt.pages.base import BasePage
+from gui_qt.pages.quark_backup import QuarkBackupPage
 from gui_qt.toolbox_common import ToolSectionCard
 
 
@@ -411,13 +412,16 @@ class GlobalSettingsPage(BasePage):
         # ---- 备份与恢复 ----
         card = self._section_card("备份与恢复", "package")
         backup_note = QLabel(
-            "配置与资产备份都在本卡片完成；网盘文件下载与网盘备份在「网盘」页，"
+            "配置、资产与网盘备份统一在本卡片管理；网盘文件下载在「网络库」页，"
             "计划任务仍在「任务」页管理。")
         backup_note.setProperty("role", "caption")
         backup_note.setWordWrap(True)
         card.content_layout.addWidget(backup_note)
         self.backup_panel = BackupPanel(app, self)
         card.content_layout.addWidget(self.backup_panel)
+        self.cloud_backup_page = QuarkBackupPage(app)
+        self.cloud_backup_page.setMinimumHeight(420)
+        card.content_layout.addWidget(self.cloud_backup_page)
         v.addWidget(card)
 
         # ---- 关于 ----
@@ -516,6 +520,7 @@ class GlobalSettingsPage(BasePage):
     def on_theme_changed(self):
         for card, icon in self._section_cards:
             card.set_icon(icon)
+        self.cloud_backup_page.on_theme_changed()
         self.scroll.sync_content()
 
     def _btn(self, text, slot):
@@ -532,12 +537,8 @@ class GlobalSettingsPage(BasePage):
         label.setStyleSheet(f"color: palette({color}); font-size: 11px;")
 
     # ---- 逻辑 ----
-    def scroll_to_backup(self):
-        """滚动到「备份与恢复」卡片（资产管理页「备份」按钮跳转用）。"""
-        QTimer.singleShot(
-            0, lambda: self.scroll.ensureWidgetVisible(self.backup_panel, 0, 24))
-
     def on_show(self):
+        self.cloud_backup_page.reload()
         cfg = load_convert_config()
         # 工作目录
         self.workdir_entry.setText(cfg.get("work_dir", ""))

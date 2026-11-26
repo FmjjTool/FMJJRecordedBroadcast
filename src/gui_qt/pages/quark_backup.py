@@ -194,7 +194,7 @@ class QuarkBackupPage(BasePage):
         self._icons: list[tuple[QWidget, str, str]] = []
 
         root = QVBoxLayout(self)
-        # 本页只作为「网络库」页签内容使用，左右留白交给页签容器
+        # 本面板只嵌入全局设置的备份与恢复，左右留白交给设置卡片
         root.setContentsMargins(0, 12, 0, 0)
         root.setSpacing(12)
 
@@ -202,6 +202,10 @@ class QuarkBackupPage(BasePage):
         root.addLayout(self._build_body(), 1)
 
         self.reload()
+
+    def has_active_tasks(self):
+        """切离设置时保留正在执行备份的面板。"""
+        return self._running
 
     # ==================== 图标（主题切换后重生成） ====================
 

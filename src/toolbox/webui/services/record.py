@@ -7,10 +7,41 @@
 
 from __future__ import annotations
 
-from toolbox import live_record, live_record_status, webui_record_bridge
+from toolbox import (live_record, live_record_status, webui_record_bridge,
+                     webui_recording_repair)
+from toolbox.webui.jobs import JobCancelled
 
 
 class RecordService:
+    def __init__(self, jobs=None):
+        self._jobs = jobs
+
+    def repair_sources(self, platform: str) -> dict:
+        return webui_recording_repair.repair_sources(platform)
+
+    def start_repair(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用")
+        platform, rel = webui_recording_repair.validate_request(payload)
+        job = self._jobs.submit(
+            "record_repair", lambda task: self._repair_job(task, platform, rel))
+        return {"job": job.id}
+
+    def _repair_job(self, job, platform: str, rel: str) -> dict:
+        def progress(value):
+            # TS 只有开始 / 结束两个已知端点，其间保留不确定进度。
+            job.update("修复已完成" if value >= 1 else "修复中…",
+                       value if value > 0 else None)
+
+        try:
+            result = webui_recording_repair.repair_job(
+                platform, rel, job.workspace, on_progress=progress,
+                cancel=lambda: bool(job.cancel_requested))
+        except webui_recording_repair.RepairCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
+        job.add_file(job.workspace / result["output"])
+        return result
+
     def overview(self) -> dict:
         return live_record_status.overview()
 

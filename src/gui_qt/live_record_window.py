@@ -287,8 +287,8 @@ class AnchorModel(QAbstractTableModel):
     def set_display_sort(self, column, ascending):
         """只重排显示行，管理层顺序、勾选与当前选中跟随同一个主播。"""
         previous = list(self._rows)
-        indexes = self.persistentIndexList()
         self.layoutAboutToBeChanged.emit()
+        indexes = self.persistentIndexList()
         self._sort_column, self._sort_ascending = column, ascending
         self._rows = self._ordered_rows()
         positions = {id(anchor): row for row, anchor in enumerate(self._rows)}

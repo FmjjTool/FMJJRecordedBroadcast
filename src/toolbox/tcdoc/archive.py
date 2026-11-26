@@ -182,6 +182,8 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
             content = str(item.get("text") or "")
             h = _hash(title, content)
             prev = old.get(page_id)
+            page_order = int(item.get("order") or (
+                prev.get("order") if prev and not complete else index))
             previous_images = old_assets.get(page_id)
             images_json = (_image_json(_keep_downloaded_images(
                                item.get("images") or [], previous_images))
@@ -191,7 +193,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
                 stats["added"] += 1
                 conn.execute(
                     "INSERT INTO pages VALUES (?,?,?,?,?,?,?,?,?)",
-                    (doc_key, page_id, title, int(item.get("level") or 0), index,
+                    (doc_key, page_id, title, int(item.get("level") or 0), page_order,
                      _page_url(doc, page_id), content, h, now))
                 conn.execute(
                     "INSERT INTO page_changes (ts,doc_key,page_id,page_title,kind,"
@@ -210,7 +212,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
                     "UPDATE pages SET title=?, level=?, page_order=?, page_url=?, "
                     "content=?, content_hash=?, fetched_at=? "
                     "WHERE doc_key=? AND page_id=?",
-                    (title, int(item.get("level") or 0), index,
+                    (title, int(item.get("level") or 0), page_order,
                      _page_url(doc, page_id), content, h, now, doc_key, page_id))
                 conn.execute(
                     "INSERT INTO page_changes (ts,doc_key,page_id,page_title,kind,"
@@ -221,7 +223,7 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
                 conn.execute(
                     "UPDATE pages SET title=?, level=?, page_order=?, page_url=?, "
                     "fetched_at=? WHERE doc_key=? AND page_id=?",
-                    (title, int(item.get("level") or 0), index,
+                    (title, int(item.get("level") or 0), page_order,
                      _page_url(doc, page_id), now, doc_key, page_id))
             if images_json is not None:
                 conn.execute(

@@ -17,7 +17,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+import weakref
 from pathlib import Path
 
 from toolbox import asset_query
@@ -37,6 +39,10 @@ _NO_DL_FILE = "no_download_keys.json"
 
 class DownloadCancelled(Exception):
     """下载任务被取消。"""
+
+    def __init__(self, message: str, result: dict | None = None):
+        super().__init__(message)
+        self.result = result or {}
 
 
 def _raw_has_video(raw) -> bool:
@@ -85,7 +91,7 @@ def _load_entry(root: Path, rel: str) -> dict:
 
 
 def download_entries(paths, quality: str = "最高画质", on_progress=None,
-                     is_cancelled=None) -> dict:
+                     is_cancelled=None, *, query=None) -> dict:
     """批量下载条目媒体（对齐桌面 `_download_for_item` 路由）。"""
     from media_downloader import _is_direct_media_url
 
@@ -95,17 +101,14 @@ def download_entries(paths, quality: str = "最高画质", on_progress=None,
         raise ValueError("请选择要下载的条目")
     if quality not in _QUALITY_LABELS:
         quality = "最高画质"
-    service = asset_query.AssetQueryService()
-    rows = service.entries(1, 500)
-    known = {row.get("path"): row for row in rows.get("items") or []}
+    query = query or _default_query()
     root = get_export_subdir("video_data")
-    base_dir = str(root)
     results = []
     ok = 0
     flagged = _flagged_no_dl()
     for index, rel in enumerate(raw_paths, 1):
         if is_cancelled and is_cancelled():
-            raise DownloadCancelled("任务已取消")
+            raise DownloadCancelled("任务已取消", _download_result(results, ok, True))
         title = rel
         try:
             entry = _load_entry(Path(root), rel)
@@ -115,19 +118,27 @@ def download_entries(paths, quality: str = "最高画质", on_progress=None,
                                 "error": "已标记不可下载；如需下载请先解除标记"})
             else:
                 stats = _download_one(entry, quality, _is_direct_media_url)
+                output_paths = stats.pop("paths", [])
+                public_paths = _remember_download(root, rel, entry, output_paths, query)
                 results.append({"file": rel, "title": title, "ok": True,
-                                **stats})
+                                **stats, "paths": public_paths})
                 ok += 1
         except DownloadCancelled:
-            raise
+            raise DownloadCancelled("任务已取消", _download_result(results, ok, True))
         except Exception as exc:
             results.append({"file": rel, "title": title, "ok": False,
-                            "error": str(exc)[:300]})
+                            "error": str(exc).replace(str(root), "导出目录")[:300]})
         if on_progress:
             on_progress(index, len(raw_paths), title)
-    summary = f"完成 {ok}/{len(raw_paths)} 个条目"
+    return _download_result(results, ok)
+
+
+def _download_result(results: list[dict], ok: int, cancelled: bool = False) -> dict:
+    summary = f"完成 {ok}/{len(results)} 个条目"
+    if cancelled:
+        summary = f"已取消（完成 {len(results)} 条）"
     return {"summary": summary, "results": results, "ok": ok,
-            "failed": len(raw_paths) - ok}
+            "failed": len(results) - ok}
 
 
 def _download_one(entry: dict, quality: str, is_direct) -> dict:
@@ -147,7 +158,8 @@ def _download_one(entry: dict, quality: str, is_direct) -> dict:
                 entry, qn=quality_to_qn(quality),
                 cookie=get_cookie("bilibili") or "",
                 out_dir=str(get_export_subdir("video_data")))
-            return {"kind": "video", "videos": 1, "path": os.path.basename(path)}
+            return {"kind": "video", "videos": 1, "path": os.path.basename(path),
+                    "paths": [(path, "视频")]}
         return _download_images(entry)
 
     has_video = is_direct(entry.get("video_url") or "")
@@ -167,7 +179,8 @@ def _download_one(entry: dict, quality: str, is_direct) -> dict:
         return {"kind": "video",
                 "videos": int(stats.get("videos", 0) or 0),
                 "skipped": int(stats.get("skipped", 0) or 0),
-                "covers": int(stats.get("covers", 0) or 0)}
+                "covers": int(stats.get("covers", 0) or 0),
+                "paths": stats.get("paths") or []}
     return _download_images(entry)
 
 
@@ -187,7 +200,8 @@ def _download_images(entry: dict) -> dict:
             "images": int(stats.get("images", 0) or 0),
             "covers": int(stats.get("covers", 0) or 0),
             "live": int(stats.get("live", 0) or 0),
-            "skipped": int(stats.get("skipped", 0) or 0)}
+            "skipped": int(stats.get("skipped", 0) or 0),
+            "paths": stats.get("paths") or []}
 
 # ==================== 媒体完整度（P1.2，只读） ====================
 
@@ -197,6 +211,18 @@ _STATUS_LABELS = {
     "text": "纯文本", "nodl": "不可下载",
 }
 _media_cache: dict[str, tuple[float, dict]] = {}
+_status_cache = weakref.WeakKeyDictionary()
+_cache_lock = threading.RLock()
+_query_instance = None
+_target_outputs: dict[str, dict[str, list[dict]]] = {}
+
+
+def _default_query():
+    global _query_instance
+    with _cache_lock:
+        if _query_instance is None:
+            _query_instance = asset_query.AssetQueryService()
+        return _query_instance
 
 
 def _no_dl_store_path() -> Path:
@@ -269,25 +295,27 @@ def set_entry_no_dl(rel_path: str, marked: bool) -> dict:
 
 def entries_with_status(page: int = 1, page_size: int = 20,
                         keyword: str = "", platform: str = "",
-                        status: str = "") -> dict:
+                        status: str = "", *, query=None) -> dict:
     """条目列表 + 媒体完整度状态（对齐桌面 `_match_media` + `_item_media_complete`）。
 
     status 筛选：'' 全部 / missing 该下未下 / partial 部分 / ok 完整 /
     text 纯文本 / nodl 不可下载。
     """
-    service = asset_query.AssetQueryService()
-    base = service.entries(1, 500, keyword=keyword, platform=platform)
-    rows = base.get("items") or []
-    matched = _match_media(rows)
-    flagged = _flagged_no_dl()
-    for row, media in zip(rows, matched):
-        no_dl = _entry_key(row) in flagged
-        row["no_dl"] = bool(no_dl)
-        row["status"] = "nodl" if no_dl else _entry_status(row, media)
-        row["n_img"] = sum(1 for m in media if m["type"] == "image")
-        row["n_vid"] = sum(1 for m in media if m["type"] == "video")
+    query = query or _default_query()
+    with _cache_lock:
+        snapshot = _status_snapshot(query)
+        rows = [dict(row) for row in snapshot["rows"].values()]
+        truncated = snapshot["truncated"]
+    kw = (keyword or "").strip().lower()
+    if kw:
+        rows = [row for row in rows if kw in str(row.get("title") or "").lower()
+                or kw in str(row.get("author") or "").lower()]
+    if platform:
+        rows = [row for row in rows if row.get("platform") == platform]
     if status:
         rows = [row for row in rows if row["status"] == status]
+    rows.sort(key=lambda row: row.get("publish_time") or "", reverse=True)
+    page_size = max(1, min(100, int(page_size)))
     total = len(rows)
     page = max(1, min(int(page), max(1, (total + page_size - 1) // page_size)))
     start = (page - 1) * page_size
@@ -298,8 +326,155 @@ def entries_with_status(page: int = 1, page_size: int = 20,
             "page": page, "page_size": page_size,
             "pages": max(1, (total + page_size - 1) // page_size),
             "counts": counts,
-            "truncated": bool(base.get("truncated")),
+            "truncated": bool(truncated),
             "labels": _STATUS_LABELS}
+
+
+def _status_row(row: dict, media: list[dict], flagged: set) -> dict:
+    result = {key: value for key, value in row.items() if not key.startswith("_")}
+    no_dl = _entry_key(row) in flagged
+    result.update(no_dl=bool(no_dl), status="nodl" if no_dl else _entry_status(row, media),
+                  n_img=sum(1 for item in media if item["type"] == "image"),
+                  n_vid=sum(1 for item in media if item["type"] == "video"))
+    return result
+
+
+def _status_snapshot(query) -> dict:
+    rows = query.entry_rows()
+    root = str(get_export_subdir("video_data").resolve())
+    snapshot = _status_cache.get(query)
+    flagged = _flagged_no_dl()
+    if (snapshot and snapshot["root"] == root
+            and snapshot["revision"] == query._entries_revision
+            and time.monotonic() - snapshot["updated"] < _MEDIA_CACHE_TTL):
+        for row in snapshot["rows"].values():
+            row.update(_status_row(row, snapshot["media"].get(row["path"], []), flagged))
+        return snapshot
+    seeded = query._entry_media
+    if rows and all(row["path"] in seeded for row in rows):
+        matched = [seeded[row["path"]] for row in rows]
+    else:
+        matched = _match_media(rows)
+    media = {row["path"]: list(files) for row, files in zip(rows, matched)}
+    for rel, files in _target_outputs.get(root, {}).items():
+        if rel in media:
+            media[rel] = _merge_media(media[rel], files)
+    snapshot = {"root": root, "revision": query._entries_revision,
+                "rows": {row["path"]: _status_row(row, media[row["path"]], flagged)
+                         for row in rows}, "media": media,
+                "updated": time.monotonic(), "truncated": query._entries_truncated}
+    _status_cache[query] = snapshot
+    return snapshot
+
+
+def refresh_entries(paths, *, query=None) -> dict:
+    """仅重读指定条目并修补状态快照；不重新扫描 JSON 或媒体根目录。"""
+    if (not isinstance(paths, list) or not 1 <= len(paths) <= 200
+            or any(not isinstance(path, str) or not path.strip() for path in paths)):
+        raise ValueError("请选择 1–200 条要刷新的记录")
+    query = query or _default_query()
+    with _cache_lock:
+        result = query.refresh_entry_paths(list(dict.fromkeys(paths)))
+        root = get_export_subdir("video_data").resolve()
+        snapshot = _status_cache.get(query)
+        if snapshot and snapshot["root"] != str(root):
+            snapshot = None
+        flagged = _flagged_no_dl()
+        items = []
+        for row in result["items"]:
+            rel = row["path"]
+            media = (snapshot["media"].get(rel) if snapshot else None)
+            if media is None:
+                media = query._entry_media.get(rel)
+            if media is None:
+                media = _target_media_files(root, row)
+            media = _merge_media(media, _target_outputs.get(str(root), {}).get(rel, []))
+            media = [item for item in media if Path(item["path"]).is_file()]
+            fresh = _status_row(row, media, flagged)
+            items.append(fresh)
+            if snapshot is not None:
+                snapshot["rows"][rel] = fresh
+                snapshot["media"][rel] = media
+        if snapshot is not None:
+            for rel in result["removed"]:
+                snapshot["rows"].pop(rel, None)
+                snapshot["media"].pop(rel, None)
+            snapshot["revision"] = query._entries_revision
+        return {"items": items, "removed": result["removed"]}
+
+
+def _merge_media(existing: list[dict], additions: list[dict]) -> list[dict]:
+    merged = {item["path"]: item for item in existing}
+    merged.update({item["path"]: item for item in additions})
+    return list(merged.values())
+
+
+def _target_media_files(root: Path, row: dict) -> list[dict]:
+    """冷态单条刷新仅查看该平台作者目录及旧版平铺文件，不递归整库。"""
+    from toolbox.utils import norm_platform_dir
+    folders = [root]
+    try:
+        for folder in root.iterdir():
+            if folder.is_dir() and norm_platform_dir(folder.name) == row.get("platform"):
+                folders.append(folder)
+                author_dir = (folder / str(row.get("author") or "")).resolve()
+                try:
+                    author_dir.relative_to(root)
+                except ValueError:
+                    continue
+                if author_dir != folder and author_dir.is_dir():
+                    folders.append(author_dir)
+    except OSError:
+        pass
+    found = []
+    title = _sanitize(row.get("title") or "")
+    for folder in dict.fromkeys(folders):
+        try:
+            for path in folder.iterdir():
+                if not path.is_file() or path.suffix.lower() not in (_IMG_EXTS | {".mp4", ".flv", ".mkv", ".ts", ".mov", ".webm"}):
+                    continue
+                date, _author, name = _parse_media_name(path.name)
+                name = _sanitize(name)
+                if title and (name == title or (len(name) >= 4 and name in title)):
+                    found.append({"path": str(path), "name": path.name,
+                                  "type": "image" if path.suffix.lower() in _IMG_EXTS else "video",
+                                  "date_part": date, "subdir": row.get("platform") or ""})
+        except OSError:
+            continue
+    return found
+
+
+def _remember_download(root: Path, rel: str, entry: dict, paths, query) -> list:
+    """消费下载器已知产出，直接合并内存媒体与目标状态，不清空后全盘扫描。"""
+    root = root.resolve()
+    additions, public = [], []
+    for value in paths or []:
+        if not isinstance(value, (list, tuple)) or not value:
+            continue
+        path = Path(value[0])
+        path = (path if path.is_absolute() else root / path).resolve()
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        kind = "image" if path.suffix.lower() in _IMG_EXTS else "video"
+        date, _author, _title = _parse_media_name(path.name)
+        additions.append({"path": str(path), "name": path.name, "type": kind,
+                          "date_part": date, "subdir": entry.get("platform") or ""})
+        public.append([relative, str(value[1]) if len(value) > 1 else kind])
+    with _cache_lock:
+        targets = _target_outputs.setdefault(str(root), {})
+        targets[rel] = _merge_media(targets.get(rel, []), additions)
+        cached = _media_cache.get(str(root))
+        if cached is not None:
+            for media in additions:
+                date, _author, title = _parse_media_name(media["name"])
+                key = (date, _sanitize(title)[:20], media["subdir"])
+                cached[1][key] = _merge_media(cached[1].get(key, []), [media])
+        refresh_entries([rel], query=query)
+    return public
 
 
 def _media_map() -> dict:

@@ -1,18 +1,14 @@
 # -*- coding: utf-8 -*-
-"""网络库页：备份到网盘 + 文件下载（先备份后下载）。
+"""网络库页：浏览四大网盘目录、断点续传下载、可选自动解压。
 
-两个页签直接复用既有页面，不复制任何业务逻辑：
-
-- 备份到网盘 → `QuarkBackupPage`（本地目录 → 云端文件夹的增量备份与运行日志）
-- 文件下载 → `QuarkDownloadPage`（浏览四大网盘目录、断点续传下载、可选自动解压）
-
-登录状态由软件统一管理，本页不保存任何凭据；定时备份仍统一在「任务」页配置。
+复用 QuarkDownloadPage，不复制业务逻辑；所有备份入口统一在全局设置。
+登录状态由软件统一管理，本页不保存任何凭据。
 视觉全部使用主题语义角色与变体属性（ui-visual-spec），不写死颜色。
 """
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QTabWidget, QVBoxLayout
+from PySide6.QtWidgets import QVBoxLayout
 
 from gui_qt.pages.base import BasePage
 
@@ -20,49 +16,25 @@ from gui_qt.pages.base import BasePage
 class NetdiskPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
-        from gui_qt.pages.quark_backup import QuarkBackupPage
         from gui_qt.pages.quark_download import QuarkDownloadPage
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(0)
 
-        self.tabs = QTabWidget()
-        # 页签面板不再画第二层边框/底色：内容卡片直接落在页面底上，
-        # 避免「页面 → 页签框 → 卡片」三层边框叠加
-        self.tabs.setObjectName("netdiskTabs")
-        self.tabs.setStyleSheet(
-            "QTabWidget#netdiskTabs::pane { border: none; background: transparent; }")
-        outer.addWidget(self.tabs)
-
-        self.backup_page = QuarkBackupPage(app)
-        self.tabs.addTab(self.backup_page, "备份到网盘")
         self.download_page = QuarkDownloadPage(app)
-        self.tabs.addTab(self.download_page, "文件下载")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
+        outer.addWidget(self.download_page)
 
     # ---------- 生命周期 ----------
     def on_theme_changed(self):
-        """把主题切换转发给两个子页（工具条与映射卡片的图标颜色是烘进像素的）。"""
-        for page in (self.backup_page, self.download_page):
-            handler = getattr(page, "on_theme_changed", None)
-            if handler is not None:
-                handler()
-
-    def _on_tab_changed(self, index: int):
-        page = self.tabs.widget(index)
-        if page is not None:
-            page.on_show()
+        """把主题切换转发给下载页。"""
+        self.download_page.on_theme_changed()
 
     def on_show(self):
-        page = self.tabs.currentWidget()
-        if page is not None:
-            page.on_show()
+        self.download_page.on_show()
 
     def on_hide(self):
-        for page in (self.download_page, self.backup_page):
-            page.on_hide()
+        self.download_page.on_hide()
 
     def shutdown(self):
-        for page in (self.download_page, self.backup_page):
-            page.shutdown()
+        self.download_page.shutdown()
