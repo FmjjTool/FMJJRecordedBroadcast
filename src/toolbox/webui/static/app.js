@@ -7369,7 +7369,8 @@ function renderLivestreamSummary(root) {
         var wrap = h('div', { class: 'table-wrap' });
         var table = h('table', { class: 'db-table fg-table ' + (className || '') });
         var controls = h('div', { class: 'toolbar fg-table-controls' });
-        var widths = columns.map(function (column) { return column.width || 100; });
+        var resetWidths = columns.map(function (column) { return column.width || 100; });
+        var currentWidths = resetWidths.slice();
         var headers = [];
         function sizeColumns(values) {
           var total = values.reduce(function (sum, value) { return sum + value; }, 0);
@@ -7382,7 +7383,7 @@ function renderLivestreamSummary(root) {
           var measure = canvas.getContext('2d');
           measure.font = getComputedStyle(table).font;
           var values = columns.map(function (column, index) {
-            if (!column.key) return widths[index];
+            if (!column.key) return resetWidths[index];
             var longest = measure.measureText(column.label).width;
             rows.forEach(function (row) {
               var value = row[column.key];
@@ -7390,7 +7391,8 @@ function renderLivestreamSummary(root) {
             });
             return Math.max(48, Math.min(280, longest + 24));
           });
-          sizeColumns(values);
+          currentWidths = values;
+          sizeColumns(currentWidths);
         }
         function drawTable() {
           var head = h('tr');
@@ -7418,10 +7420,18 @@ function renderLivestreamSummary(root) {
             head.appendChild(header);
           });
           var body = h('tbody');
-          sortRows(rows, columns, sort).forEach(function (row) {
+          var sortableRows = rows.filter(function (row) {
+            var value = row[sort.order];
+            return value !== '' && value !== null && value !== undefined;
+          });
+          var emptyRows = rows.filter(function (row) {
+            var value = row[sort.order];
+            return value === '' || value === null || value === undefined;
+          });
+          sortRows(sortableRows, columns, sort).concat(emptyRows).forEach(function (row) {
             var tr = h('tr');
             columns.forEach(function (column) {
-              var value = row[column.key];
+              var value = column.key ? row[column.key] : null;
               tr.appendChild(h('td', {
                 class: (column.extra ? 'fg-extra ' : '') + (column.numeric ? 'num' : ''),
                 title: column.key && value != null ? String(value) : null
@@ -7430,18 +7440,22 @@ function renderLivestreamSummary(root) {
             body.appendChild(tr);
           });
           table.replaceChildren(h('thead', null, head), body);
-          sizeColumns(widths);
+          sizeColumns(currentWidths);
         }
         controls.appendChild(h('span', { class: 'grow' }));
         controls.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: fitColumns }, '自适应'));
-        controls.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: function () { sizeColumns(widths); } }, '重置'));
+        controls.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: function () {
+          currentWidths = resetWidths.slice(); sizeColumns(currentWidths);
+        } }, '重置'));
         table.addEventListener('contextmenu', function (event) {
           if (!event.target.closest('th')) return;
           event.preventDefault();
           var previous = holder.querySelector('.fg-column-menu');
           if (previous) previous.remove();
           var menu = h('div', { class: 'fg-column-menu', role: 'menu' });
-          [['列宽自适应', fitColumns], ['重置列宽', function () { sizeColumns(widths); }]]
+          [['列宽自适应', fitColumns], ['重置列宽', function () {
+            currentWidths = resetWidths.slice(); sizeColumns(currentWidths);
+          }]]
             .forEach(function (action) {
               menu.appendChild(h('button', {
                 class: 'btn', type: 'button', role: 'menuitem',
@@ -7570,74 +7584,153 @@ function renderLivestreamSummary(root) {
       var groups = data.groups || [];
       var tableHost = h('div');
       var historyHost = h('div', { style: 'margin-top:12px' });
-      var refreshBtn = h('button', {
+      var refreshListBtn = h('button', {
         class: 'btn', type: 'button'
-      }, '刷新');
-      refreshBtn.addEventListener('click', function () {
+      }, '刷新列表');
+      refreshListBtn.addEventListener('click', function () {
         renderFanGroups(root);
+      });
+      var qqRefreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新全部');
+      var qqRefreshJobHost = h('div');
+      var qqRefreshing = false;
+      var qqRefreshErrorsHost = h('div');
+
+      function updateQqGroup(row) {
+        var index = groups.findIndex(function (item) { return item.no === row.no; });
+        if (index < 0) groups.push(row);
+        else groups[index] = Object.assign({}, groups[index], row);
+      }
+
+      function displayRefresh(job) {
+        var outcome = job && job.result || {};
+        (outcome.results || []).forEach(updateQqGroup);
+        draw();
+        var failures = outcome.errors || [];
+        var partial = outcome.cancelled || failures.length;
+        toast(outcome.summary || (partial ? '刷新未全部完成' : '已刷新群人数'),
+          failures.length ? 'warning' : (outcome.cancelled ? 'info' : 'success'));
+        if (partial) {
+          var rows = failures.map(function (item) {
+            return { name: item.name || '-', error: item.error || '刷新失败' };
+          });
+          if (outcome.cancelled) {
+            rows.unshift({ name: '任务状态', error: '已取消，已完成项目保留' });
+          }
+          qqRefreshErrorsHost.replaceChildren(groupTable('refreshErrors', rows, [
+            { key: 'name', label: '群名', width: 150 },
+            { key: 'error', label: '结果', width: 240 }
+          ], 'fg-refresh-errors-table'));
+        } else {
+          qqRefreshErrorsHost.replaceChildren();
+        }
+      }
+
+      qqRefreshBtn.addEventListener('click', function () {
+        if (qqRefreshing) return;
+        qqRefreshing = true;
+        qqRefreshBtn.disabled = true;
+        qqRefreshBtn.textContent = '刷新中…';
+        post('/api/tools/fangroups/qq/refresh', {}).then(function (result) {
+          watchJob(qqRefreshJobHost, result.job, displayRefresh, {
+            cancelable: true,
+            onSettled: function (job) {
+              qqRefreshing = false;
+              qqRefreshBtn.disabled = false;
+              qqRefreshBtn.textContent = '刷新全部';
+              if (job.status === 'cancelled') displayRefresh(job);
+              else if (job.status === 'error') {
+                toast('刷新失败：' + (job.error || '请稍后重试'), 'error');
+                qqRefreshErrorsHost.replaceChildren(h('div', { class: 'error' },
+                  '刷新失败：' + (job.error || '请稍后重试')));
+              }
+            }
+          });
+        }).catch(function (error) {
+          qqRefreshing = false;
+          qqRefreshBtn.disabled = false;
+          qqRefreshBtn.textContent = '刷新全部';
+          toast('刷新失败：' + error.message, 'error');
+        });
       });
 
       function draw() {
+        var subscribedGroups = groups.filter(function (row) { return row.subscribed; });
         if (!groups.length) {
           tableHost.replaceChildren(empty(
             '暂无已订阅 QQ 群。桌面端「订阅列表」添加群号或分享链接后刷新。'));
           return;
         }
-        var head = h('tr');
-        ['', '群名', '群号', '人数', '变化', '状态', '来源']
-          .forEach(function (title) {
-            head.appendChild(h('th', null, title));
-          });
-        head.appendChild(h('th', null, ''));
-        var body = h('tbody');
-        groups.forEach(function (row) {
-          var fallback = h('span', {
-            class: 'fg-avatar fg-avatar-fallback'
-          }, (row.name || '?').slice(0, 1));
-          var avatar = fallback;
-          if (row.has_avatar) {
-            avatar = h('img', {
-              class: 'fg-avatar', alt: '',
-              src: '/api/fangroups/avatar?no='
-                + encodeURIComponent(row.no) + '&token='
-                + encodeURIComponent(token)
-            });
-            avatar.addEventListener('error', function () {
-              avatar.replaceWith(fallback);
-            });
-          }
-          var active = state.fangroups.open === row.no;
-          body.appendChild(h('tr', null,
-            h('td', null, avatar),
-            h('td', null, row.name || '-'),
-            h('td', null, row.no || '-'),
-            h('td', { class: 'num' }, row.members == null
-              ? '-' : fmtNumber(row.members)),
-            h('td', {
-              class: 'num' + (String(row.change || '').charAt(0) === '+'
-                ? ' delta-up'
-                : (String(row.change || '').charAt(0) === '-'
-                  && row.change !== '-' ? ' delta-down' : ''))
-            }, row.change || '-'),
-            h('td', { class: 'muted small' }, row.status || '-'),
-            h('td', { class: 'muted small' }, row.source || '-'),
-            h('td', null, h('button', {
-              class: 'btn mini', type: 'button',
-              onclick: function () {
-                if (state.fangroups.open === row.no) {
-                  state.fangroups.open = '';
-                  historyHost.replaceChildren();
-                } else {
-                  state.fangroups.open = row.no;
-                  loadHistory(row);
-                }
-                draw();
-              }
-            }, active ? '收起' : '历史'))));
+        var tableRows = groups.map(function (row) {
+          var item = Object.assign({}, row);
+          item.change_value = row.change;
+          item.source = row.subscribed ? row.source : '未订阅';
+          return item;
         });
-        tableHost.replaceChildren(h('div', { class: 'table-wrap' },
-          h('table', { class: 'db-table' },
-            h('thead', null, head), body)));
+        tableHost.replaceChildren(
+          h('div', { class: 'fg-table-heading' },
+            h('div', { class: 'row-title' }, 'QQ群订阅列表'),
+            h('span', { class: 'muted small' },
+              '共 ' + fmtNumber(groups.length) + ' 个群 · 已订阅 '
+              + fmtNumber(data.subscribed_count || 0) + ' 个')),
+          groupTable('qq', tableRows, [
+            { key: '', label: '', width: 48,
+              render: function (row) {
+                var fallback = h('span', {
+                  class: 'fg-avatar fg-avatar-fallback'
+                }, (row.name || '?').slice(0, 1));
+                if (!row.has_avatar) return fallback;
+                var avatar = h('img', {
+                  class: 'fg-avatar', alt: '',
+                  src: '/api/fangroups/avatar?no=' + encodeURIComponent(row.no)
+                    + '&token=' + encodeURIComponent(token)
+                });
+                avatar.addEventListener('error', function () { avatar.replaceWith(fallback); });
+                return avatar;
+              } },
+            { key: 'name', label: '群名', width: 150 },
+            { key: 'no', label: '群号', extra: true, width: 90 },
+            { key: 'members', label: '人数', numeric: true, width: 80,
+              render: function (row) { return row.members == null ? '-' : fmtNumber(row.members); } },
+            { key: 'change_value', label: '变化', numeric: true, extra: true, width: 70 },
+            { key: 'status', label: '状态', extra: true, width: 150 },
+            { key: 'source', label: '来源', extra: true, width: 90 },
+            { key: '', label: '操作', width: 88,
+              render: function (row) {
+                if (!row.subscribed) return h('span', { class: 'muted small' }, '未订阅');
+                var button = h('button', {
+                  class: 'btn mini danger', type: 'button',
+                  'aria-label': '取消订阅 ' + (row.name || row.no),
+                  title: '取消后保留人数历史和头像',
+                  onclick: function () {
+                    if (!window.confirm('取消订阅「' + (row.name || row.no)
+                      + '」？\n\n将停止后续刷新人数，已有历史和头像保留。')) return;
+                    button.disabled = true;
+                    post('/api/tools/fangroups/qq/remove', {
+                      no: row.no, confirmed: true
+                    }).then(function (result) {
+                      row.subscribed = false;
+                      row.source = '未订阅';
+                      qqRefreshErrorsHost.replaceChildren();
+                      draw();
+                      toast(result.summary || '已取消订阅，历史和头像保留', 'success');
+                    }).catch(function (error) {
+                      button.disabled = false;
+                      toast('取消订阅失败：' + error.message, 'error');
+                    });
+                  }
+                }, '取消订阅');
+                return button;
+              } }
+          ], 'fg-qq-table'));
+        tableHost.firstChild.classList.add('fg-qq-card');
+        if (!subscribedGroups.length) {
+          tableHost.insertBefore(h('div', { class: 'muted small fg-no-subscriptions' },
+            '当前没有已订阅的群。查询并订阅后可刷新人数。'), tableHost.children[1]);
+        }
+        if (state.fangroups.open && !groups.some(function (row) { return row.no === state.fangroups.open; })) {
+          state.fangroups.open = '';
+          historyHost.replaceChildren();
+        }
       }
 
       function loadHistory(row) {
@@ -7650,23 +7743,15 @@ function renderLivestreamSummary(root) {
                 '暂无人数历史。桌面端刷新群信息后生成。'));
               return;
             }
-            var head = h('tr', null,
-              h('th', null, '采集时间'), h('th', { class: 'num' }, '人数'),
-              h('th', null, '群名'));
-            var body = h('tbody');
-            result.rows.forEach(function (item) {
-              body.appendChild(h('tr', null,
-                h('td', null, item.time || '-'),
-                h('td', { class: 'num' }, item.members == null
-                  ? '-' : fmtNumber(item.members)),
-                h('td', null, item.name || '-')));
-            });
             historyHost.replaceChildren(
               h('div', { class: 'row-title', style: 'margin-bottom:8px' },
                 row.name + ' · 人数历史（最新在前）'),
-              h('div', { class: 'table-wrap' },
-                h('table', { class: 'db-table' },
-                  h('thead', null, head), body)));
+              groupTable('history', result.rows, [
+                { key: 'time', label: '采集时间', width: 180 },
+                { key: 'members', label: '人数', numeric: true, width: 90,
+                  render: function (item) { return item.members == null ? '-' : fmtNumber(item.members); } },
+                { key: 'name', label: '群名', width: 160 }
+              ], 'fg-history-table'));
           }).catch(function (error) {
             setError(historyHost, error, function () { loadHistory(row); });
           });
@@ -7772,6 +7857,14 @@ function renderLivestreamSummary(root) {
           '分享链接免登录；按群号查询需桌面端已登录 QQ 群。导出为桌面同格式 Excel，'
           + '头像按群目录保存、已有文件复用。'),
         qqJobHost));
+      root.appendChild(h('div', { class: 'card fg-qq-actions' },
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'muted small' }, 'QQ群订阅与人数'),
+          h('span', { class: 'grow' }), qqRefreshBtn, refreshListBtn,
+          exportBtn, avatarsBtn),
+        h('div', { class: 'muted small' },
+          '刷新人数会为全部已订阅群保存新记录；取消订阅会保留既有人数历史和头像。'),
+        qqRefreshJobHost, qqRefreshErrorsHost));
       root.appendChild(tableHost);
       root.appendChild(historyHost);
       draw();
@@ -10961,9 +11054,9 @@ function renderMusicTag(root) {
           }, optAllow, ' 允许新建下拉选项（仅本次）');
           var optPanel = h('div');
           var selLabel = h('span', { class: 'muted small' }, '已选 0 条');
-          var playlistBtn = h('button', {
-            class: 'btn', type: 'button', style: 'display:none'
-          }, '歌单录入');
+          var manualBtn = h('button', {
+            class: 'btn', type: 'button', disabled: true
+          }, '手动录入');
           var targets = [];
           var maxUpload = 50;
 
@@ -11029,8 +11122,7 @@ function renderMusicTag(root) {
             optLabel.style.display = 'none';
             optPanel.replaceChildren();
             dupSel.style.display = isLives ? '' : 'none';
-            playlistBtn.style.display = (target && target.profile === 'events')
-              ? '' : 'none';
+            manualBtn.disabled = busy || !target;
             accSel.value = bridgeState.accounts;
             dupSel.value = bridgeState.dupMode;
             if (target) {
@@ -11503,7 +11595,7 @@ function renderMusicTag(root) {
               h('span', { class: 'muted small' }, '时间'), daysSel,
               accSel, dupSel, compareBtn),
             h('div', { class: 'toolbar', style: 'margin-top:8px' },
-              refreshBtn, gateBadge, tsvBtn, optBtn, uploadBtn, playlistBtn,
+              refreshBtn, gateBadge, tsvBtn, optBtn, uploadBtn, manualBtn,
               h('span', { style: 'flex:1' }), selLabel),
             optLabel,
             optPanel,

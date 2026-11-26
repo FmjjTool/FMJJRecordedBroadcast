@@ -21,7 +21,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import (QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QSize,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QObject, QPoint, QPointF, QRect, QSize,
                             Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImage, QPainter,
                            QPalette, QPen, QPixmap, QPolygonF, QTextCursor, QTextFormat)
@@ -4564,7 +4564,7 @@ class AssetPage(BasePage):
         self.db_author_sel.setMaximumWidth(165)
         self.db_author_sel.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.db_author_sel.setMinimumContentsLength(7)
-        self.db_author_sel.currentIndexChanged.connect(lambda _: self._db_reload())
+        self.db_author_sel.currentIndexChanged.connect(lambda _: self._db_filter_changed())
         bar.addWidget(self.db_author_sel, 1)
         self.db_search = QLineEdit()
         self.db_search.setMinimumWidth(100)
@@ -4573,7 +4573,7 @@ class AssetPage(BasePage):
         self._db_search_timer = QTimer(self)
         self._db_search_timer.setSingleShot(True)
         self._db_search_timer.setInterval(300)
-        self._db_search_timer.timeout.connect(self._db_reload)
+        self._db_search_timer.timeout.connect(self._db_filter_changed)
         self.db_search.textChanged.connect(self._db_search_timer.start)
         bar.addWidget(self.db_search, 2)
         bar.addWidget(_asset_action("刷新", self._db_reload_tables, tip="刷新数据库表"))
@@ -4643,7 +4643,7 @@ class AssetPage(BasePage):
             self._db_page = nxt
             self._db_reload()
 
-    def _db_reload_tables(self):
+    def _db_reload_tables(self, *, preserve_page: bool = False):
         """刷新平台表下拉（含行数），保持当前选择。"""
         if getattr(self, "_db_loading", False):
             return
@@ -4658,18 +4658,20 @@ class AssetPage(BasePage):
                 return
             self._db_refreshed_at = time.monotonic()
             tables = tables or []
-            prev = self.db_plat_sel.currentText()
+            prev = self._db_platform()
             self.db_plat_sel.blockSignals(True)
             self.db_plat_sel.clear()
             names = [f"{n}（{c}）" for n, c in tables] or ["（空）"]
             self.db_plat_sel.addItems(names)
-            idx = next((i for i, s in enumerate(names) if s.startswith(prev)), 0) if prev else 0
+            idx = next((i for i, (name, _count) in enumerate(tables)
+                        if name == prev), 0)
             self.db_plat_sel.setCurrentIndex(max(0, idx))
             self.db_plat_sel.blockSignals(False)
             if not tables:
                 self.db_table.setRowCount(0)
                 self._db_rows = []
                 self._db_total = 0
+                self._db_page = 1
                 self._db_update_check_count()
                 self.db_author_sel.blockSignals(True)
                 self.db_author_sel.clear()
@@ -4678,7 +4680,8 @@ class AssetPage(BasePage):
                 self.db_page_lbl.setText(
                     "暂无数据 · 请在「采集任务」页开启「增量模式」并点「获取最新」")
                 return
-            self._db_reload_authors()
+            self._db_reload_authors(
+                preserve_page=preserve_page and self._db_platform() == prev)
 
         run_bg(work, done)
 
@@ -4686,28 +4689,53 @@ class AssetPage(BasePage):
         text = self.db_plat_sel.currentText() or ""
         return "" if text.startswith("（") else text.split("（")[0].strip()
 
-    def _db_reload(self):
+    def _db_filter_changed(self):
+        self._db_page = 1
+        self._db_reload()
+
+    def _db_reload(self, *, preserve_view: bool = False):
         plat = self._db_platform()
         author = self._db_author_filter()
+        kw = self.db_search.text().strip()
+        page = self._db_page
+        order_by = self._DB_SORT_FIELDS.get(self._db_sort_col, "")
+        ascending = self._db_sort_asc
+        self._db_query_seq = getattr(self, "_db_query_seq", 0) + 1
+        query_seq = self._db_query_seq
+        checked = {self._db_rows[r][0] for r in self._db_checked_rows()} if preserve_view else set()
+        selected = ({self._db_rows[index.row()][0]
+                     for index in self.db_table.selectionModel().selectedRows()
+                     if index.row() < len(self._db_rows)} if preserve_view else set())
+        current_row = self.db_table.currentRow()
+        scroll_y = self.db_table.verticalScrollBar().value()
+        scroll_x = self.db_table.horizontalScrollBar().value()
 
         def work():
             from toolbox import increment_db
-            kw = self.db_search.text().strip()
-            offset = (self._db_page - 1) * self._DB_PAGE_SIZE
-            return increment_db.query_rows(
-                plat, kw, author, self._DB_PAGE_SIZE, offset,
-                order_by=self._DB_SORT_FIELDS.get(self._db_sort_col, ""),
-                ascending=self._db_sort_asc)
+            rows, total = increment_db.query_rows(
+                plat, kw, author, self._DB_PAGE_SIZE, (page - 1) * self._DB_PAGE_SIZE,
+                order_by=order_by, ascending=ascending)
+            valid_page = min(page, max(1, -(-total // self._DB_PAGE_SIZE)))
+            if valid_page != page:
+                rows, total = increment_db.query_rows(
+                    plat, kw, author, self._DB_PAGE_SIZE,
+                    (valid_page - 1) * self._DB_PAGE_SIZE,
+                    order_by=order_by, ascending=ascending)
+            return rows, total, valid_page
 
         def done(result, err):
+            if query_seq != self._db_query_seq:
+                return
             if err:
                 self.db_page_lbl.setText("加载失败")
                 return
-            rows, total = result
+            rows, total, valid_page = result
+            self._db_page = valid_page
             self._db_rows = rows or []
             self._db_total = total
             self._db_filling = True
             self.db_table.setRowCount(len(self._db_rows))
+            self.db_table.clearSelection()
             for r, row in enumerate(self._db_rows):
                 # (dedup_key, fetched_at, kind, video_id, title, author, publish_time,
                 #  play, like, comment, share, fav, dm, coin, duration, desc,
@@ -4715,7 +4743,7 @@ class AssetPage(BasePage):
                 chk = QTableWidgetItem()
                 chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
                               | Qt.ItemIsSelectable)
-                chk.setCheckState(Qt.Unchecked)
+                chk.setCheckState(Qt.Checked if row[0] in checked else Qt.Unchecked)
                 self.db_table.setItem(r, 0, chk)
                 vals = [row[1], {"dynamic": "动态", "image": "图文"}.get(row[2], "视频"),
                         row[4], row[5], row[6], _fmt(row[7]), _fmt(row[8]), _fmt(row[9]),
@@ -4729,7 +4757,16 @@ class AssetPage(BasePage):
                         item.setForeground(QBrush(QColor(theme.color("link"))))
                         item.setData(Qt.UserRole, "author")
                     self.db_table.setItem(r, c + 1, item)
+                if row[0] in selected:
+                    self.db_table.selectionModel().select(
+                        self.db_table.model().index(r, 0),
+                        QItemSelectionModel.Select | QItemSelectionModel.Rows)
             self._db_filling = False
+            if preserve_view:
+                if selected and not self.db_table.selectionModel().hasSelection() and self._db_rows:
+                    self.db_table.selectRow(min(max(0, current_row), len(self._db_rows) - 1))
+                self.db_table.verticalScrollBar().setValue(scroll_y)
+                self.db_table.horizontalScrollBar().setValue(scroll_x)
             self._db_update_check_count()
             pages = max(1, -(-total // self._DB_PAGE_SIZE))
             label = plat if not author else f"{plat} · 作者「{author}」"
@@ -4749,7 +4786,7 @@ class AssetPage(BasePage):
         """平台表切换 → 刷新作者下拉后重载（保持作者选择）。"""
         self._db_reload_authors()
 
-    def _db_reload_authors(self):
+    def _db_reload_authors(self, *, preserve_page: bool = False):
         plat = self._db_platform()
 
         def work():
@@ -4764,13 +4801,17 @@ class AssetPage(BasePage):
             self.db_author_sel.blockSignals(True)
             self.db_author_sel.clear()
             names = ["全部作者"] + [f"{a}（{c}）" for a, c in (authors or [])]
+            if preserve_page and prev_author and not any(
+                    a == prev_author for a, _count in (authors or [])):
+                names.append(f"{prev_author}（0）")
             self.db_author_sel.addItems(names)
             idx = next((i for i, s in enumerate(names) if s.split("（")[0].strip() == prev_author), 0) \
                 if prev_author else 0
             self.db_author_sel.setCurrentIndex(idx)
             self.db_author_sel.blockSignals(False)
-            self._db_page = 1
-            self._db_reload()
+            if not preserve_page:
+                self._db_page = 1
+            self._db_reload(preserve_view=preserve_page)
 
         run_bg(work, done)
 
@@ -4869,7 +4910,7 @@ class AssetPage(BasePage):
                 self.app.toast("删除失败", "error")
                 return
             self.app.toast(f"已删除 {n} 条", "success")
-            self._db_reload_tables()
+            self._db_reload_tables(preserve_page=True)
 
         run_bg(work, done)
 
@@ -5082,7 +5123,7 @@ class AssetPage(BasePage):
                     self.app.toast("删除失败", "error")
                     return
                 self.app.toast(f"已删除 {n} 条", "success")
-                self._db_reload_tables()
+                self._db_reload_tables(preserve_page=True)
 
             run_bg(work, done)
 

@@ -599,6 +599,7 @@ class TcDocBridgePanel(QWidget):
         self._targets_watchdog.timeout.connect(self._on_targets_watchdog)
 
         self._build_ui()
+        self._model.layoutChanged.connect(self._sync_snapshot_rows)
         if not defer_load:
             self._load_targets(prefer_doc_key)
 
@@ -2853,6 +2854,11 @@ class TcDocBridgePanel(QWidget):
         indexes = sorted(model.selectedRows(), key=lambda item: item.row())
         return [self._rows[index.row()] for index in indexes
                 if 0 <= index.row() < len(self._rows)]
+
+    def _sync_snapshot_rows(self, *_args) -> None:
+        """快照排序后，选中复制与右键始终引用当前展示的行。"""
+        if (self.target_combo.currentData() or {}).get("profile") == "fragments":
+            self._rows = list(self._model.rows)
 
     def _update_copy_row_btn(self, *_args) -> None:
         button = getattr(self, "copy_row_btn", None)

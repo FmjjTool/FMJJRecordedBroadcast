@@ -217,7 +217,8 @@ def preview(payload: dict, on_progress=None, is_cancelled=None) -> dict:
         "dup_mode": dup_mode,
         "columns": columns,
         "items": items,
-        "snapshot_rows": ([[str(row.get(name) if row.get(name) is not None else "")
+        "snapshot_rows": ([[tables.link_text(str(
+                            row.get(name) if row.get(name) is not None else ""))
                             for name in columns] for row in rows]
                           if profile == "fragments" else []),
         "total": len(rows),
