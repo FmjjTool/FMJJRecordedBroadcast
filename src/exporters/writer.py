@@ -1,5 +1,8 @@
 """
-导出模块 - 支持 JSON / XLSX / MD 格式
+导出模块 - 支持 JSON / XLSX / MD 格式。
+
+单条资产 JSON 的唯一写入 owner；它是资产磁盘视图的源数据，asset_index 为派生缓存。
+指数回填只修改已有单条导出的指标和来源元数据，保持原导出格式/schema 不变。
 """
 
 from __future__ import annotations
@@ -9,8 +12,94 @@ import os
 import re
 import tempfile
 import time
+import threading
 from datetime import datetime
 from typing import Callable, Optional
+
+_metric_patch_lock = threading.Lock()
+
+
+def patch_existing_video_json(patches, output_dir) -> dict:
+    """只补充受控「已获取数据」目录里的已有抖音条目，不重建其他导出格式。
+
+    扫描根目录旧平铺和抖音数据一级子目录，不跟随链接/junction；跳过汇总、
+    原始响应和评论。缺失目录正常返回 0；changed_paths 用于使派生资产缓存失效。
+    """
+    from pathlib import Path
+    from toolbox.douyin_index_metrics import (
+        merge_existing_metrics, metric_patch_result, metric_patch_status)
+    from toolbox.utils import norm_platform_dir, MEDIA_DIR_SUFFIX
+    result = metric_patch_result(changed_paths=True)
+    if not isinstance(patches, dict) or not patches:
+        return result
+    root = Path(output_dir).absolute()
+
+    def linked(path):
+        return path.is_symlink() or getattr(os.path, "isjunction", lambda _p: False)(path)
+
+    if not root.is_dir() or any(linked(path) for path in (root, *root.parents)):
+        return result
+
+    def candidates():
+        for directory in (root, *[path for path in root.iterdir()
+                                   if path.is_dir() and not linked(path)
+                                   and norm_platform_dir(path.name) == "douyin"
+                                   and not path.name.endswith(MEDIA_DIR_SUFFIX)]):
+            for path in directory.iterdir():
+                lower = path.name.lower()
+                if (path.is_file() and not linked(path) and lower.endswith(".json")
+                        and not lower.startswith(("_", "数据库导出_", "video_info_"))
+                        and "汇总" not in path.stem
+                        and not lower.endswith(("_raw.json", "_comments.json"))):
+                    yield path
+
+    try:
+        with _metric_patch_lock:
+            for path in candidates():
+                try:
+                    original = path.read_bytes()
+                    payload = json.loads(original.decode("utf-8-sig"))
+                    if isinstance(payload, list):
+                        if len(payload) != 1 or not isinstance(payload[0], dict):
+                            continue  # 多记录导出/汇总不是单条资产条目。
+                        record = payload[0]
+                    elif isinstance(payload, dict):
+                        record = payload
+                    else:
+                        continue
+                    if record.get("平台") != "douyin":
+                        continue
+                    video_id = str(record.get("视频ID") or "")
+                    if video_id not in patches:
+                        continue
+                    result["matched"] += 1
+                    if video_id not in result["matched_ids"]:
+                        result["matched_ids"].append(video_id)
+                    status = metric_patch_status(record, patches[video_id], localized=True)
+                    if status != "ready":
+                        result[status] += 1
+                        if status == "stale" and video_id not in result["stale_ids"]:
+                            result["stale_ids"].append(video_id)
+                        continue
+                    merged, changed = merge_existing_metrics(record, patches[video_id], localized=True)
+                    if not changed:
+                        continue
+                    # 外部采集可能同时重写导出，发现变化就保留外部新版，留待下次补丁。
+                    if linked(path) or not path.is_file() or path.read_bytes() != original:
+                        result["errors"].append({"store": "asset_json", "error": "ConcurrentChange"})
+                        continue
+                    output = [merged] if isinstance(payload, list) else merged
+                    _atomic_write(str(path), lambda stream, value=output:
+                                  json.dump(value, stream, ensure_ascii=False, indent=2))
+                    result["updated"] += 1
+                    if video_id not in result["updated_ids"]:
+                        result["updated_ids"].append(video_id)
+                    result["changed_paths"].append(str(path))
+                except (OSError, ValueError, TypeError, UnicodeError) as exc:
+                    result["errors"].append({"store": "asset_json", "error": type(exc).__name__})
+    except OSError as exc:
+        result["errors"].append({"store": "asset_json", "error": type(exc).__name__})
+    return result
 
 def _sanitize_filename(name: str, max_len: int = 60) -> str:
     """安全文件名（统一实现见 toolbox.utils.sanitize_filename）"""
