@@ -189,6 +189,7 @@
 
         var sources = h('select', { class: 'select grow', 'aria-label': '导入模型来源' },
           h('option', { value: '' }, '正在查找工作目录内的 GGUF 文件…'));
+        var sourcesHost = h('div', { class: 'grow', style: 'min-width:0' }, sources);
         var importBtn = track(h('button', { class: 'btn', type: 'button' }, '导入模型'),
           function () { return Boolean(sources.value); });
         var sourceNote = h('div', { class: 'muted small', style: 'margin-top:6px' });
@@ -199,6 +200,7 @@
           });
           if (!sources.options.length) sources.appendChild(h('option', { value: '' },
             '工作目录内没有可导入的 GGUF 模型'));
+          sourcesHost.replaceChildren(searchableModelList(h, sources, '导入模型来源'));
           syncActions();
           sourceNote.textContent = sourceData.note || '';
         }).catch(function (error) {
@@ -211,7 +213,7 @@
           start('import-model', { source: sources.value }, importBtn);
         });
         card.appendChild(h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '本地 GGUF'), sources, importBtn));
+          h('span', { class: 'muted small' }, '本地 GGUF'), sourcesHost, importBtn));
         card.appendChild(sourceNote);
 
         var installed = h('select', { class: 'select grow', 'aria-label': '已安装模型' });
