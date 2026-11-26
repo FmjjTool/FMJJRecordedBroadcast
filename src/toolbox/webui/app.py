@@ -731,6 +731,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tcdoc/members", lambda req: tcdoc.members(
         req.q("doc_key"), req.q_int("limit", 500, 1, 5000)))
 
+    server.get("/api/tcdoc/body", lambda req: tcdoc.body(req.q("doc_key")))
+
+    def tcdoc_body_fetch(req):
+        return tcdoc.start_body_fetch(dict(req.json or {}))
+    server.post("/api/tcdoc/body/fetch", tcdoc_body_fetch)
+
+    def tcdoc_body_image(req):
+        data, mime = tcdoc.body_image(
+            req.q("doc_key"), req.q("page_id"), req.q("image_key"))
+        return BytesResponse(data, mime)
+    server.get("/api/tcdoc/body/image", tcdoc_body_image)
+
     server.get("/api/tcdoc/writeback/status",
                lambda req: tcdoc.writeback_status())
     server.get("/api/tcdoc/writeback/preview",

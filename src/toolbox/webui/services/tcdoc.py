@@ -124,6 +124,40 @@ class TCDocService:
         return {"users": users, "total": int(total),
                 "meta": members_mod.meta(doc_key)}
 
+    def body(self, doc_key: str) -> dict:
+        return _body_module().cached(doc_key)
+
+    def body_image(self, doc_key: str, page_id: str,
+                   image_key: str) -> tuple[bytes, str]:
+        return _body_module().read_image(doc_key, page_id, image_key)
+
+    def start_body_fetch(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        doc_key = str((payload or {}).get("doc_key") or "").strip()
+        if not doc_key:
+            raise ValueError("请选择文档")
+        if not self._lock.acquire(blocking=False):
+            raise BusyError("已有采集或同步任务在运行")
+
+        def run(job):
+            from toolbox.tcdoc.body_images import BodyImagesCancelled
+            try:
+                return _body_module().fetch(
+                    doc_key, on_status=lambda text: job.update(str(text)),
+                    is_cancelled=lambda: bool(job.cancel_requested))
+            except BodyImagesCancelled as exc:
+                raise JobCancelled("正文抓取已取消") from exc
+            finally:
+                self._lock.release()
+
+        try:
+            job = self.jobs.submit("tcdoc_body", run)
+        except Exception:
+            self._lock.release()
+            raise
+        return {"job": job.id}
+
     def writeback_status(self) -> dict:
         return _write_module().status()
 
@@ -332,6 +366,11 @@ class TCDocService:
         except Exception:
             self._lock.release()
             raise
+
+
+def _body_module():
+    from toolbox import webui_tcdoc_body
+    return webui_tcdoc_body
 
 
 def _write_module():

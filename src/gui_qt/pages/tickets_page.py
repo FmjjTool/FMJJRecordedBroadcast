@@ -10,13 +10,14 @@ import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout,
 )
 
-from gui_qt.common import first_number, post_to_main, run_bg, stable_sort
+from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
+from gui_qt.table_sort import install as install_table_sort
 from gui_qt.toolbox_common import ToolSectionCard
 
 import tickets as tickets_mod
@@ -34,8 +35,8 @@ class TicketsPage(BasePage):
         self._events_original = [] # 解析时的原始顺序（排序三态回退用）
         self._detail_cache = {}    # event key → detail dict（获取过详情的）
         self._filling = False      # 表格填充中（抑制勾选计数刷新）
-        self._sort_col = None      # 当前排序列（None=原始顺序）
-        self._sort_state = 0       # 0=原顺序 1=A-Z 2=Z-A
+        self._busy = False
+        self.platform_checks = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -75,6 +76,18 @@ class TicketsPage(BasePage):
         self.export_btn.clicked.connect(self._export)
         row.addWidget(self.export_btn)
 
+        platform_row = QHBoxLayout()
+        platform_row.setSpacing(8)
+        platform_row.addWidget(QLabel("平台"))
+        for key, label in tickets_mod.TICKET_PLATFORM_OPTIONS:
+            check = QCheckBox(label)
+            check.setChecked(True)
+            check.setToolTip("仅在勾选的平台内解析、抓取详情与导出")
+            check.toggled.connect(self._on_platforms_changed)
+            self.platform_checks[key] = check
+            platform_row.addWidget(check)
+        platform_row.addStretch(1)
+
         # 勾选工具行：全选 / 反选 / 清除 + 已勾选计数（多选导出用）
         sel_row = QHBoxLayout()
         self.sel_all_btn = QPushButton("全选")
@@ -100,6 +113,7 @@ class TicketsPage(BasePage):
         tv.setContentsMargins(12, 10, 12, 10)
         tv.setSpacing(6)
         tv.addLayout(row)
+        tv.addLayout(platform_row)
         tv.addLayout(sel_row)
         layout.addWidget(top)
 
@@ -115,7 +129,10 @@ class TicketsPage(BasePage):
         self.table.setColumnWidth(0, 36)   # 勾选列
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_select)
-        # 点击表头排序：A-Z → Z-A → 原顺序（勾选与选中行保留）
+        self._sorter = install_table_sort(self.table, rows=self._events)
+        # 比较与重排复用共享排序器；本页仅补第三次点击还原及选择状态恢复。
+        self.table.horizontalHeader().sectionClicked.disconnect(
+            self._sorter._on_header_clicked)
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         left_card = ToolSectionCard("演出列表", "勾选演出后可批量获取详情与导出")
         left_card.layout().setContentsMargins(12, 12, 12, 12)
@@ -145,15 +162,63 @@ class TicketsPage(BasePage):
 
     # ==================== 解析列表 ====================
 
+    def _selected_platforms(self):
+        return tuple(key for key, check in self.platform_checks.items()
+                     if check.isChecked())
+
+    def _request_platforms(self):
+        try:
+            return tickets_mod.normalize_ticket_platforms(self._selected_platforms())
+        except ValueError as exc:
+            self.status_label.setText(str(exc))
+            return None
+
+    def _on_platforms_changed(self):
+        self._update_action_buttons()
+        selected = self._selected_platforms()
+        labels = dict(tickets_mod.TICKET_PLATFORM_OPTIONS)
+        self.status_label.setText(
+            "已选择平台：" + " / ".join(labels[key] for key in selected)
+            if selected else "请至少勾选一个平台")
+
+    def _allowed_rows(self, rows, platforms):
+        return [row for row in rows if 0 <= row < len(self._events)
+                and tickets_mod.ticket_platform_key(self._events[row].platform)
+                in platforms]
+
+    def _update_action_buttons(self):
+        selected = self._selected_platforms()
+        rows = [item.row() for item in self.table.selectionModel().selectedRows()]
+        allowed = self._allowed_rows(rows, selected)
+        checked = self._allowed_rows(self._checked_rows(), selected)
+        self.detail_btn.setEnabled(not self._busy and bool(checked or allowed))
+        self.export_btn.setEnabled(
+            not self._busy and bool(self._allowed_rows(range(len(self._events)), selected)))
+        self.link_btn.setEnabled(
+            not self._busy and bool(allowed) and bool(self._events[allowed[0]].url))
+
+    def _set_busy(self, busy):
+        self._busy = busy
+        self.parse_btn.setEnabled(not busy)
+        self.scope_sel.setEnabled(not busy)
+        self.table.horizontalHeader().setEnabled(not busy)
+        for check in self.platform_checks.values():
+            check.setEnabled(not busy)
+        self._update_action_buttons()
+
     def _parse(self):
+        if self._busy:
+            return
+        platforms = self._request_platforms()
+        if platforms is None:
+            return
         url = self.url_entry.text().strip()
         if not url:
             # 留空直接回车 → 默认关键词
             self.url_entry.setText(self.DEFAULT_KEYWORD)
             url = self.DEFAULT_KEYWORD
         scope = self.scope_sel.currentData() or "all"
-        self.parse_btn.setEnabled(False)
-        self.scope_sel.setEnabled(False)
+        self._set_busy(True)
         self.status_label.setText("解析中...")
 
         def work():
@@ -161,18 +226,18 @@ class TicketsPage(BasePage):
             # （B站 API + 大麦 Playwright 游客搜索 + 秀动 Web 客户端接口）
             kind, _ = tickets_mod.detect_ticket_platform(url)
             if kind:
-                return tickets_mod.parse_ticket_url(url, scope=scope)
+                return tickets_mod.parse_ticket_url(url, scope=scope, platforms=platforms)
             # 纯关键词（不包含协议/path/数字 ID 之类）
             looks_like_url = ("://" in url or "/" in url or any(c.isdigit() for c in url[:5]))
             if looks_like_url:
                 # 但 detect 没识别，给个友好提示
                 raise ValueError("无法识别的票务链接（支持大麦艺人/演出、秀动艺人/事件、B站会员购搜索/项目）")
-            events, diag = tickets_mod.search_tickets_by_keyword(url, scope=scope)
+            events, diag = tickets_mod.search_tickets_by_keyword(
+                url, scope=scope, platforms=platforms)
             return events, diag
 
         def done(result, err):
-            self.parse_btn.setEnabled(True)
-            self.scope_sel.setEnabled(True)
+            self._set_busy(False)
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"解析失败: {str(err)[:80]}", "error")
@@ -183,8 +248,9 @@ class TicketsPage(BasePage):
             else:
                 self._events, diag = result, {}
             self._events_original = list(self._events)
-            self._sort_col = None
-            self._sort_state = 0
+            self._sorter.col = -1
+            self._sorter.ascending = True
+            self.table.horizontalHeader().setSortIndicatorShown(False)
             self._detail_cache.clear()
             try:
                 tickets_mod.save_latest_events(self._events)
@@ -210,7 +276,7 @@ class TicketsPage(BasePage):
                     empty_tip = "；可切换范围或更换关键词/链接"
             self.status_label.setText(
                 f"解析到 {len(self._events)} 场演出（{scope_cn}）{tip}{empty_tip}")
-            self.export_btn.setEnabled(bool(self._events))
+            self._update_action_buttons()
 
         run_bg(work, done)
 
@@ -232,6 +298,7 @@ class TicketsPage(BasePage):
             self.table.setItem(row, 5, QTableWidgetItem(ev.price_range or ""))
             self.table.setItem(row, 6, QTableWidgetItem(ev.status or ""))
         self._filling = False
+        self._sorter.attach(self._events)
         self._update_check_count()
 
     # ==================== 勾选（多选导出） ====================
@@ -271,17 +338,9 @@ class TicketsPage(BasePage):
     def _update_check_count(self):
         n = len(self._checked_rows())
         self.check_count_label.setText(f"已勾选 {n} 场")
+        self._update_action_buttons()
 
     # ==================== 表头排序（A-Z / Z-A / 原顺序） ====================
-
-    _EVENT_KEYS = {
-        1: lambda ev: (ev.title or "").lower(),
-        2: lambda ev: (ev.platform_cn or ev.platform or "").lower(),
-        3: lambda ev: (ev.city or "").lower(),
-        4: lambda ev: (ev.show_time or ""),
-        5: lambda ev: first_number(ev.price_range),
-        6: lambda ev: (ev.status or "").lower(),
-    }
 
     @staticmethod
     def _event_key(ev):
@@ -289,29 +348,35 @@ class TicketsPage(BasePage):
 
     def _on_header_clicked(self, col):
         """点击表头循环切换：A-Z → Z-A → 原顺序；勾选与选中行保留。"""
-        if col == 0 or not self._events:
+        if col == 0 or not self._events or self._busy:
             return
         # 先按当前顺序记录勾选/选中的 key（随后 _events 顺序改变，行号会错位）
         checked = {self._event_key(self._events[r]) for r in self._checked_rows()}
         sel_rows = self.table.selectionModel().selectedRows()
         sel_key = (self._event_key(self._events[sel_rows[0].row()])
                    if sel_rows and sel_rows[0].row() < len(self._events) else None)
-        if self._sort_col != col:
-            self._sort_col, self._sort_state = col, 1
-        else:
-            self._sort_state = (self._sort_state + 1) % 3
-        header = self.table.horizontalHeader()
-        if self._sort_state == 0:
-            self._events = list(self._events_original)
-            header.setSortIndicatorShown(False)
-        else:
-            key = self._EVENT_KEYS.get(col)
-            if key:
-                stable_sort(self._events, key, desc=(self._sort_state == 2))
-            header.setSortIndicatorShown(True)
-            header.setSortIndicator(
-                col, Qt.DescendingOrder if self._sort_state == 2 else Qt.AscendingOrder)
-        self._refill_preserving(checked, sel_key)
+        blocked = self.table.blockSignals(True)
+        selection = self.table.selectionModel()
+        selection_blocked = selection.blockSignals(True)
+        try:
+            if self._sorter.col == col and not self._sorter.ascending:
+                self._events = list(self._events_original)
+                self._sorter.col = -1
+                self._sorter.ascending = True
+                self.table.horizontalHeader().setSortIndicatorShown(False)
+                self._refill_preserving(checked, sel_key)
+            else:
+                self._sorter._on_header_clicked(col)
+                if sel_key:
+                    for row, event in enumerate(self._events):
+                        if self._event_key(event) == sel_key:
+                            self.table.selectRow(row)
+                            break
+        finally:
+            selection.blockSignals(selection_blocked)
+            self.table.blockSignals(blocked)
+        self._update_check_count()
+        self._on_select()
 
     def _refill_preserving(self, checked, sel_key):
         """按当前 self._events 重填表格，恢复勾选状态与选中行（key 在排序前采集）。"""
@@ -332,19 +397,21 @@ class TicketsPage(BasePage):
     # ==================== 详情 ====================
 
     def _on_select(self):
+        if self._filling:
+            return
         rows = self.table.selectionModel().selectedRows()
-        has = bool(rows)
-        self.detail_btn.setEnabled(has)
-        self.link_btn.setEnabled(has)
-        if not has:
+        self._update_action_buttons()
+        if not rows or not 0 <= rows[0].row() < len(self._events):
             return
         ev = self._events[rows[0].row()]
         self.detail_text.setPlainText(self._format_detail(ev, None))
-        self.link_btn.setEnabled(bool(ev.url))
 
     @staticmethod
-    def _parse_one(ev):
+    def _parse_one(ev, platforms=None):
         """单场演出 → ShowEvent 详情对象（按平台分发）。"""
+        selected = tickets_mod.normalize_ticket_platforms(platforms)
+        if tickets_mod.ticket_platform_key(ev.platform) not in selected:
+            raise ValueError("该演出所属平台未勾选，请勾选后重试")
         if ev.platform == "damai":
             return tickets_mod.parse_damai_item(ev.event_id)
         if ev.platform == "showstart":
@@ -356,15 +423,19 @@ class TicketsPage(BasePage):
     def _fetch_detail(self):
         """「获取选中演出详情」：勾选了演出→逐场拉详情+下载图片；
         未勾选→仅当前选中行。已拉过的（缓存）自动跳过。"""
-        if not self._events:
+        if not self._events or self._busy:
+            return
+        platforms = self._request_platforms()
+        if platforms is None:
             return
         checked = self._checked_rows()
         if checked:
             rows = sorted(set(checked))
         else:
             rows = [r.row() for r in self.table.selectionModel().selectedRows()]
-        rows = [r for r in rows if 0 <= r < len(self._events)]
+        rows = self._allowed_rows(rows, platforms)
         if not rows:
+            self.status_label.setText("所选演出所属平台未勾选，请调整平台后重试")
             return
         todo = [self._events[r] for r in rows
                 if f"{self._events[r].platform}:{self._events[r].event_id}"
@@ -373,9 +444,7 @@ class TicketsPage(BasePage):
             self._show_cached_or(rows)
             return
         total = len(todo)
-        self.detail_btn.setEnabled(False)
-        self.parse_btn.setEnabled(False)
-        self.export_btn.setEnabled(False)
+        self._set_busy(True)
         self.status_label.setText(f"获取 {total} 场演出详情（含图片下载）...")
 
         def work():
@@ -389,7 +458,7 @@ class TicketsPage(BasePage):
                     time.sleep(1.5)   # 件间隔，降低风控概率
                 for attempt in (1, 2):
                     try:
-                        obj = self._parse_one(ev)
+                        obj = self._parse_one(ev, platforms=platforms)
                         tickets_mod.download_event_images(obj, base, log=self._log)
                         done_items.append(obj)
                         break
@@ -402,10 +471,7 @@ class TicketsPage(BasePage):
             return done_items, failed
 
         def done(result, err):
-            self.parse_btn.setEnabled(True)
-            self.export_btn.setEnabled(bool(self._events))
-            self.detail_btn.setEnabled(
-                bool(self.table.selectionModel().selectedRows()))
+            self._set_busy(False)
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"详情获取失败: {str(err)[:80]}", "error")
@@ -559,7 +625,10 @@ class TicketsPage(BasePage):
         rows = self.table.selectionModel().selectedRows()
         if not rows:
             return
-        ev = self._events[rows[0].row()]
+        allowed = self._allowed_rows([rows[0].row()], self._selected_platforms())
+        if not allowed:
+            return
+        ev = self._events[allowed[0]]
         detail = self._detail_cache.get(f"{ev.platform}:{ev.event_id}") or {}
         url = detail.get("链接") or ev.url
         if not url:
@@ -570,9 +639,12 @@ class TicketsPage(BasePage):
 
     def _export(self):
         """多选导出 JSON：勾选的演出逐场拉全量详情，一次导出。"""
-        if not self._events:
+        if not self._events or self._busy:
             return
-        checked = self._checked_rows()
+        platforms = self._request_platforms()
+        if platforms is None:
+            return
+        checked = self._allowed_rows(self._checked_rows(), platforms)
         if not checked:
             self.app.toast("请先勾选要导出的演出（表格第一列复选框），或点「全选」",
                            "warning")
@@ -583,17 +655,15 @@ class TicketsPage(BasePage):
             f"票务演出_已选{total}场.json", "JSON (*.json)")
         if not path:
             return
-        self.export_btn.setEnabled(False)
-        self.parse_btn.setEnabled(False)
-        self.detail_btn.setEnabled(False)
+        events = [self._events[row] for row in checked]
+        self._set_busy(True)
 
         def work():
             import time
             from toolbox.config_manager import get_export_dir
             base = get_export_dir() / "票务演出"
             data, failed = [], []
-            for n, r in enumerate(checked, 1):
-                ev = self._events[r]
+            for n, ev in enumerate(events, 1):
                 self._log(f"导出进度 {n}/{total}：{ev.title[:26]}")
                 if n > 1:
                     time.sleep(1.5)   # 件间隔，降低风控概率
@@ -603,7 +673,7 @@ class TicketsPage(BasePage):
                 if detail is None:
                     for attempt in (1, 2):
                         try:
-                            obj = self._parse_one(ev)
+                            obj = self._parse_one(ev, platforms=platforms)
                             tickets_mod.download_event_images(
                                 obj, base, log=self._log)
                             detail = obj.to_dict()
@@ -624,10 +694,7 @@ class TicketsPage(BasePage):
             return data, failed
 
         def done(result, err):
-            self.export_btn.setEnabled(True)
-            self.parse_btn.setEnabled(True)
-            self.detail_btn.setEnabled(
-                bool(self.table.selectionModel().selectedRows()))
+            self._set_busy(False)
             if err:
                 self.status_label.setText("")
                 self.app.toast(f"导出失败: {str(err)[:80]}", "error")

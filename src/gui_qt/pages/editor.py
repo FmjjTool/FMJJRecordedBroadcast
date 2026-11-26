@@ -25,7 +25,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyle,
+    QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStyle,
     QStyleOptionSlider, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -265,7 +265,7 @@ class EditorPage(BasePage):
             self._resume_ms = position  # 回来时接着看，不因松开句柄丢进度
         self.player.stop()
         self.player.setSource(QUrl())
-        self.play_btn.setText("▶ 播放")
+        self.play_btn.setText("播放")
 
     def on_show(self):
         self._sync_folders()
@@ -331,17 +331,21 @@ class EditorPage(BasePage):
         # ==================== 左：文件队列 ====================
         left = QVBoxLayout()
         left.setSpacing(4)
-        row1 = QHBoxLayout()
-        row1.addWidget(self._btn("刷新", self._refresh_folders))
-        row1.addWidget(self._btn("添加文件", self._add_files))
-        row1.addWidget(self._btn("添加文件夹", self._add_folder))
-        left.addLayout(row1)
+        left.addWidget(_OptionGrid([
+            self._btn("刷新", self._refresh_folders),
+            self._btn("添加文件", self._add_files),
+            self._btn("添加文件夹", self._add_folder)], columns=3, cell_width=88))
         row2 = QHBoxLayout()
         row2.addWidget(self._btn("按名排序", self._sort_by_name, small=True))
-        row2.addWidget(self._btn("↑", lambda: self._move(-1), small=True))
-        row2.addWidget(self._btn("↓", lambda: self._move(1), small=True))
-        row2.addWidget(self._btn("×", self._delete_selected, small=True, danger=True))
-        row2.addWidget(self._btn("清空", self._clear, small=True))
+        queue_more = QPushButton("更多")
+        queue_more.setProperty("menuButton", True)
+        queue_menu = QMenu(queue_more)
+        for label, slot in (("上移", lambda: self._move(-1)),
+                            ("下移", lambda: self._move(1)),
+                            ("删除选中文件", self._delete_selected), ("清空队列", self._clear)):
+            queue_menu.addAction(label).triggered.connect(slot)
+        queue_more.setMenu(queue_menu)
+        row2.addWidget(queue_more)
         left.addLayout(row2)
         folder_row = QHBoxLayout()
         folder_row.setSpacing(6)
@@ -394,6 +398,7 @@ class EditorPage(BasePage):
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
         self.player.errorOccurred.connect(self._on_player_error)
+        self.player.playbackStateChanged.connect(self._sync_play_button)
 
         # 进度条独立一行并锁死高度：竖直空间不足时普通布局会把它压成不可见，
         # 固定高度能保证它永远在（拖不动进度条=这条被挤掉）。
@@ -418,6 +423,8 @@ class EditorPage(BasePage):
         self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderReleased.connect(self._on_slider_released)
         self.slider.sliderMoved.connect(self._on_slider_moved)
+        self.slider.actionTriggered.connect(
+            lambda _action: self._seek_to(self.slider.sliderPosition()))
 
         self.time_label = QLabel("00:00")
         self.time_label.setStyleSheet(
@@ -463,23 +470,32 @@ class EditorPage(BasePage):
         self.segment_status.setWordWrap(True)
         preview_layout.addWidget(self.segment_status)
 
-        # 快捷转跳
-        jump_items = []
+        # 高频步进直接显示，其余定位操作收进菜单，避免预览区挤占参数高度。
+        jump_row = QHBoxLayout()
+        jump_menu_btn = QPushButton("定位")
+        jump_menu_btn.setProperty("menuButton", True)
+        jump_menu = QMenu(jump_menu_btn)
+        jump_menu_btn.setMenu(jump_menu)
+        jump_row.addWidget(jump_menu_btn)
         self.jump_buttons = []
         for text, delta in (("片头", None), ("-10s", -10000), ("-1s", -1000),
                             ("+1s", 1000), ("+10s", 10000), ("片尾", "end")):
-            btn = QPushButton(text)
-            btn.setStyleSheet("padding: 2px 4px;")
-            if delta is None:
-                btn.clicked.connect(lambda: self._seek_to(0))
-            elif delta == "end":
-                btn.clicked.connect(lambda: self._seek_to(self._duration_ms))
+            if delta in (-1000, 1000):
+                btn = QPushButton(text)
+                btn.setStyleSheet("padding: 2px 4px;")
+                jump_row.addWidget(btn)
+                signal = btn.clicked
             else:
-                btn.clicked.connect(lambda _c=False, d=delta: self._jump(d))
+                btn = jump_menu.addAction(text)
+                signal = btn.triggered
+            if delta is None:
+                signal.connect(lambda: self._seek_to(0))
+            elif delta == "end":
+                signal.connect(lambda: self._seek_to(self._duration_ms))
+            else:
+                signal.connect(lambda _c=False, d=delta: self._jump(d))
             self.jump_buttons.append(btn)
-            jump_items.append(btn)
-        preview_layout.addWidget(_OptionGrid(jump_items, columns=3, cell_width=76))
-        jump_row = QHBoxLayout()
+        self.jump_buttons.append(jump_menu_btn)
         self.jump_input = QLineEdit()
         self.jump_input.setPlaceholderText("00:30 跳转")
         self.jump_input.setAccessibleName("跳转时间")
@@ -573,10 +589,15 @@ class EditorPage(BasePage):
 
     def on_theme_changed(self):
         self.slider.update()
-        for widget, name in ((self.play_btn, "play"),
-                             (self.set_start_btn, "skip_prev"),
+        self._sync_play_button()
+        for widget, name in ((self.set_start_btn, "skip_prev"),
                              (self.set_end_btn, "skip_next")):
             widget.setIcon(line_icon(name, theme.color("text"), 16))
+
+    def _sync_play_button(self, _state=None):
+        playing = self.player.playbackState() == QMediaPlayer.PlayingState
+        self.play_btn.setText("暂停" if playing else "播放")
+        self.play_btn.setIcon(line_icon("pause" if playing else "play", theme.color("text"), 16))
 
     @staticmethod
     def _field(label, control):
@@ -875,7 +896,7 @@ class EditorPage(BasePage):
             self.slider.setRange(0, 0)
             self._update_time_label(0)
             self._refresh_segments()
-            self.play_btn.setText("▶ 播放")
+            self.play_btn.setText("播放")
             self.file_label.setText("未选择文件")
             self.track_table.setRowCount(0)
             for edit in (self.meta_title, self.meta_artist,
@@ -899,7 +920,7 @@ class EditorPage(BasePage):
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.pause()
         self.slider.setValue(0)
-        self.play_btn.setText("▶ 播放")
+        self.play_btn.setText("播放")
         try:
             self._duration_ms = int(probe_media(Path(path)).duration * 1000)
         except Exception:
@@ -950,7 +971,7 @@ class EditorPage(BasePage):
             return
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
-            self.play_btn.setText("▶ 播放")
+            self.play_btn.setText("播放")
         else:
             self.player.play()
             self.play_btn.setText("暂停")

@@ -606,6 +606,37 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   .col-list { max-height: 360px; min-height: 160px; }
 }
 
+/* 视频操作：参数自然换行，播放指针与片段共用一条时间轴。 */
+.video-preview { width: 100%; max-height: 320px; background: var(--bg); border-radius: 8px; }
+.video-operations { min-width: 0; max-width: 100%; }
+.video-operations .toolbar > .input,
+.video-operations .toolbar > .select { max-width: 100%; min-width: 0; }
+.video-timebar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.video-time-label { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.video-time-track { position: relative; flex: 1; min-width: 48px; height: 28px; }
+.video-time-ranges { position: absolute; inset: 8px 0; background: var(--panel-2); border: 1px solid var(--input); border-radius: 4px; pointer-events: none; }
+.video-time-range { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--ok); opacity: .6; }
+.video-time-range.is-selected { background: var(--accent); opacity: 1; }
+.video-time-pending { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--warn); transform: translateX(-50%); }
+.video-seek { appearance: none; -webkit-appearance: none; position: relative; display: block; width: 100%; height: 28px; margin: 0; background: transparent; cursor: pointer; }
+.video-seek::-webkit-slider-runnable-track { height: 12px; background: transparent; }
+.video-seek::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 24px; margin-top: -6px; background: var(--panel); border: 1px solid var(--link); border-radius: 4px; }
+.video-seek::-moz-range-track { height: 12px; background: transparent; }
+.video-seek::-moz-range-thumb { width: 12px; height: 24px; background: var(--panel); border: 1px solid var(--link); border-radius: 4px; }
+.video-seek:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.video-seek:disabled { cursor: default; opacity: .5; }
+.video-mark-actions { margin: 6px 0; }
+.video-mark-hint { display: block; margin: 4px 0; }
+.video-segment-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.video-segment.active { color: var(--link); background: var(--panel-3); border-color: var(--accent); }
+.video-segment-error { color: var(--danger); margin-top: 4px; }
+.video-rotation-row { margin-top: 12px; }
+.video-metadata-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.video-metadata-form > .input { width: 100%; min-width: 0; }
+@media (max-width: 600px) {
+  .video-metadata-form { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 标签编辑表单：窄屏自动单列 */
 .form-grid {
   display: grid;
