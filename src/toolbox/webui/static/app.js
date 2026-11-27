@@ -10546,7 +10546,7 @@ function renderLivestreamSummary(root) {
         source: { kind: 'event', row_no: selectedEvent ? selectedEvent.row_no : null },
         name: nameInput.value,
         platforms: boxes.filter(function (item) {
-          return item.box.checked && !item.box.disabled;
+          return item.box.checked && item.row.supports_create && item.row.available;
         }).map(function (item) { return item.row.platform; })
       };
     }
