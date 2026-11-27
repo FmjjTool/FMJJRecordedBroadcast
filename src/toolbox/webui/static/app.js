@@ -11272,6 +11272,7 @@ function renderMusicTag(root) {
       var matchButton = h('button', { class: 'btn', type: 'button' }, '自动匹配');
 
       function prepareMatch() {
+        if (scanBusy) { toast('音乐文件仍在扫描，请结束后再匹配', 'info'); return false; }
         if (!canLeaveEditor()) return false;
         ++editorVersion;
         editorHost.replaceChildren();

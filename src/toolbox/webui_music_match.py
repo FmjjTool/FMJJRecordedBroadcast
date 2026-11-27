@@ -248,6 +248,7 @@ class MusicMatchPlans:
     def __init__(self, *, clock=time.monotonic):
         self._clock = clock
         self._lock = threading.RLock()
+        self._preview_gate = threading.Lock()
         self._plans = {}
 
     def options(self):
@@ -290,6 +291,16 @@ class MusicMatchPlans:
 
     def preview(self, payload, *, is_cancelled=lambda: False,
                 on_progress=lambda message, progress: None):
+        # A single preview owns the bounded worker pool. Parallel browser
+        # clients must not multiply the configured platform concurrency.
+        if not self._preview_gate.acquire(blocking=False):
+            raise _PlanError("另一个匹配预览正在进行，请结束后重试")
+        try:
+            return self._preview(payload, is_cancelled=is_cancelled, on_progress=on_progress)
+        finally:
+            self._preview_gate.release()
+
+    def _preview(self, payload, *, is_cancelled, on_progress):
         if not isinstance(payload, dict) or set(payload) - {"rels", "settings"}:
             raise _PlanError("匹配预览参数无效")
         rels = _relative_values(payload.get("rels"))
