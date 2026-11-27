@@ -10595,8 +10595,7 @@ function renderLivestreamSummary(root) {
     function refreshSelectionCount() {
       var count = selectionCount();
       if (selectionLabel) {
-        selectionLabel.textContent = '已勾选 ' + count
-          + ' 首写入（「写入」列可逐首勾选）';
+        selectionLabel.textContent = '已勾选 ' + count + ' 首';
       }
       applyBtn.disabled = busy || !previewId || count <= 0;
       return count;
@@ -10783,11 +10782,11 @@ function renderLivestreamSummary(root) {
             h('button', {
               class: 'btn small', type: 'button',
               onclick: function () { setAll('matched'); }
-            }, '只选已匹配'),
+            }, '选匹配'),
             h('button', {
               class: 'btn small', type: 'button',
               onclick: function () { setAll('none'); }
-            }, '全不选')),
+            }, '清除')),
           h('div', { class: 'table-wrap', style: 'margin-top:8px' },
             h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
               h('th', { class: 'num' }, '写入'),
