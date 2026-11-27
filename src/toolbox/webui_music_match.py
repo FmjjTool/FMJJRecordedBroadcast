@@ -180,6 +180,13 @@ def _changes(before, after):
             if str(before.get(key) or "") != str(value or "")]
 
 
+def _match_size(match):
+    # Count every retained string, including multibyte text; do not account
+    # only for image bytes while leaving unusually large candidate tags free.
+    return len(match.cover) + sum(len(value.encode("utf-8"))
+        for value in vars(match.candidate).values() if isinstance(value, str))
+
+
 def _public_row(rel, status, message=""):
     return {"rel": rel, "name": PurePosixPath(rel).name, "status": status,
             "candidate": None, "changes": [], "cover_changed": False,
@@ -330,8 +337,6 @@ class MusicMatchPlans:
                 io_settings = tag_api._settings()
                 tags = tags_io.load_tags(str(path), io_settings["connector"]) or {}
                 pictures = tags_io.load_pictures(str(path))
-                side_states = {suffix: _file_state(_sidecar_path(path, suffix, root),
-                    optional=True, max_bytes=MAX_SIDECAR) for suffix in _EXTENSIONS}
                 if _file_state(path) != state:
                     raise _PlanError("音乐文件正在变化，请重新预览")
             row = {"path": str(path), "tags": tags, "pictures": pictures}
@@ -349,6 +354,15 @@ class MusicMatchPlans:
                           for key in settings["sources"] if key in (match.errors or {})]
                 return _public_row(rel, "unmatched", "；".join(failed) or "没有匹配到候选"), None
             plan = tag_match_rules.build_update_plan(row, candidate, settings)
+            # The candidate determines the actual picture suffix. Only paths
+            # the shared plan would use participate in conflict protection;
+            # unrelated large files/directories must not block tag-only work.
+            with tag_api._WRITE_LOCK:
+                if _file_state(path) != state:
+                    raise _PlanError("音乐文件在匹配期间发生变化，请重新预览")
+                side_states = {item["suffix"]: _file_state(
+                    _sidecar_path(path, item["suffix"], root),
+                    optional=True, max_bytes=MAX_SIDECAR) for item in plan["sidecars"]}
             changes = _changes(tags, plan["tags"])
             cover_changed = plan["pictures_dirty"] and _picture_key(pictures) != _picture_key(plan["pictures"])
             sidecars = _sidecar_summary(path, plan, side_states, root)
@@ -362,7 +376,7 @@ class MusicMatchPlans:
                 sidecars=sidecars)
             if not ready:
                 return public, None
-            size = len(candidate.cover) + len(cand.lyric.encode("utf-8"))
+            size = _match_size(candidate)
             return public, {"path": path, "state": state, "side_states": side_states,
                 "match": candidate, "io_settings": io_settings, "memory": size}
         except _PlanError as exc:

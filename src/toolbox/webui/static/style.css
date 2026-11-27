@@ -677,5 +677,11 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-match-field > span { min-width: 48px; }
 .music-match-field .select { min-width: 120px; max-width: 100%; }
 .music-match-changes { white-space: normal; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.music-match-changes > .row-title { white-space: normal; overflow-wrap: anywhere; }
+.music-match-table { min-width: 0; table-layout: fixed; }
+.music-match-table th { cursor: pointer; }
+.music-match-table th:first-child { width: 40px; cursor: default; }
+.music-match-table th:nth-child(2) { width: 22%; }
+.music-match-table th:nth-child(3) { width: 66px; }
 .music-match-columns { justify-content: flex-end; margin-top: 8px; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }
