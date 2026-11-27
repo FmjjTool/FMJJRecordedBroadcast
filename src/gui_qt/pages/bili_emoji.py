@@ -156,9 +156,6 @@ def render_files(table: QTableWidget, info: QLabel, result: dict):
 
 
 class BiliEmojiPage(BasePage):
-    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
-
     def __init__(self, app):
         super().__init__(app)
         self._all_current = None
@@ -173,15 +170,12 @@ class BiliEmojiPage(BasePage):
         layout.setContentsMargins(4, 4, 4, 4)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_emoji_tab(), "表情包")
+        self.tabs.addTab(self._build_emoji_tab(), "普通表情包")
         self.tabs.addTab(self._build_room_tab(), "直播间表情")
 
     def _switch_tab(self, index: int):
-        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
-        if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_map[index])
-        else:
-            self.tabs.setCurrentIndex(index)
+        """切换表情包类别页签。"""
+        self.tabs.setCurrentIndex(index)
 
     # ---------- 缩略图预览 ----------
     def _preview(self, table: QTableWidget, urls: list[str], col: int = 0):
@@ -259,7 +253,7 @@ class BiliEmojiPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("① 浏览 / 搜索全部表情包")
+        title = QLabel("浏览 / 搜索全部表情包")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
@@ -374,7 +368,7 @@ class BiliEmojiPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("② 按 ID 下载（普通表情包 / 装扮表情包）")
+        title = QLabel("按 ID 下载（普通表情包 / 装扮表情包）")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
@@ -400,7 +394,7 @@ class BiliEmojiPage(BasePage):
         row.addWidget(btn)
         v.addLayout(row)
 
-        self.id_info = QLabel("自动识别：普通表情包 → 装扮表情 → 收藏集（命中收藏集会自动跳「收藏集」tab）")
+        self.id_info = QLabel("自动识别普通表情包和装扮；识别到收藏集活动时自动打开活动详情")
         self.id_info.setProperty("role", "caption")
         self.id_info.setWordWrap(True)
         v.addWidget(self.id_info)
@@ -414,7 +408,7 @@ class BiliEmojiPage(BasePage):
         return card
 
     def _goto_garb(self, act_id: str):
-        """切换到本页「收藏集活动」tab 加载收藏集活动（B站资源聚合页内切换）。"""
+        """切换到收藏集类别并加载活动详情。"""
         page = getattr(self, "_resource_host", None) or self.app.pages.get("bili_resource")
         if page is not None:
             page.show_garb(act_id)
@@ -428,7 +422,7 @@ class BiliEmojiPage(BasePage):
         if parsed:
             typ, oid = parsed
             if typ == "lottery":
-                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在跳「收藏集」tab……")
+                self.id_info.setText(f"识别到收藏集链接（act_id={oid}），正在打开活动详情……")
                 self._goto_garb(oid)
                 return
             if typ == "suit":
@@ -474,7 +468,7 @@ class BiliEmojiPage(BasePage):
                     if not pkgs:  # 普通包查不到 → 可能是失效装扮/收藏集 ID，逐级回退
                         try:
                             api.act_basic(idx)
-                            hints.append(f"{idx} 是收藏集活动ID，正在跳「收藏集活动」tab")
+                            hints.append(f"{idx} 是收藏集活动 ID，正在打开活动详情")
                             return {"files": [], "title": idx, "act_id": idx, "hints": hints}
                         except api.BiliApiError:
                             pass
@@ -505,7 +499,7 @@ class BiliEmojiPage(BasePage):
 
         run_bg(job, done)
 
-    # ---------- Tab3 直播间表情 ----------
+    # ---------- 直播间表情 ----------
     def _build_room_tab(self):
         card = QFrame()
         card.setProperty("variant", "card")
@@ -515,7 +509,7 @@ class BiliEmojiPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("③ 直播间表情")
+        title = QLabel("直播间表情")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
