@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from gui_qt import table_sort
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.pages.base import BasePage
-from gui_qt.toolbox_common import ElidedLabel, ToolSectionCard
+from gui_qt.toolbox_common import ToolSectionCard
 from music import playlist_service as service
 from music.playlist_service import PlaylistWriteError
 
@@ -60,6 +60,7 @@ class MusicPlaylistPage(BasePage):
         self._cancel = threading.Event()
         self._plans: list[service.PlatformPlan] = []
         self._source_label = ""
+        self._summary_text = "尚未预览"
         self._event: dict | None = None
         self._events: list[dict] = []
         self._events_loaded = False
@@ -84,7 +85,7 @@ class MusicPlaylistPage(BasePage):
         scroll.setWidget(body)
         content = QVBoxLayout(body)
         content.setContentsMargins(16, 16, 16, 16)
-        content.setSpacing(12)
+        content.setSpacing(6)
 
         content.addWidget(self._build_setup_card())
         content.addWidget(self._build_result_card(), 1)
@@ -94,6 +95,8 @@ class MusicPlaylistPage(BasePage):
 
     def _build_setup_card(self) -> QWidget:
         card = ToolSectionCard("来源与目标", icon="music")
+        card.layout().setSpacing(8)
+        card.content_layout.setSpacing(8)
         self.open_dir_btn = QPushButton("打开报告目录")
         self.open_dir_btn.clicked.connect(self._open_report_dir)
         card.heading_layout.addWidget(self.open_dir_btn)
@@ -135,7 +138,9 @@ class MusicPlaylistPage(BasePage):
 
         platform_row = QHBoxLayout()
         platform_row.setSpacing(14)
-        platform_row.addWidget(QLabel("目标平台"))
+        platform_label = QLabel("目标平台")
+        platform_label.setToolTip(self._platform_note_text())
+        platform_row.addWidget(platform_label)
         self._platform_boxes: dict[str, QCheckBox] = {}
         for row in service.capabilities():
             box = QCheckBox(row["name"])
@@ -152,10 +157,6 @@ class MusicPlaylistPage(BasePage):
             platform_row.addWidget(box)
         platform_row.addStretch(1)
         content.addLayout(platform_row)
-
-        self.platform_note = ElidedLabel(
-            self._platform_note_text(), role="caption")
-        content.addWidget(self.platform_note)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -198,23 +199,20 @@ class MusicPlaylistPage(BasePage):
         self.status_label = QLabel("")
         self.status_label.setProperty("role", "muted")
         self.status_label.setWordWrap(True)
+        self.status_label.hide()
         content.addWidget(self.status_label)
         self._ensure_events()
         return card
 
     def _build_result_card(self) -> QWidget:
         card = ToolSectionCard("匹配结果", icon="list")
-        self.summary_label = QLabel("尚未预览")
+        card.layout().setSpacing(8)
+        card.content_layout.setSpacing(8)
+        self.summary_label = QLabel(self._summary_text)
         self.summary_label.setProperty("role", "muted")
         self.summary_label.setWordWrap(True)
         card.content_layout.addWidget(self.summary_label)
 
-        pick_row = QHBoxLayout()
-        pick_row.setSpacing(8)
-        self.selection_label = QLabel("")
-        self.selection_label.setProperty("role", "muted")
-        pick_row.addWidget(self.selection_label)
-        pick_row.addStretch(1)
         self.select_all_btn = QPushButton("全选")
         self.select_all_btn.setToolTip("勾选已匹配 + 待确认的全部歌曲")
         self.select_all_btn.clicked.connect(lambda: self._bulk_select("all"))
@@ -230,8 +228,6 @@ class MusicPlaylistPage(BasePage):
         for button in (self.select_all_btn, self.select_matched_btn,
                        self.select_none_btn):
             button.setEnabled(False)
-        card.content_layout.addLayout(pick_row)
-
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(_COLUMNS)
         self.table.verticalHeader().setVisible(False)
@@ -250,15 +246,12 @@ class MusicPlaylistPage(BasePage):
             self.table, skip_columns=(_COL_CHECK, _COL_INDEX))
         card.content_layout.addWidget(self.table, 1)
 
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
-        self.report_label = ElidedLabel("报告目录：" + str(self._report_dir))
-        footer.addWidget(self.report_label, 1)
-        card.content_layout.addLayout(footer)
         return card
 
     def _build_log_card(self) -> QWidget:
         card = ToolSectionCard("运行日志", icon="pulse")
+        card.layout().setSpacing(8)
+        card.content_layout.setSpacing(8)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setFixedHeight(96)
@@ -298,7 +291,7 @@ class MusicPlaylistPage(BasePage):
             self._apply_event(events[0])
         else:
             self.event_box.lineEdit().setPlaceholderText("本地暂无线下活动")
-            self.status_label.setText("本地没有线下活动快照，请先同步活动数据")
+            self._set_status_text("本地没有线下活动快照，请先同步活动数据")
 
     @staticmethod
     def _event_label(event: dict) -> str:
@@ -363,8 +356,7 @@ class MusicPlaylistPage(BasePage):
         self._check_cells = {}
         self._source_label = ""
         self.table.setRowCount(0)
-        self.summary_label.setText("尚未预览")
-        self.selection_label.setText("")
+        self._set_summary_text("尚未预览")
         self.apply_btn.setEnabled(False)
         for button in (self.select_all_btn, self.select_matched_btn,
                        self.select_none_btn):
@@ -417,8 +409,8 @@ class MusicPlaylistPage(BasePage):
         self._selection = {}
         self._check_cells = {}
         self.table.setRowCount(0)
-        self.selection_label.setText("正在匹配…")
-        self.summary_label.setText("正在读取来源…")
+        self._set_summary_text("正在读取来源…")
+        self._set_status_text("")
         self.log_view.clear()
         self.apply_btn.setEnabled(False)
         self._set_busy(True)
@@ -447,7 +439,7 @@ class MusicPlaylistPage(BasePage):
 
     def _on_match_progress(self, platform: str, index: int, total: int, item):
         label = service.PLATFORM_NAMES.get(platform, platform)
-        self.status_label.setText(
+        self._set_status_text(
             f"{label} 匹配中 {index}/{total}：{item.source.title}"
             f"（{_STATE_LABELS.get(item.status, item.status)}）")
 
@@ -455,25 +447,25 @@ class MusicPlaylistPage(BasePage):
         self.progress.setRange(0, 100)
         self._set_busy(False)
         if err:
-            self.summary_label.setText("预览失败")
-            self.status_label.setText(err)
+            self._set_summary_text("预览失败")
+            self._set_status_text(err)
             self._log(f"预览失败：{err}")
             return
-        label, source_count, plans = result
+        label, _source_count, plans = result
         self._source_label = label
         self._plans = plans
         self._fill_table(plans)
         self._write_preview_report(plans)
 
         if not plans:
-            self.summary_label.setText("已停止，未生成匹配结果")
+            self._set_summary_text("已停止，未生成匹配结果")
+            self._set_status_text("")
             return
         total_matched = sum(plan.counts()["matched"] for plan in plans)
-        self.summary_label.setText(
+        self._set_summary_text(
             f"来源：{label}；已匹配 {total_matched} 首")
-        self.status_label.setText(
-            f"预览完成：{source_count} 首歌，{len(plans)} 个平台"
-            + ("；已停止，部分平台未匹配" if self._cancel.is_set() else ""))
+        self._set_status_text(
+            "已停止，部分平台未匹配" if self._cancel.is_set() else "")
         self._log(f"预览完成，报告：{self._report_paths[-1] if self._report_paths else '—'}")
         self.progress.setValue(100)
         self._refresh_selection()
@@ -598,11 +590,10 @@ class MusicPlaylistPage(BasePage):
     def _refresh_selection(self):
         chosen = sum(plan.selected_count() for plan in self._plans) if self._plans else 0
         total = sum(len(plan.items) for plan in self._plans) if self._plans else 0
-        if not self._plans:
-            self.selection_label.setText("")
-        else:
-            self.selection_label.setText(
-                f"已勾选 {chosen} / {total} 首")
+        summary = self._summary_text
+        if self._plans:
+            summary += f"；已勾选 {chosen} / {total} 首"
+        self.summary_label.setText(summary)
         if not self._busy:
             self.apply_btn.setEnabled(bool(chosen))
             for button in (self.select_all_btn, self.select_matched_btn,
@@ -659,7 +650,7 @@ class MusicPlaylistPage(BasePage):
         self._cancel.clear()
         self._set_busy(True)
         self.progress.setRange(0, 0)
-        self.status_label.setText("正在写入平台…")
+        self._set_status_text("正在写入平台…")
         self._log("开始写入平台…")
         # 逐首勾选已经在结果表里落成显式状态，写入完全以勾选为准
         include_uncertain = False
@@ -726,14 +717,14 @@ class MusicPlaylistPage(BasePage):
         run_bg(work, self._on_apply_done, owner=self)
 
     def _on_add_progress(self, platform_name: str, done: int, total: int, message: str):
-        self.status_label.setText(f"{platform_name} 写入中 {done}/{total}：{message}")
+        self._set_status_text(f"{platform_name} 写入中 {done}/{total}：{message}")
 
     def _on_apply_done(self, result, err):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self._set_busy(False)
         if err:
-            self.status_label.setText(err)
+            self._set_status_text(err)
             self._log(f"写入失败：{err}")
             return
         results, writeback = result
@@ -767,14 +758,23 @@ class MusicPlaylistPage(BasePage):
             lines.append(_writeback_text(writeback))
         text = "\n".join(lines) or "没有写入任何平台"
         self._log(text)
-        self.status_label.setText("写入流程结束")
+        self._set_status_text("")
         QMessageBox.information(self, "歌单", text)
 
     # ---------- 公共 ----------
 
+    def _set_summary_text(self, text: str):
+        self._summary_text = text
+        if hasattr(self, "summary_label"):
+            self.summary_label.setText(text)
+
+    def _set_status_text(self, text: str):
+        self.status_label.setText(text)
+        self.status_label.setVisible(bool(text))
+
     def _stop(self):
         self._cancel.set()
-        self.status_label.setText("正在停止…当前批次结束后不再继续")
+        self._set_status_text("正在停止…当前批次结束后不再继续")
         self._log("已请求停止")
 
     def _set_busy(self, busy: bool):
