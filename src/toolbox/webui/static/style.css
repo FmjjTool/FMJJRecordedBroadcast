@@ -790,8 +790,8 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   .home-source-legend li { gap: 6px; }
   .home-notice { align-items: flex-start; }
 }
-@media (max-width: 380px) {
+@media (max-width: 600px) {
   .home-source-body { flex-direction: column; }
-  .home-donut { flex-basis: auto; width: 160px; }
+  .home-donut { flex-basis: auto; width: 200px; max-width: 100%; }
   .home-source-legend { flex-basis: auto; width: 100%; }
 }

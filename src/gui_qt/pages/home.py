@@ -1287,6 +1287,7 @@ class HomePage(BasePage):
         while self._details_grid.count():
             item = self._details_grid.takeAt(0)
             if item.widget() is not None:
+                item.widget().hide()
                 item.widget().deleteLater()
         self._detail_cards = []
         for section in sections:
@@ -1407,6 +1408,9 @@ class HomePage(BasePage):
         for key, label in self._stat_values.items():
             value = stats.get(key)
             label.setText("—" if value is None else f"{int(value):,}")
+        platform_note = str(data.get("platform_note") or "各平台已保存的本地内容")
+        self._stat_values["platform_items"].setToolTip(platform_note)
+        self._stat_cards[0].setToolTip(platform_note)
         self._stat_values["doc_views"].setToolTip(
             f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新浏览量合计")
         self._stat_values["doc_members"].setToolTip(
@@ -1502,6 +1506,7 @@ class HomePage(BasePage):
         """)
         icon_color = theme.current_palette().color(QPalette.PlaceholderText).name()
         self.refresh_btn.setIcon(line_icon("refresh", icon_color, 16))
-        self.date_label.setText(
-            datetime.now().strftime("%Y-%m-%d")
-            + "  周" + "一二三四五六日"[datetime.now().weekday()])
+        if not self.date_label.text():
+            self.date_label.setText(
+                datetime.now().strftime("%Y-%m-%d")
+                + "  周" + "一二三四五六日"[datetime.now().weekday()])

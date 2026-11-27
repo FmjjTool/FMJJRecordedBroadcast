@@ -436,8 +436,8 @@
     }
 
     function trendChart(data) {
-      var card = h('section', { class: 'card home-chart-card', 'aria-label': '近 7 天数据增量' },
-        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '近 7 天数据增量'),
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '新增趋势：近 7 天数据增量' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '新增趋势'),
           h('span', { class: 'muted small' }, '近 7 天 ' + amount(data.week_total) + ' · 今日 ' + amount(data.today_total))));
       var labels = Array.isArray(data.labels) ? data.labels.slice(-7) : [];
       var counts = (Array.isArray(data.counts) ? data.counts.slice(-7) : []).map(function (value) {
@@ -489,8 +489,8 @@
       var incomplete = ['platform_items', 'chaohua_posts', 'tcdoc_rows', 'asset_files'].some(function (key) {
         return (data.stat_states || {})[key] === 'error';
       });
-      var card = h('section', { class: 'card home-chart-card', 'aria-label': '内容来源分布' },
-        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '内容来源分布'),
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '内容分布' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '内容分布'),
           h('span', { class: 'muted small' }, (incomplete ? '已读取 ' : '共 ') + amount(total) + ' 条')));
       if (!total) {
         card.appendChild(h('div', { class: 'home-chart-empty' + (incomplete ? ' home-data-warning' : '') }, incomplete
@@ -530,18 +530,18 @@
       var siteNote = siteReady ? [stats.site_scope, stats.site_date].filter(Boolean).join(' · ') : '尚未采集访问统计';
       var docNote = '已采集 ' + amount(stats.doc_count) + ' 份文档';
       var cards = h('div', { class: 'home-overview' },
-        overviewCard('平台内容', stats.platform_items, '各平台已入库内容', metricStates.platform_items),
-        overviewCard('超话帖子', stats.chaohua_posts, '去重后的本地帖子', metricStates.chaohua_posts),
-        overviewCard('文档表格行', stats.tcdoc_rows, '已同步的本地表格记录', metricStates.tcdoc_rows),
-        overviewCard('资源文件', stats.asset_files, '资产索引已登记文件', metricStates.asset_files),
+        overviewCard('平台内容', stats.platform_items, data.platform_note || '各平台已入库内容', metricStates.platform_items),
+        overviewCard('微博超话帖子', stats.chaohua_posts, '去重后的本地帖子', metricStates.chaohua_posts),
+        overviewCard('腾讯文档行', stats.tcdoc_rows, '已同步的本地表格记录', metricStates.tcdoc_rows),
+        overviewCard('资源归档', stats.asset_files, '资产索引已登记条目', metricStates.asset_files),
         overviewCard('文档浏览量', stats.doc_views, docNote, metricStates.doc_views),
         overviewCard('文档成员数', stats.doc_members, docNote, metricStates.doc_members),
-        overviewCard('文档查看人数', stats.doc_readers, docNote, metricStates.doc_readers),
-        overviewCard('观察账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号', metricStates.tracked_accounts),
+        overviewCard('已查看人数', stats.doc_readers, docNote, metricStates.doc_readers),
+        overviewCard('追踪账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号', metricStates.tracked_accounts),
         overviewCard('站点访客', siteReady ? stats.site_visitors : null, siteNote, metricStates.site_visitors),
         overviewCard('站点会话', siteReady ? stats.site_sessions : null, siteNote, metricStates.site_sessions),
         overviewCard('站点浏览量', siteReady ? stats.site_pageviews : null, siteNote, metricStates.site_pageviews),
-        overviewCard('在线访客', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote, metricStates.site_online));
+        overviewCard('站点在线', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote, metricStates.site_online));
       var sections = h('div', { class: 'home-sections' });
       (Array.isArray(data.sections) ? data.sections : []).forEach(function (section) {
         var metrics = h('dl', { class: 'home-metric-list' });
