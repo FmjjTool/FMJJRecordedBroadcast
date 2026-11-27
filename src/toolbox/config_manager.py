@@ -584,6 +584,13 @@ def get_rename_config() -> RenameConfig:
 
 # ==================== 统一导出目录 ====================
 
+def get_export_dir_readonly() -> Path:
+    """仅解析已保存的导出目录；不探写、创建目录或迁移旧文件。"""
+    data = _read_json(get_config_dir_readonly() / "config.json")
+    directory = data.get("export_dir") if isinstance(data, dict) else None
+    return Path(directory) if directory else get_app_root() / "download"
+
+
 def get_export_dir() -> Path:
     """统一导出目录（默认 软件根/download，不存在时自动创建）。"""
     data = _read_json(_cfg_path())

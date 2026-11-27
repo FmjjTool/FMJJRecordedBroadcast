@@ -3637,6 +3637,7 @@ function renderLivestreamSummary(root) {
     var tableBody = null;
     var requestSeq = 0;
     var loading = false;
+    var pendingRequest = null;
     var STATUS_BADGE = {
       ok: ['已完整', 'ok'], partial: ['部分下载', 'warn'],
       missing: ['该下未下', 'danger'], text: ['纯文本', ''],
@@ -3726,6 +3727,14 @@ function renderLivestreamSummary(root) {
     function load() {
       var seq = ++requestSeq;
       var scope = scopeKey();
+      if (pendingRequest) pendingRequest.abort();
+      var controller = new AbortController();
+      pendingRequest = controller;
+      var timedOut = false;
+      var timeout = setTimeout(function () {
+        timedOut = true;
+        controller.abort();
+      }, 30000);
       loading = true;
       updateButtons();
       tableHost.setAttribute('aria-busy', 'true');
@@ -3734,16 +3743,19 @@ function renderLivestreamSummary(root) {
         + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
         + '&platform=' + encodeURIComponent(state.assets.platform)
         + '&status=' + encodeURIComponent(state.assets.status || '');
-      return api(url)
+      return api(url, { signal: controller.signal })
         .then(function (data) {
-          if (!host.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+          if (!tableHost.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
           renderPage(data);
         }).catch(function (error) {
-          if (!host.isConnected || seq !== requestSeq) return;
+          if (!tableHost.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+          if (timedOut) error = new Error('读取资源归档超时，请重试。');
           if (tableBody) toast('资源清单刷新失败：' + error.message, 'error');
           else setError(tableHost, error, load);
         }).finally(function () {
+          clearTimeout(timeout);
           if (seq !== requestSeq) return;
+          pendingRequest = null;
           loading = false;
           tableHost.removeAttribute('aria-busy');
           updateButtons();
