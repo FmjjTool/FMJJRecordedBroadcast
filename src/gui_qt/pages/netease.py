@@ -389,9 +389,12 @@ class NeteasePage(BasePage):
 
         # 底部：操作栏
         bottom = QHBoxLayout()
-        bottom.addWidget(QPushButton("全选", clicked=lambda: self._sel("all")))
-        bottom.addWidget(QPushButton("反选", clicked=lambda: self._sel("invert")))
-        bottom.addWidget(QPushButton("□ 全不选", clicked=lambda: self._sel("none")))
+        self.selection_action_buttons = []
+        for label, mode in (("全选", "all"), ("反选", "invert"),
+                            ("□ 全不选", "none")):
+            button = QPushButton(label, clicked=lambda _checked=False, value=mode: self._sel(value))
+            self.selection_action_buttons.append(button)
+            bottom.addWidget(button)
         self.fallback_check = QCheckBox("自动换源")
         self.fallback_check.setChecked(self._load_fallback())
         self.fallback_check.toggled.connect(self._save_fallback)
@@ -478,9 +481,11 @@ class NeteasePage(BasePage):
     def _set_single_download_selection(self, row, checkbox):
         """让单曲详情复用统一的「下载选中」操作。"""
         checkbox.setChecked(True)
-        checkbox.setToolTip("单曲已加入下载选中")
+        checkbox.hide()
         self.results = [row]
         self.check_boxes = [checkbox]
+        for button in self.selection_action_buttons:
+            button.hide()
 
     # ===================== 导出位置（默认/固定 双选项） =====================
     def _on_export_loc_changed(self, index):
@@ -618,6 +623,8 @@ class NeteasePage(BasePage):
         self._cover_epoch += 1
         self._cover_pending = []
         self._cover_retry = 0
+        for button in self.selection_action_buttons:
+            button.show()
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():
@@ -1279,9 +1286,8 @@ class NeteasePage(BasePage):
         txt = QLabel("\n".join(lines))
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
-        selected = QCheckBox("选中")
+        selected = QCheckBox(info_card)
         self._set_single_download_selection(_song_to_row(song), selected)
-        h.addWidget(selected, 0, Qt.AlignBottom)
         self.detail_layout.addWidget(info_card)
 
         lyric = song.lyrics or ""
@@ -1310,7 +1316,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("单曲解析完成，已加入下载选中，可取消勾选")
+        self.status_label.setText("单曲已就绪，点击下方“下载选中”即可开始下载")
 
     def _render_single_song_netease(self, song):
         self.single_song_id = song.get("id")
@@ -1329,9 +1335,8 @@ class NeteasePage(BasePage):
         )
         txt = QLabel(info_text)
         h.addWidget(txt, 1)
-        selected = QCheckBox("选中")
+        selected = QCheckBox(info_card)
         self._set_single_download_selection(song, selected)
-        h.addWidget(selected, 0, Qt.AlignBottom)
         self.detail_layout.addWidget(info_card)
 
         # 歌词
@@ -1362,7 +1367,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("单曲解析完成，已加入下载选中，可取消勾选")
+        self.status_label.setText("单曲已就绪，点击下方“下载选中”即可开始下载")
 
     # ===================== 渲染：歌单解析 =====================
     def _render_playlist(self, pl):
