@@ -168,7 +168,7 @@ class ShoppingHubPage(BasePage):
             self._set_hint(plan["summary"])
         except ValueError as exc:
             if "xianyu" in selected and "://" not in text and len(text) <= 100:
-            self._set_hint("可点「搜索并解析」按关键词查找周边")
+                self._set_hint("可点「搜索并解析」按关键词查找周边")
             else:
                 self._set_hint(str(exc), warn=True)
 

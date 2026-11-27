@@ -38,14 +38,29 @@ def read_version(doc_key: str, version_id: str) -> dict:
 
 
 def table_page(doc_key: str, version_id: str, tab_id: str,
-               page: int = 1, page_size: int = 200) -> dict:
-    """按历史原始行序分页；需要展示排序的调用方先对完整 DTO 排序。"""
+               page: int = 1, page_size: int = 200, *,
+               sort_column: str = "", descending: bool = False) -> dict:
+    """先按共享显示键排整个历史子表，再分页；不改历史原始顺序。"""
+    from toolbox.table_sort_keys import sort_key, sort_records
     content = read_version(doc_key, version_id)
     sheet = next((item for item in content.get("sheets", [])
                   if item.get("tab_id") == tab_id), None)
     if sheet is None:
         raise ValueError("该采集版本没有此工作表，请重新选择")
     rows = sheet.get("rows") or []
+    if sort_column != "":
+        columns = sheet.get("columns") or []
+        try:
+            index = int(sort_column)
+            if not 0 <= index <= len(columns):
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError("排序列无效，请重新选择") from exc
+        column = columns[index - 1] if index else None
+        name = column.get("name") if isinstance(column, dict) else str(column or "")
+        rows = sort_records(rows, lambda row: sort_key(
+            (row.get("values") or {}).get(name) if index else row.get("row_no")),
+            ascending=not descending)
     try:
         page_size = max(1, min(200, int(page_size)))
         pages = max(1, (len(rows) + page_size - 1) // page_size)

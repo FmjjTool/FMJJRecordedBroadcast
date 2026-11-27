@@ -140,6 +140,28 @@ def _data(payload):
     return data
 
 
+def _is_search_bootstrap(payload, api):
+    """Ignore the site's successful search bootstrap response.
+
+    The current PC page issues a same-API request before the actual search.  It
+    returns SUCCESS with UI flags (for example ``singleShadeStyle``) but no
+    ``resultList``.  Treating that response as a changed schema aborts before
+    the real request arrives.  Only this known, success-shaped bootstrap is
+    ignored; unknown payloads still go through the strict parser.
+    """
+    if api != "mtop.taobao.idlemtopsearch.pc.search" or not isinstance(payload, dict):
+        return False
+    ret = payload.get("ret") or []
+    ret = [ret] if isinstance(ret, str) else ret
+    if not ret or not any(str(code).upper().startswith("SUCCESS") for code in ret):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict) or "resultList" in data:
+        return False
+    return bool({"singleShadeStyle", "singleShadeWords", "useNewSingleItemCardStyle"}
+                & set(data))
+
+
 def parse_search(payload, limit=MAX_ITEMS) -> list[dict]:
     data = _data(payload)
     source = data.get("resultList")
@@ -270,7 +292,10 @@ def _browser_payload(url, api, parser, cookie, cancel):
                         raw = response.body()
                         if len(raw) > MAX_BODY:
                             raise ParseChanged("闲鱼返回内容过大，已停止读取")
-                        result.append(parser(json.loads(raw)))
+                        payload = json.loads(raw)
+                        if _is_search_bootstrap(payload, api):
+                            return
+                        result.append(parser(payload))
                     except XianyuError as exc:
                         errors.append(exc)
                     except (ValueError, TypeError):
