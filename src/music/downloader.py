@@ -320,7 +320,8 @@ _REFERERS = {
 # 对外入口
 
 
-def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadResult:
+def download_song(song: SongInfo, out_dir: str, quality: str = "",
+                  include_cover: bool = True) -> DownloadResult:
     """下载一首歌。song.platform 决定解析通道。"""
     resolver = _RESOLVERS.get(song.platform)
     if not resolver:
@@ -347,7 +348,7 @@ def download_song(song: SongInfo, out_dir: str, quality: str = "") -> DownloadRe
     result.quality = result.quality or got.quality
     result.is_preview = result.is_preview or got.is_preview
     result.via_platform = getattr(got, "via_platform", "")
-    if result.success and song.cover_url:
+    if include_cover and result.success and song.cover_url:
         _download_cover(song.cover_url, referer, result.file_path)
     return result
 
@@ -449,7 +450,8 @@ def _file_is_preview(path: str, expected_seconds: int) -> bool:
         return False
 
 
-def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest") -> Optional[DownloadResult]:
+def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest",
+                 include_cover: bool = True) -> Optional[DownloadResult]:
     """网易云兜底：用已存 Cookie 搜索下载（Cookie 在则可用，无则跳过）。"""
     try:
         from auth import get_netease_cookie
@@ -474,7 +476,7 @@ def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest") -> Opti
         dl = MusicDownloader(download_dir=out_dir, cookie_string=content)
         level = {"highest": "jymaster", "flac": "lossless", "320k": "exhigh",
                  "192k": "higher", "128k": "standard"}[quality]
-        r = dl.download_music_file(int(best["id"]), level)
+        r = dl.download_music_file(int(best["id"]), level, include_cover=include_cover)
     except Exception:
         return None
     if r and r.success and r.file_path:
@@ -489,13 +491,13 @@ def _try_netease(song: SongInfo, out_dir: str, quality: str = "highest") -> Opti
 
 
 def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
-                        fallback: bool = True) -> DownloadResult:
+                        fallback: bool = True, include_cover: bool = True) -> DownloadResult:
     """下载一首歌，失败或仅试听时自动换源：酷我→酷狗→网易云。"""
     try:
         quality = normalize_quality(quality)
     except ValueError as exc:
         return DownloadResult(error_message=str(exc))
-    result = download_song(song, out_dir, quality)
+    result = download_song(song, out_dir, quality, include_cover=include_cover)
     if result.success and not result.is_preview:
         return result
     if not fallback:
@@ -511,7 +513,7 @@ def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
             continue
         try:
             target_quality = "320k" if quality == "192k" and pf != "5sing" else quality
-            r = download_song(cand, out_dir, target_quality)
+            r = download_song(cand, out_dir, target_quality, include_cover=include_cover)
         except Exception:
             continue
         if r.success and not r.is_preview:
@@ -520,7 +522,7 @@ def download_song_smart(song: SongInfo, out_dir: str, quality: str = "",
         if r.success and best is None:
             best = r
 
-    nr = _try_netease(song, out_dir, quality)
+    nr = _try_netease(song, out_dir, quality, include_cover=include_cover)
     if nr is not None:
         if nr.success and not nr.is_preview:
             return nr

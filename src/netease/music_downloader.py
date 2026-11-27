@@ -229,7 +229,8 @@ class MusicDownloader:
         except Exception as e:
             raise DownloadException(f"获取音乐信息时发生错误: {e}")
     
-    def download_music_file(self, music_id: int, quality: str = "jymaster") -> DownloadResult:
+    def download_music_file(self, music_id: int, quality: str = "jymaster",
+                            include_cover: bool = True) -> DownloadResult:
         """下载音乐文件到本地
         
         Args:
@@ -257,7 +258,8 @@ class MusicDownloader:
             if not file_path.exists() and legacy_path.exists():
                 legacy_size = legacy_path.stat().st_size
                 if not music_info.file_size or legacy_size >= music_info.file_size:
-                    self._ensure_cover_file(legacy_path, music_info)
+                    if include_cover:
+                        self._ensure_cover_file(legacy_path, music_info)
                     return DownloadResult(
                         success=True,
                         file_path=str(legacy_path),
@@ -270,7 +272,8 @@ class MusicDownloader:
             if file_path.exists():
                 actual_size = file_path.stat().st_size
                 if not music_info.file_size or actual_size >= music_info.file_size:
-                    self._ensure_cover_file(file_path, music_info)
+                    if include_cover:
+                        self._ensure_cover_file(file_path, music_info)
                     return DownloadResult(
                         success=True,
                         file_path=str(file_path),
@@ -308,11 +311,13 @@ class MusicDownloader:
                 raise DownloadException(f"下载失败（服务器多次中断连接）: {last_err}")
 
             # 封面字节只下载一次：内嵌标签与独立封面文件共用
-            cover_bytes = self._fetch_cover_bytes(music_info.pic_url)
+            cover_bytes = (self._fetch_cover_bytes(music_info.pic_url)
+                           if include_cover else None)
 
             # 写入音乐标签
             self._write_music_tags(file_path, music_info, cover_bytes)
-            self._ensure_cover_file(file_path, music_info, cover_bytes)
+            if include_cover:
+                self._ensure_cover_file(file_path, music_info, cover_bytes)
             
             return DownloadResult(
                 success=True,

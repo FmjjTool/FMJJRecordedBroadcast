@@ -143,6 +143,9 @@ def download(payload: dict, on_log: Callable[[str], None] | None = None,
         raise ValueError("一次最多下载 100 首")
     quality = str(payload.get("quality") or "")
     fallback = bool(payload.get("fallback", True))
+    include_cover = payload.get("include_cover", True)
+    if type(include_cover) is not bool:
+        raise ValueError("封面选项无效，请重新选择")
     out_dir = str(get_music_download_dir())
     log(f"下载目录：{out_dir}")
 
@@ -171,7 +174,8 @@ def download(payload: dict, on_log: Callable[[str], None] | None = None,
                     raise ValueError("网易云不支持所选音质")
                 client = MusicDownloader(download_dir=out_dir,
                                          cookie_string=get_netease_cookie())
-                raw = client.download_music_file(int(song.song_id), level)
+                raw = client.download_music_file(
+                    int(song.song_id), level, include_cover=include_cover)
                 info = getattr(raw, "music_info", None)
                 actual = getattr(info, "quality", "") or ""
                 labels = {item["value"]: item["label"] for item in
@@ -184,7 +188,8 @@ def download(payload: dict, on_log: Callable[[str], None] | None = None,
                     is_preview=bool(path and _file_is_preview(path, song.duration)))
             else:
                 result = download_song_smart(song, out_dir, quality,
-                                             fallback=fallback)
+                                             fallback=fallback,
+                                             include_cover=include_cover)
         except Exception as exc:  # noqa: BLE001
             failures.append({"title": title, "error": str(exc)[:200]})
             continue
