@@ -397,66 +397,195 @@
   }
 
   function renderHome(host) {
-    host.replaceChildren();
-    host.appendChild(h('div', { class: 'card' },
-      h('div', { class: 'row-title' }, '录播工具箱 Web 服务端'),
-      h('div', { class: 'muted small', style: 'margin-top:6px' },
-        '分组与命名与桌面端一致；这里只列出已接入 Web 的页面，'
-        + '桌面端的采集任务、网络库、账户追踪、音乐工具、本地工具等页面尚未接入。')));
-    [
-      ['常用工具', [
-        ['info_accounts', '采集任务', '账号清单与批量解析'],
-        ['collected', '采集结果', '结果库、下载与导出'],
-        ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
-        ['netdisk', '网络库', '网盘备份状态与运行记录'],
-        ['localwiki', '资料站', '部署状态与站点访问统计'],
-        ['livestream_summary', '直播总结', '转录清单与已保存总结'],
-        ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
-        ['rename_batch', '批量改名', '规则预览与冲突检查'],
-        ['tickets', '票务解析', '演出缓存与导出目录'],
-        ['shopping', '购物解析', '淘宝 / 抖音 / B站小店产物'],
-        ['music_playlist', '歌单', '本地预览与执行报告'],
-        ['music_download', '下载', '本地音乐文件列表'],
-        ['music_tag', '标签', '标签编辑、封面与编码修复'],
-        ['assets', '资产库', '资源归档与本地文件'],
-        ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
-        ['rename', '命名投稿', '标准命名与版权标签'],
-        ['subtitle', '字幕转换', '字幕与歌词格式转换'],
-        ['organize', '自动整理', '按日期整理录播文件']
-      ]],
-      ['更多工具', [
-        ['audio', '音频提取', '按音轨提取音频'],
-        ['launcher', '继续操作', '打开链接或启动本机软件'],
-        ['calendar', '日历浏览', '按日期文件夹浏览'],
-        ['migrate', '文件迁移', '复制 / 剪切到目标目录'],
-        ['record', '直播录制', '监控与录制控制（需桌面运行）'],
-        ['music_tracker', '音乐账号', '五平台账号指标与历史'],
-        ['media_tracker', '网媒账号', '网媒账号指标与历史'],
-        ['douyin_index', '抖音指数', '达人核心指标与粉丝画像'],
-        ['weibo_chaohua', '微博超话', '本地累计与增长分析'],
-        ['fan_groups', '粉丝群', 'QQ 群订阅与人数历史'],
-        ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
-      ]],
-      ['全局', [
-        ['tasks', '任务', '定时任务与安装'],
-        ['system', '设置', '目录、主题与依赖'],
-        ['performance', '性能诊断', '本机 CPU / 内存 / 磁盘读数']
-      ]]
-    ].forEach(function (group) {
-      host.appendChild(h('div', {
-        class: 'row-title', style: 'margin:16px 0 8px'
-      }, group[0]));
-      var grid = h('div', { class: 'grid cols-3' });
-      group[1].forEach(function (item) {
-        grid.appendChild(h('button', {
-          class: 'card tool-card', type: 'button',
-          onclick: function () { navigate(item[0]); }
-        },
-          h('div', { class: 'tool-card-title' }, item[1]),
-          h('div', { class: 'muted small' }, item[2])));
+    var page = h('div', { class: 'home-dashboard' });
+    var updated = h('span', { class: 'muted small', role: 'status', 'aria-live': 'polite' }, '正在读取本地数据…');
+    var refreshButton = h('button', { class: 'btn', type: 'button', onclick: refresh }, '刷新数据');
+    var notice = h('div', { class: 'home-notice hidden', role: 'alert' });
+    var body = h('div', { class: 'home-dashboard-body' });
+    var hasData = false;
+    var busy = false;
+    page.appendChild(h('div', { class: 'home-toolbar' }, updated, refreshButton));
+    page.appendChild(notice);
+    page.appendChild(body);
+    host.replaceChildren(page);
+
+    function amount(value) {
+      return value !== null && value !== undefined && Number.isFinite(Number(value))
+        && Number(value) >= 0 ? fmtNumber(value) : '—';
+    }
+
+    function compact(value) {
+      if (value >= 100000000) return (value / 100000000).toFixed(value % 100000000 ? 1 : 0) + '亿';
+      if (value >= 10000) return (value / 10000).toFixed(value % 10000 ? 1 : 0) + '万';
+      return fmtNumber(value);
+    }
+
+    function svg(tag, attrs, text) {
+      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.keys(attrs || {}).forEach(function (key) { node.setAttribute(key, attrs[key]); });
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function overviewCard(label, value, note) {
+      return h('div', { class: 'stat home-stat' },
+        h('div', { class: 'label' }, label),
+        h('div', { class: 'value' }, amount(value)),
+        h('div', { class: 'note' }, note));
+    }
+
+    function trendChart(data) {
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '近 7 天数据增量' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '近 7 天数据增量'),
+          h('span', { class: 'muted small' }, '本周 ' + amount(data.week_total) + ' · 今日 ' + amount(data.today_total))));
+      var labels = Array.isArray(data.labels) ? data.labels.slice(-7) : [];
+      var counts = (Array.isArray(data.counts) ? data.counts.slice(-7) : []).map(function (value) {
+        return Math.max(0, Number(value) || 0);
       });
-      host.appendChild(grid);
-    });
+      if (!labels.length || !counts.some(function (value) { return value > 0; })) {
+        card.appendChild(h('div', { class: 'home-chart-empty' }, '近 7 天还没有新增记录，完成采集或同步后刷新查看。'));
+        return card;
+      }
+      var max = Math.max.apply(null, counts);
+      var step = Math.pow(10, Math.max(0, Math.floor(Math.log10(max / 4))));
+      var ceiling = Math.ceil(max / (step * 4)) * step * 4;
+      var chart = svg('svg', { class: 'home-trend', width: '100%', height: 252, role: 'img',
+        'aria-label': labels.map(function (label, index) { return label + '：' + amount(counts[index]); }).join('；') });
+      [0, 0.5, 1].forEach(function (fraction) {
+        var y = 210 - fraction * 172;
+        chart.appendChild(svg('line', { x1: '12%', x2: '99%', y1: y, y2: y, class: 'home-chart-gridline' }));
+        chart.appendChild(svg('text', { x: 0, y: y + 4, class: 'home-chart-label' }, compact(ceiling * fraction)));
+      });
+      var gap = 84 / labels.length;
+      labels.forEach(function (label, index) {
+        var value = counts[index] || 0;
+        var x = 14 + gap * (index + 0.5);
+        var height = value / ceiling * 172;
+        var bar = svg('rect', { x: (x - gap * 0.29) + '%', y: 210 - height,
+          width: (gap * 0.58) + '%', height: height, rx: 3, class: 'home-trend-bar' });
+        bar.appendChild(svg('title', {}, label + '：' + amount(value)));
+        chart.appendChild(bar);
+        chart.appendChild(svg('text', { x: x + '%', y: 200 - height, 'text-anchor': 'middle', class: 'home-chart-value' }, compact(value)));
+        chart.appendChild(svg('text', { x: x + '%', y: 236, 'text-anchor': 'middle', class: 'home-chart-label' }, label));
+      });
+      card.appendChild(chart);
+      card.appendChild(h('div', { class: 'muted small home-chart-note' }, '按各来源的本地记录日期汇总'));
+      return card;
+    }
+
+    function sourceChart(data) {
+      var names = { bilibili: '哔哩哔哩', douyin: '抖音', weibo: '微博', xiaohongshu: '小红书',
+        kuaishou: '快手', weibo_chaohua: '微博超话', tcdoc: '腾讯文档', assets: '资源文件',
+        acfun: 'AcFun', baidu: '百度', wechat: '微信公众号', qq: 'QQ', youtube: 'YouTube' };
+      var entries = Object.keys(data.by_source || {}).map(function (key) {
+        return { label: names[key] || key, value: Math.max(0, Number(data.by_source[key]) || 0) };
+      }).filter(function (item) { return item.value > 0; }).sort(function (a, b) { return b.value - a.value; });
+      var total = entries.reduce(function (sum, item) { return sum + item.value; }, 0);
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '内容来源分布' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '内容来源分布'),
+          h('span', { class: 'muted small' }, '共 ' + amount(total) + ' 条')));
+      if (!total) {
+        card.appendChild(h('div', { class: 'home-chart-empty' }, '还没有可汇总的内容，完成采集或资源登记后刷新查看。'));
+        return card;
+      }
+      if (entries.length > 6) {
+        var remainder = entries.slice(5).reduce(function (sum, item) { return sum + item.value; }, 0);
+        entries = entries.slice(0, 5).concat([{ label: '其他', value: remainder }]);
+      }
+      var chart = svg('svg', { class: 'home-donut', viewBox: '0 0 200 200', role: 'img',
+        'aria-label': entries.map(function (item) { return item.label + '：' + amount(item.value); }).join('；') });
+      chart.appendChild(svg('circle', { cx: 100, cy: 100, r: 72, class: 'home-donut-track' }));
+      var legend = h('ul', { class: 'home-source-legend' });
+      var offset = 0;
+      entries.forEach(function (item, index) {
+        var percent = item.value / total * 100;
+        var ring = svg('circle', { cx: 100, cy: 100, r: 72, pathLength: 100,
+          'stroke-dasharray': percent + ' ' + (100 - percent), 'stroke-dashoffset': -offset,
+          transform: 'rotate(-90 100 100)', class: 'home-donut-ring home-series-' + index });
+        ring.appendChild(svg('title', {}, item.label + '：' + amount(item.value) + '（' + percent.toFixed(1) + '%）'));
+        chart.appendChild(ring);
+        offset += percent;
+        legend.appendChild(h('li', {},
+          h('span', { class: 'home-source-dot home-series-' + index, 'aria-hidden': 'true' }),
+          h('span', { class: 'home-source-name' }, item.label),
+          h('span', { class: 'home-source-value' }, amount(item.value)),
+          h('span', { class: 'muted home-source-percent' }, percent.toFixed(1) + '%')));
+      });
+      chart.appendChild(svg('text', { x: 100, y: 95, 'text-anchor': 'middle', class: 'home-donut-caption' }, '来源总量'));
+      chart.appendChild(svg('text', { x: 100, y: 121, 'text-anchor': 'middle', class: 'home-donut-total' }, compact(total)));
+      card.appendChild(h('div', { class: 'home-source-body' }, chart, legend));
+      return card;
+    }
+
+    function renderData(data) {
+      var stats = data.stats;
+      var siteReady = !!stats.site_collected;
+      var siteNote = siteReady ? [stats.site_scope, stats.site_date].filter(Boolean).join(' · ') : '尚未采集访问统计';
+      var docNote = '已采集 ' + amount(stats.doc_count) + ' 份文档';
+      var cards = h('div', { class: 'home-overview' },
+        overviewCard('平台内容', stats.platform_items, '各平台已入库内容'),
+        overviewCard('超话帖子', stats.chaohua_posts, '去重后的本地帖子'),
+        overviewCard('文档表格行', stats.tcdoc_rows, '已同步的本地表格记录'),
+        overviewCard('资源文件', stats.asset_files, '资产索引已登记文件'),
+        overviewCard('文档浏览量', stats.doc_views, docNote),
+        overviewCard('文档成员数', stats.doc_members, docNote),
+        overviewCard('文档查看人数', stats.doc_readers, docNote),
+        overviewCard('观察账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号'),
+        overviewCard('站点访客', siteReady ? stats.site_visitors : null, siteNote),
+        overviewCard('站点会话', siteReady ? stats.site_sessions : null, siteNote),
+        overviewCard('站点浏览量', siteReady ? stats.site_pageviews : null, siteNote),
+        overviewCard('在线访客', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote));
+      var sections = h('div', { class: 'home-sections' });
+      (Array.isArray(data.sections) ? data.sections : []).forEach(function (section) {
+        var metrics = h('dl', { class: 'home-metric-list' });
+        (Array.isArray(section.metrics) ? section.metrics : []).forEach(function (metric) {
+          var note = metric.note || (metric.state === 'error' ? '暂时无法读取，稍后刷新重试'
+            : (metric.state === 'empty' ? '尚无本地记录' : ''));
+          var value = metric.state === 'error' ? null : metric.value;
+          metrics.appendChild(h('div', { class: 'home-metric-row' + (metric.state === 'error' ? ' has-error' : '') },
+            h('dt', {}, h('span', { class: 'home-metric-label' }, metric.label),
+              note ? h('span', { class: 'home-metric-note' }, note) : null),
+            h('dd', {}, h('span', { class: 'home-metric-value' }, amount(value)),
+              metric.unit ? h('span', { class: 'home-metric-unit' }, metric.unit) : null)));
+        });
+        sections.appendChild(h('section', { class: 'card home-section-card' },
+          h('h2', { class: 'card-title' }, section.title),
+          section.note ? h('div', { class: 'muted small home-section-note' }, section.note) : null, metrics));
+      });
+      body.replaceChildren(cards, h('div', { class: 'home-charts' }, trendChart(data), sourceChart(data)), sections);
+      updated.textContent = data.generated_at ? '更新于 ' + data.generated_at : '已读取本地数据';
+    }
+
+    function refresh() {
+      if (busy) return;
+      busy = true;
+      refreshButton.disabled = true;
+      refreshButton.textContent = '刷新中…';
+      page.setAttribute('aria-busy', 'true');
+      notice.classList.add('hidden');
+      if (!hasData) setLoading(body, '正在汇总本地数据…');
+      api('/api/dashboard/overview').then(function (data) {
+        if (!page.isConnected) return;
+        if (!data || typeof data.stats !== 'object' || data.stats === null) throw new Error('invalid overview');
+        renderData(data);
+        hasData = true;
+      }).catch(function () {
+        if (!page.isConnected) return;
+        if (!hasData) body.replaceChildren();
+        updated.textContent = hasData ? '当前显示上次读取的数据' : '本地数据读取失败';
+        notice.replaceChildren(
+          h('span', {}, '读取失败，请确认服务仍在运行后重试。'),
+          h('button', { class: 'btn', type: 'button', onclick: refresh }, '重试'));
+        notice.classList.remove('hidden');
+      }).finally(function () {
+        busy = false;
+        if (!page.isConnected) return;
+        refreshButton.disabled = false;
+        refreshButton.textContent = '刷新数据';
+        page.setAttribute('aria-busy', 'false');
+      });
+    }
+    refresh();
   }
 
   function renderInfoAccounts(root) {
@@ -15323,7 +15452,7 @@ function renderMusicTag(root) {
           onclick: function () {
             state.tcdoc.writeTab = target.key;
             state.tcdoc.writeKey = '';
-            renderTcdocWriteback(host);
+            renderTcdocCollectedWriteback(host);
           }
         }, target.name));
       });
@@ -15337,7 +15466,7 @@ function renderMusicTag(root) {
       daysSelect.addEventListener('change', function () {
         state.tcdoc.writeDays = Number(daysSelect.value);
         state.tcdoc.writeKey = '';
-        renderTcdocWriteback(host);
+        renderTcdocCollectedWriteback(host);
       });
       var rows = preview.rows || [];
       var known = new Set(rows.map(function (row) { return row.key; }));
@@ -15435,7 +15564,7 @@ function renderMusicTag(root) {
               class: 'muted small', style: 'margin-top:12px'
             }, notes.join('；') || '写回完成'));
             state.tcdoc.writeKey = '';
-            renderTcdocWriteback(host);
+            renderTcdocCollectedWriteback(host);
           }, {
             onSettled: function (job) {
               writeBtn.disabled = false;
@@ -15465,7 +15594,7 @@ function renderMusicTag(root) {
           h('span', { style: 'flex:1' }),
           h('button', {
             class: 'btn', type: 'button',
-            onclick: function () { renderTcdocWriteback(host); }
+            onclick: function () { renderTcdocCollectedWriteback(host); }
           }, '重新加载')),
         tabs,
         h('div', { class: 'toolbar' },
@@ -15482,7 +15611,7 @@ function renderMusicTag(root) {
             '请确认本地腾讯文档数据与登录状态后重试。'),
           h('button', {
             class: 'btn', type: 'button', style: 'margin-top:8px',
-            onclick: function () { renderTcdocWriteback(host); }
+            onclick: function () { renderTcdocCollectedWriteback(host); }
           }, '重试')));
     });
   }

@@ -10,6 +10,7 @@ from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.cover import CoverService
+from toolbox.webui.services.dashboard import DashboardService
 from toolbox.webui.services.certificate import CertificateService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.dependencies import DependencyService
@@ -42,6 +43,7 @@ from version import APP_VERSION
 def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer:
     jobs = JobManager()
     collected = CollectedService()
+    dashboard = DashboardService()
     cover = CoverService(jobs)
     certificates = CertificateService()
     assets = AssetService(jobs)
@@ -75,6 +77,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/health", lambda req: {
         "ok": True, "name": "录播工具箱 WebUI", "version": APP_VERSION})
+    server.get("/api/dashboard/overview", lambda req: dashboard.overview())
 
     server.get("/api/cover/overview", lambda req: cover.overview())
     server.post("/api/cover/preview", lambda req: cover.preview(req.json))

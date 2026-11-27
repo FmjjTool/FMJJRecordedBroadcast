@@ -13,7 +13,7 @@ from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QPushButton, QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem,
-    QVBoxLayout,
+    QVBoxLayout, QWidget,
 )
 
 from gui_qt import table_sort
@@ -84,6 +84,7 @@ class VideoCommentsPage(BasePage):
         self.videos = []          # [{id, desc, comments}]
         self.current_index = -1
         self._stop = False
+        self._busy = False
         self._icons: list = []
 
         layout = QVBoxLayout(self)
@@ -158,12 +159,11 @@ class VideoCommentsPage(BasePage):
         self.platform_combo.currentIndexChanged.connect(self._platform_changed)
         row1.addWidget(self.platform_combo)
 
-        self.mode_combo = QComboBox(card)
-        self.mode_combo.addItems(["单视频", "作者模式"])
-        self.mode_combo.setFixedWidth(104)
-        self.mode_combo.setToolTip("作者模式：按作者主页链接抓最新 N 个视频的评论（仅抖音）")
-        self.mode_combo.currentIndexChanged.connect(self._mode_changed)
-        row1.addWidget(self.mode_combo)
+        self.mode_btn = self._icon_button("视频", "swap")
+        self.mode_btn.setCheckable(True)
+        self.mode_btn.setFixedWidth(80)
+        self.mode_btn.toggled.connect(self._mode_changed)
+        row1.addWidget(self.mode_btn)
 
         self.input_edit = QLineEdit(card)
         self.input_edit.setPlaceholderText(_PLACEHOLDERS[("douyin", False)])
@@ -171,51 +171,55 @@ class VideoCommentsPage(BasePage):
         self.input_edit.returnPressed.connect(self.start_fetch)
         row1.addWidget(self.input_edit, 1)
 
-        row1.addWidget(self._caption("视频数"))
-        self.video_count_spin = QSpinBox(card)
-        self.video_count_spin.setRange(1, 10)
-        self.video_count_spin.setValue(3)
-        self.video_count_spin.setFixedWidth(64)
-        self.video_count_spin.setToolTip("作者模式：抓最新几个视频的评论（仅抖音）")
-        row1.addWidget(self.video_count_spin)
-
-        row1.addWidget(self._caption("页数"))
-        self.pages_spin = QSpinBox(card)
-        self.pages_spin.setRange(1, 50)
-        self.pages_spin.setValue(5)
-        self.pages_spin.setFixedWidth(64)
-        self.pages_spin.setToolTip("每个视频抓取的评论页数（抖音/B站每页 20 条，微博每页 10 条）")
-        row1.addWidget(self.pages_spin)
+        self.export_btn = self._icon_button("导出长图", "image")
+        self.export_btn.setToolTip("当前视频筛选后的评论导出为 PNG 长图（含头像与评论图片）")
+        self.export_btn.clicked.connect(self.export_png)
+        row1.addWidget(self.export_btn)
+        self.save_btn = self._icon_button("保存原始数据", "save")
+        self.save_btn.setToolTip("保存 comments.json（原始数据）/ comments.txt / 图片原图")
+        self.save_btn.clicked.connect(self.save_raw)
+        row1.addWidget(self.save_btn)
 
         row1.addSpacing(4)
         self.fetch_btn = self._icon_button("抓取评论", "download", "primary")
         self.fetch_btn.setToolTip("按当前平台与链接抓取评论（回车同效）")
         self.fetch_btn.clicked.connect(self.start_fetch)
-        row1.addWidget(self.fetch_btn)
         self.stop_btn = self._icon_button("停止", "stop")
         self.stop_btn.setToolTip("停止当前抓取（已抓到的评论保留）")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._do_stop)
         row1.addWidget(self.stop_btn)
+        row1.addWidget(self.fetch_btn)
         v.addLayout(row1)
 
-        row2 = QHBoxLayout()
+        self.author_row = QWidget(card)
+        row2 = QHBoxLayout(self.author_row)
+        row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(8)
         row2.addWidget(self._caption("视频"))
         self.video_combo = QComboBox(card)
-        self.video_combo.setMinimumWidth(320)
+        self.video_combo.setMinimumWidth(160)
+        self.video_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.video_combo.setMinimumContentsLength(8)
         self.video_combo.setToolTip("已抓取的视频；切换即刷新下方评论")
         self.video_combo.currentIndexChanged.connect(self._video_switched)
         row2.addWidget(self.video_combo, 1)
-        self.export_btn = self._icon_button("导出长图", "image")
-        self.export_btn.setToolTip("当前视频筛选后的评论导出为 PNG 长图（含头像与评论图片）")
-        self.export_btn.clicked.connect(self.export_png)
-        row2.addWidget(self.export_btn)
-        self.save_btn = self._icon_button("保存原始数据", "save")
-        self.save_btn.setToolTip("保存 comments.json（原始数据）/ comments.txt / 图片原图")
-        self.save_btn.clicked.connect(self.save_raw)
-        row2.addWidget(self.save_btn)
-        v.addLayout(row2)
+        row2.addWidget(self._caption("视频数"))
+        self.video_count_spin = QSpinBox(self.author_row)
+        self.video_count_spin.setRange(1, 10)
+        self.video_count_spin.setValue(3)
+        self.video_count_spin.setFixedWidth(64)
+        self.video_count_spin.setToolTip("抓取作者最新几个视频的评论")
+        row2.addWidget(self.video_count_spin)
+        row2.addWidget(self._caption("页数"))
+        self.pages_spin = QSpinBox(self.author_row)
+        self.pages_spin.setRange(1, 50)
+        self.pages_spin.setValue(5)
+        self.pages_spin.setFixedWidth(64)
+        self.pages_spin.setToolTip("作者模式下每个视频抓取的评论页数（每页 20 条）")
+        row2.addWidget(self.pages_spin)
+        v.addWidget(self.author_row)
+        self._mode_changed(False)
         return card
 
     def _build_filter_bar(self) -> QFrame:
@@ -319,13 +323,22 @@ class VideoCommentsPage(BasePage):
         return _BACKENDS[self._platform()]
 
     def _platform_changed(self, *_):
-        if not _AUTHOR_OK[self._platform()] and self.mode_combo.currentIndex() == 1:
-            self.mode_combo.setCurrentIndex(0)
-        self._mode_changed(self.mode_combo.currentIndex())
+        self._mode_changed(self.mode_btn.isChecked())
 
-    def _mode_changed(self, index):
-        is_author = index == 1 and _AUTHOR_OK[self._platform()]
-        self.video_count_spin.setEnabled(is_author)
+    def _is_author(self) -> bool:
+        return self.mode_btn.isChecked() and _AUTHOR_OK[self._platform()]
+
+    def _mode_changed(self, checked):
+        supported = _AUTHOR_OK[self._platform()]
+        is_author = bool(checked) and supported
+        self.mode_btn.setChecked(is_author)
+        self.mode_btn.setText("作者" if is_author else "视频")
+        self.mode_btn.setToolTip(
+            ("当前为作者模式，点击切换为视频模式" if is_author
+             else "当前为视频模式，点击切换为作者模式") if supported
+            else "当前平台仅支持视频模式")
+        self.mode_btn.setEnabled(supported and not self._busy)
+        self.author_row.setVisible(is_author)
         self.input_edit.setPlaceholderText(
             _PLACEHOLDERS[(self._platform(), is_author)])
 
@@ -333,6 +346,12 @@ class VideoCommentsPage(BasePage):
         self._stop = True
 
     def _set_busy(self, busy: bool, text: str = ""):
+        self._busy = busy
+        self.platform_combo.setEnabled(not busy)
+        self.mode_btn.setEnabled(not busy and _AUTHOR_OK[self._platform()])
+        self.video_combo.setEnabled(not busy)
+        self.video_count_spin.setEnabled(not busy)
+        self.pages_spin.setEnabled(not busy)
         self.fetch_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
         self.export_btn.setEnabled(not busy)
@@ -355,14 +374,20 @@ class VideoCommentsPage(BasePage):
         if not kind:
             self.status_label.setText("无法识别输入（需视频链接/ID）")
             return
+        is_author = self._is_author()
+        if kind == "sec_uid" and not is_author:
+            self.status_label.setText("作者主页链接请切换为作者模式后抓取")
+            return
+        if is_author and kind != "sec_uid":
+            self.status_label.setText("作者模式请输入作者主页链接或 sec_uid")
+            return
         self._stop = False
         self._set_busy(True, "抓取中...")
         self.videos = []
         self.current_index = -1
         self.video_combo.clear()
         self.table.setRowCount(0)
-        pages = self.pages_spin.value()
-        is_author = self.mode_combo.currentIndex() == 1 and _AUTHOR_OK[self._platform()]
+        pages = self.pages_spin.value() if is_author else 5
         count = self.video_count_spin.value() if is_author else 1
 
         def progress(msg, cur=0, total=0):

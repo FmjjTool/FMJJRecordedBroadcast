@@ -6,6 +6,7 @@ import base64
 from copy import deepcopy
 from datetime import date, datetime
 import io
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -50,6 +51,10 @@ def _client():
     return openapi.TdClient(*values)
 
 
+def _identity(client):
+    return hashlib.sha256("\0".join((client.client_id, client.open_id, client.token)).encode()).hexdigest()
+
+
 def _text(value):
     if value is None:
         return ""
@@ -87,7 +92,27 @@ def _read_upload(payload):
         with tempfile.TemporaryDirectory(prefix="fmjj_mapping_") as folder:
             path = Path(folder) / ("table" + suffix)
             path.write_bytes(data)
-            headers, rows = openapi.load_table(str(path))
+            if suffix == ".xlsx":
+                from openpyxl import load_workbook
+                workbook = load_workbook(path, read_only=True, data_only=True)
+                try:
+                    sheet = workbook.active
+                    if (sheet.max_column or 0) > MAX_COLUMNS or (sheet.max_row or 0) > MAX_ROWS + 1:
+                        raise ValueError("table bounds")
+                    iterator = sheet.iter_rows(values_only=True)
+                    first = next(iterator, ())
+                    headers = openapi._dedupe_headers([str(cell or "") for cell in first])
+                    rows = []
+                    for cells in iterator:
+                        if len(rows) >= MAX_ROWS:
+                            raise ValueError("table bounds")
+                        if any(value is not None and str(value).strip() for value in cells):
+                            rows.append({header: cells[index] if index < len(cells) and cells[index] is not None
+                                         else "" for index, header in enumerate(headers)})
+                finally:
+                    workbook.close()
+            else:
+                headers, rows = openapi.load_table(str(path))
     except ImportError:
         raise ValueError("缺少表格读取组件，请在全局设置中检查依赖") from None
     except Exception:
@@ -169,7 +194,8 @@ class MappingSessions:
             fields = client.get_fields(file_id, target["tab_id"])
             if is_cancelled():
                 return {"cancelled": True}
-            mapping = workflow.suggest_mapping(item["headers"], fields)
+            mapping = workflow.suggest_mapping(item["headers"], [field for field in fields
+                if field.get("fieldType") in openapi.SUPPORTED_TYPES])
             field_by_id = {str(field["fieldID"]): field for field in fields}
             key_col = workflow.suggest_key(item["headers"], mapping, field_by_id)
             with self._lock:
@@ -218,7 +244,7 @@ class MappingSessions:
             preview = secrets.token_urlsafe(24)
             with self._lock:
                 item.update(fields=deepcopy(fields), mapping=dict(mapping), key_col=key_col,
-                            actions=actions, preview=preview)
+                            actions=actions, preview=preview, identity=_identity(client))
             return {"preview": preview, "counts": counts, "total": len(actions),
                     "summary": "比对已完成，请逐行查看并勾选需要写入的差异行"}
         except workflow.MappingError:
@@ -284,6 +310,10 @@ class MappingSessions:
             if len(set(selected)) != len(selected) or not set(selected) <= allowed:
                 raise ValueError("选中行包含重复或不可写记录，请重新比对")
             _target(item["tab"])
+            from toolbox import sync_refresh
+            allowed, _ = sync_refresh.upload_allowed()
+            if not allowed:
+                raise ValueError("当前数据未刷新，请先完成同步前刷新后重新比对")
             # 提交即消费；即使排队失败也须重新比对，不自动重放写请求。
             item["preview"] = ""
             item["busy"] = True
@@ -294,17 +324,21 @@ class MappingSessions:
         try:
             target = _target(item["tab"])
             client = _client()
+            if _identity(client) != item.get("identity"):
+                raise ValueError("登录状态已变化，请重新连接并比对后确认")
             file_id = client.convert_file_id(openapi.WRITABLE_DOC_KEY)
             client.validate_write_target(file_id, target["tab_id"])
             result = workflow.execute_selected(client, file_id, target["tab_id"], item["headers"],
                 item["rows"], item["mapping"], {str(field["fieldID"]): field for field in item["fields"]},
                 item["key_col"], item["actions"], selected, log, is_cancelled)
             result["summary"] = f"已写入选中行：新增 {result['added']} 条，更新 {result['updated']} 条，读回一致"
+            self._history(target, result)
             return result
         except workflow.MappingError as exc:
             # 保留部分完成回执；未知结果必须人工核对，前端绝不自动重试。
             receipt = dict(getattr(exc, "receipt", {}) or {})
             receipt.update(summary=str(exc), error=str(exc), cancelled=bool(is_cancelled()))
+            self._history(target, receipt)
             return receipt
         except ValueError:
             raise
@@ -312,3 +346,14 @@ class MappingSessions:
             raise ValueError("写入未能完成，请核对云端后重新比对；不会自动重试") from None
         finally:
             self.release(sid)
+
+    @staticmethod
+    def _history(target, result):
+        if not (result.get("added") or result.get("updated") or result.get("unknown_record_outcome")):
+            return
+        from toolbox.tcdoc import push_history
+        push_history.record(doc_key=openapi.WRITABLE_DOC_KEY, tab_id=target["tab_id"],
+            tab_name=target["name"], source="Web 映射回写",
+            status="需核对" if result.get("error") else "成功", added=result.get("added", 0),
+            failed=1 if result.get("error") else 0, record_ids=result.get("record_ids", []),
+            note=f"逐行更新 {result.get('updated', 0)} 条；" + str(result.get("summary") or ""))
