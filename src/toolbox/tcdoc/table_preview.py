@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from toolbox.table_sort_keys import sort_key, sort_records
 
 from . import config, tables
@@ -63,6 +65,8 @@ def read_page(doc_key: str, sheet: dict, offset: int = 0, page_size: int = 200,
         offset = min(offset, max(0, (total - 1) // page_size * page_size))
         return rows[offset:offset + page_size], total, offset
     rows, total = tables.rows_page(doc_key, tab_id, offset, page_size, path=path)
+    if not total:
+        return [], 0, 0
     if not rows and total and offset:
         offset = max(0, (total - 1) // page_size * page_size)
         rows, total = tables.rows_page(doc_key, tab_id, offset, page_size, path=path)
@@ -74,7 +78,6 @@ def recent_changes(doc_key: str, limit: int = 60, path=None) -> list[dict]:
     if not doc_key:
         return []
     path = path if path is not None else config.tables_db_path()
-    from pathlib import Path
     if not Path(path).exists():
         return []
     return tables.recent_changes(doc_key, limit=max(1, min(60, int(limit))), path=path)

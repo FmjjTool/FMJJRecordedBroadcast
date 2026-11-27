@@ -24,7 +24,7 @@ class NetdiskPage(BasePage):
         from gui_qt.pages.quark_download import QuarkDownloadPage
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         self.tabs = QTabWidget()

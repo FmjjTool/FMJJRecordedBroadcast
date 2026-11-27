@@ -541,7 +541,7 @@ class AssetPage(BasePage):
         self._ov_manual_resize = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # 顺序：资源归档 | 采集记录 | 本地文件 | 活动视频
@@ -581,8 +581,8 @@ class AssetPage(BasePage):
     def _build_local_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(10)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
         toolbar = _asset_toolbar(v)
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -771,8 +771,8 @@ class AssetPage(BasePage):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         container = QWidget()
         lay = QVBoxLayout(container)
-        lay.setContentsMargins(1, 2, 5, 4)
-        lay.setSpacing(9)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
         lay.addStretch(1)
         scroll.setWidget(container)
         return scroll, container, lay
@@ -1151,8 +1151,8 @@ class AssetPage(BasePage):
     def _build_offline_video_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(10)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
         toolbar = _asset_toolbar(v)
 
         filters = QHBoxLayout()
@@ -1634,8 +1634,8 @@ class AssetPage(BasePage):
     def _build_collected_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(10)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
         toolbar = _asset_toolbar(v)
 
         # 过滤与操作分两行，在最小窗口下仍给文件夹与关键词留出空间。
@@ -4468,8 +4468,8 @@ class AssetPage(BasePage):
     def _build_db_tab(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(10)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
         toolbar = _asset_toolbar(v)
         bar = QHBoxLayout()
         bar.setSpacing(8)

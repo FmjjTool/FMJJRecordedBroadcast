@@ -22,8 +22,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSlider, QTableWidget,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
+    QMenu, QPlainTextEdit, QPushButton, QSizePolicy, QSlider, QTableWidget,
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -197,8 +197,8 @@ class DouyinDanmakuPage(BasePage):
         self._resume_keep = False   # 切页自动重连：保留本场弹幕/搜索状态
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(4)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
 
         # 子类按平台改写标题；仅用于浮层标题，不在页面顶部显示。
         self.title_lbl = QLabel("抖音弹幕 · 实时数据接入")
@@ -210,7 +210,8 @@ class DouyinDanmakuPage(BasePage):
         top = QFrame()
         top.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         top_l = QHBoxLayout(top)
-        top_l.setContentsMargins(10, 6, 10, 6)
+        top_l.setContentsMargins(12, 12, 12, 12)
+        top_l.setSpacing(8)
         # 轮询按钮（点击才开始轮询）：按下=轮询进行中，再点=停止（仅图标，tooltip 说明）
         self.poll_btn = QPushButton("↻")
         self.poll_btn.setCheckable(True)
@@ -285,31 +286,34 @@ class DouyinDanmakuPage(BasePage):
         toolbar = QFrame()
         toolbar.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         tb = QHBoxLayout(toolbar)
-        tb.setContentsMargins(10, 4, 10, 4)
+        tb.setContentsMargins(12, 12, 12, 12)
+        tb.setSpacing(8)
         save_btn = QPushButton("保存弹幕")
         save_btn.clicked.connect(self._save_danmaku_now)
         tb.addWidget(save_btn)
         render_btn = QPushButton("渲染当前弹幕")
         render_btn.clicked.connect(self._show_danmaku_overlay)
         tb.addWidget(render_btn)
-        export_btn = QPushButton("导出回放包")
-        export_btn.clicked.connect(self._export_replay_zip)
-        tb.addWidget(export_btn)
-        import_btn = QPushButton("导入回放包")
-        import_btn.clicked.connect(self._pick_replay_zip)
-        tb.addWidget(import_btn)
-        merge_btn = QPushButton("合并回放包")
+        more_btn = QPushButton("更多")
+        more_btn.setProperty("menuButton", True)
+        more_menu = QMenu(more_btn)
+        more_menu.setToolTipsVisible(True)
+        more_btn.setMenu(more_menu)
+        export_btn = more_menu.addAction("导出回放包")
+        export_btn.triggered.connect(lambda _checked=False: self._export_replay_zip())
+        import_btn = more_menu.addAction("导入回放包")
+        import_btn.triggered.connect(self._pick_replay_zip)
+        merge_btn = more_menu.addAction("合并回放包")
         merge_btn.setToolTip("选择多个回放包 zip（分几次导出的多段），按时间排序去重后\n"
                              "合并成一个完整回放包（弹幕/礼物/统计数据；视频文件不参与合并）")
-        merge_btn.clicked.connect(self._merge_replay_zips_dialog)
-        tb.addWidget(merge_btn)
-        danmaku_txt_btn = QPushButton("转弹幕机 TXT")
+        merge_btn.triggered.connect(self._merge_replay_zips_dialog)
+        danmaku_txt_btn = more_menu.addAction("转弹幕机 TXT")
         danmaku_txt_btn.setToolTip(
             "选择 .jsonl（抖音/录播姬）或 .xml（B站）弹幕文件，可多选，\n"
             "批量转成弹幕机可读的 TXT：每行 HH:mm:ss.SSS|[昵称]：内容，\n"
             "最早一条对齐 00:00:00.000；输出到导出目录「弹幕文件」目录")
-        danmaku_txt_btn.clicked.connect(self._convert_danmaku_txt)
-        tb.addWidget(danmaku_txt_btn)
+        danmaku_txt_btn.triggered.connect(self._convert_danmaku_txt)
+        tb.addWidget(more_btn)
         self.save_stats_var = QCheckBox("保存统计")
         self.save_stats_var.setChecked(bool(self.settings.get("save_stats", False)))
         self.save_stats_var.toggled.connect(self._on_save_stats_toggle)
@@ -317,11 +321,13 @@ class DouyinDanmakuPage(BasePage):
         tb.addStretch(1)
         login_hint = QLabel("登录态由软件统一管理（连接时自动套用）")
         login_hint.setProperty("role", "caption")
-        tb.addWidget(login_hint)
+        login_hint.setWordWrap(True)
+        tb.addWidget(login_hint, 1)
         outer.addWidget(toolbar)
 
         # ===== 主体三栏 =====
         body = QHBoxLayout()
+        body.setSpacing(12)
         self._build_anchor_panel(body)
         self._build_center_panel(body)
         self._build_right_panel(body)
@@ -331,7 +337,8 @@ class DouyinDanmakuPage(BasePage):
         bottom_card = QFrame()
         bottom_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         bottom = QHBoxLayout(bottom_card)
-        bottom.setContentsMargins(10, 6, 10, 6)
+        bottom.setContentsMargins(12, 12, 12, 12)
+        bottom.setSpacing(8)
         self.status_dot = QLabel("●")
         self.status_dot.setStyleSheet("color: palette(bright-text); font-size: 14px;")
         bottom.addWidget(self.status_dot)
@@ -576,7 +583,8 @@ class DouyinDanmakuPage(BasePage):
         card = QFrame()
         card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(12)
         # 标题「主播信息」靠最右侧，其余内容整体居中
         t_row = QHBoxLayout()
         t_row.addStretch(1)
@@ -589,7 +597,7 @@ class DouyinDanmakuPage(BasePage):
         self.live_title_lbl.setWordWrap(True)
         self.live_title_lbl.setAlignment(Qt.AlignHCenter)
         self.live_title_lbl.setStyleSheet(
-            "font-size: 17px; font-weight: bold; padding: 2px 0 6px 0;")
+            "font-size: 15px; font-weight: bold; padding: 2px 0 6px 0;")
         self.anchor_fields["live_title"] = self.live_title_lbl
         v.addWidget(self.live_title_lbl)
 
@@ -681,16 +689,18 @@ class DouyinDanmakuPage(BasePage):
     # ======================== 中：视频预览 + 弹幕信息 ========================
     def _build_center_panel(self, parent):
         wrap = QVBoxLayout()
-        wrap.setSpacing(4)
+        wrap.setSpacing(12)
 
         # ---- 视频卡片（仅回放模式显示：播放回放包里录好的视频）----
         self.video_card = QFrame()
         self.video_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         vv = QVBoxLayout(self.video_card)
-        vv.setContentsMargins(10, 8, 10, 8)
+        vv.setContentsMargins(12, 12, 12, 12)
+        vv.setSpacing(12)
+        vv.setSizeConstraint(QLayout.SetMinimumSize)
         head = QHBoxLayout()
-        self.video_title = QLabel("回放（拖入 zip 回放包，弹幕与视频同步）",
-                                  styleSheet="font-weight: bold;")
+        self.video_title = QLabel("回放", styleSheet="font-weight: bold;")
+        self.video_title.setToolTip("拖入 zip 回放包，弹幕与视频同步")
         head.addWidget(self.video_title)
         head.addStretch(1)
         self.video_status_lbl = QLabel("", styleSheet="color: palette(placeholder-text); font-size: 11px;")
@@ -699,13 +709,18 @@ class DouyinDanmakuPage(BasePage):
 
         self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumHeight(260)
+        self.video_label.setWordWrap(True)
+        self.video_label.setMinimumHeight(160)
+        self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.video_label.setStyleSheet(
-            "background: #000; border-radius: 4px; color: palette(placeholder-text); font-size: 14px;")
+            "background: palette(window); border-radius: 4px; color: palette(placeholder-text); font-size: 14px;")
         vv.addWidget(self.video_label, 1)
 
         # 回放控制行：播放/暂停 + 进度条 + 时间 + 倍速
+        replay_controls = QVBoxLayout()
+        replay_controls.setSpacing(8)
         self.replay_row = QHBoxLayout()
+        self.replay_row.setSpacing(8)
         self.replay_btn = QPushButton("▶")
         self.replay_btn.setFixedWidth(40)
         self.replay_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
@@ -717,16 +732,21 @@ class DouyinDanmakuPage(BasePage):
             lambda: setattr(self, "_replay_dragging", True))
         self.replay_slider.sliderReleased.connect(self._on_replay_slider_released)
         self.replay_row.addWidget(self.replay_slider, 1)
+        replay_controls.addLayout(self.replay_row)
+        replay_details = QHBoxLayout()
+        replay_details.setSpacing(8)
         self.replay_time_lbl = QLabel("00:00 / 00:00",
                                       styleSheet="color: palette(placeholder-text); font-family: Consolas;")
-        self.replay_row.addWidget(self.replay_time_lbl)
-        self.replay_row.addWidget(QLabel("倍速:", styleSheet="color: palette(placeholder-text);"))
+        replay_details.addWidget(self.replay_time_lbl)
+        replay_details.addStretch(1)
+        replay_details.addWidget(QLabel("倍速:", styleSheet="color: palette(placeholder-text);"))
         self.replay_speed = QComboBox()
         for s in ("1.0", "2.0", "4.0", "8.0", "16.0"):
             self.replay_speed.addItem(f"{s}x", float(s))
         self.replay_speed.currentIndexChanged.connect(self._on_replay_speed_changed)
-        self.replay_row.addWidget(self.replay_speed)
-        self.replay_row_widget = self._wrap_h(self.replay_row)
+        replay_details.addWidget(self.replay_speed)
+        replay_controls.addLayout(replay_details)
+        self.replay_row_widget = self._wrap_h(replay_controls)
         self.replay_row_widget.hide()
         vv.addWidget(self.replay_row_widget)
 
@@ -736,9 +756,13 @@ class DouyinDanmakuPage(BasePage):
         self.chat_card = QFrame()
         self.chat_card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(self.chat_card)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(12)
+        chat_title = QLabel("弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;")
+        chat_title.setWordWrap(True)
+        v.addWidget(chat_title)
         head = QHBoxLayout()
-        head.addWidget(QLabel("弹幕信息（聊天+礼物）", styleSheet="font-weight: bold;"))
+        head.setSpacing(8)
         head.addStretch(1)
         self.gift_var = QCheckBox("礼物")
         self.gift_var.setChecked(bool(self.settings.get("filter_gift", True)))
@@ -806,7 +830,7 @@ class DouyinDanmakuPage(BasePage):
         self.video_card.setVisible(replay)
         self.replay_row_widget.setVisible(replay)
         if replay:
-            self.video_title.setText("回放（拖入 zip 回放包，弹幕与视频同步）")
+            self.video_title.setText("回放")
             if not self._replay:
                 self.video_label.setText("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         else:
@@ -1280,7 +1304,8 @@ class DouyinDanmakuPage(BasePage):
         card = QFrame()
         card.setStyleSheet("QFrame { background: palette(base); border-radius: 6px; }")
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(12)
 
         # 1. 房间号
         v.addWidget(QLabel("房间号", styleSheet="font-weight: bold;"))
@@ -1358,10 +1383,17 @@ class DouyinDanmakuPage(BasePage):
         hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self._gift_sorter = table_sort.install(self.gift_table, skip_columns=())
         v.addWidget(self.gift_table, 1)
+        # 给表格列宽工具独立底行，避免挤入下方事件筛选行。
+        gift_actions = QHBoxLayout()
+        gift_actions.addStretch(1)
+        v.addLayout(gift_actions)
 
         # 4. 弹幕信息2（点赞+进入直播间+日志提醒）
+        event_title = QLabel("弹幕信息（点赞+进入+日志）", styleSheet="font-weight: bold;")
+        event_title.setWordWrap(True)
+        v.addWidget(event_title)
         head5 = QHBoxLayout()
-        head5.addWidget(QLabel("弹幕信息（点赞+进入+日志）", styleSheet="font-weight: bold;"))
+        head5.setSpacing(8)
         head5.addStretch(1)
         self.like_var = QCheckBox("点赞")
         self.like_var.setChecked(bool(self.settings.get("filter_like", True)))

@@ -74,7 +74,7 @@ class MusicTrackerPage(BasePage):
         self._collecting = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(0)
         layout.addWidget(self._build_func())
         self.reload_accounts()
@@ -83,8 +83,8 @@ class MusicTrackerPage(BasePage):
     def _build_func(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(10, 8, 10, 10)
-        v.setSpacing(6)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(12)
 
         head = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
@@ -118,8 +118,8 @@ class MusicTrackerPage(BasePage):
         self.cards_scroll.setWidgetResizable(True)
         self.cards_container = QWidget()
         self.cards_layout = QVBoxLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(4, 4, 4, 4)
-        self.cards_layout.setSpacing(6)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(12)
         self.cards_layout.addStretch(1)
         self.cards_scroll.setWidget(self.cards_container)
         v.addWidget(self.cards_scroll, 1)
@@ -138,8 +138,8 @@ class MusicTrackerPage(BasePage):
         accounts = load_accounts()
         if not accounts:
             self._accounts_loading = False
-            lbl = QLabel("（暂无账号，请在「Cookie 管理 → 账号配置」里搜索或添加）")
-            lbl.setStyleSheet("color: gray;")
+            lbl = QLabel("（暂无可用账号）")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             lbl.setAlignment(Qt.AlignCenter)
             self.cards_layout.takeAt(self.cards_layout.count() - 1)
             self.cards_layout.addWidget(lbl)
@@ -531,7 +531,7 @@ class MusicTrackerPage(BasePage):
         from music_account.accounts import get_groups
         groups = get_groups()
         if not groups:
-            self.app.toast("暂无分组，请先在「Cookie 管理 → 账号配置」里新建分组", "warning")
+            self.app.toast("暂无可用分组", "warning")
             return
         win = QDialog(self)
         win.setWindowTitle("按组导出")

@@ -9,20 +9,19 @@
 - 取消按钮：打断当前文章（网络请求间检测），已完成的导出保留
 """
 import os
-import threading
+import tempfile
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QPalette
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
     QPlainTextEdit, QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
+    QTabWidget, QWidget,
 )
 
-from toolbox.config_manager import (
-    get_export_subdir, load_convert_config, save_convert_config,
-)
+from toolbox.config_manager import load_convert_config, save_convert_config
 
-from gui_qt.common import post_to_main
+from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.theme import current_palette
@@ -41,13 +40,37 @@ class WechatArticlePage(BasePage):
         super().__init__(app)
         self.running = False
         self._cancel = False
+        self._download_batch = None
         self._icons: list = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(self._build_input_card())
-        layout.addWidget(self._build_log_card(), 1)
+        self.tabs = QTabWidget(self)
+        self.tabs.setObjectName("wechatSections")
+        self.setStyleSheet("""
+            QTabWidget#wechatSections::pane { border: 0; }
+            QTabWidget#wechatSections > QTabBar::tab {
+                background: transparent; border: 0;
+                border-bottom: 2px solid transparent; padding: 6px 12px;
+            }
+            QTabWidget#wechatSections > QTabBar::tab:selected {
+                color: palette(link); border-bottom-color: palette(highlight);
+            }
+        """)
+        links = QWidget(self.tabs)
+        link_layout = QVBoxLayout(links)
+        link_layout.setContentsMargins(0, 12, 0, 0)
+        link_layout.setSpacing(12)
+        link_layout.addWidget(self._build_input_card())
+        link_layout.addWidget(self._build_log_card(), 1)
+        self.tabs.addTab(links, "链接导出")
+        from gui_qt.pages.wechat_archive_panel import WechatArchivePanel
+        self.library_panel = WechatArchivePanel(self)
+        self.tabs.addTab(self.library_panel.accounts_page, "公众号资料")
+        self.tabs.addTab(self.library_panel.articles_page, "文章归档")
+        self.tabs.currentChanged.connect(self._tab_changed)
+        layout.addWidget(self.tabs, 1)
         layout.addWidget(self._build_action_bar())
 
         self._refresh_loc_label()
@@ -80,6 +103,17 @@ class WechatArticlePage(BasePage):
     def on_theme_changed(self):
         for btn, name, role in self._icons:
             btn.setIcon(line_icon(name, self._icon_color(role), 16))
+
+    def has_active_tasks(self):
+        return self.running
+
+    def on_show(self):
+        self._tab_changed(self.tabs.currentIndex())
+
+    def _tab_changed(self, index):
+        self.start_btn.setVisible(index == 0)
+        if index > 0:
+            self.library_panel.refresh(index)
 
     def _build_input_card(self) -> QFrame:
         card = QFrame(self)
@@ -168,14 +202,14 @@ class WechatArticlePage(BasePage):
         self.progress.setRange(0, 100)
         self.progress.setFixedWidth(220)
         h.addWidget(self.progress)
-        self.status_label = self._caption("就绪")
+        self.status_label = self._caption("未开始")
         h.addWidget(self.status_label, 1)
 
         open_btn = self._icon_button("打开导出文件夹", "folder")
         open_btn.setToolTip("在资源管理器中打开当前导出位置")
         open_btn.clicked.connect(self._open_export_dir)
         h.addWidget(open_btn)
-        self.cancel_btn = self._icon_button("取消", "stop", "danger")
+        self.cancel_btn = self._icon_button("停止", "stop", "danger")
         self.cancel_btn.setToolTip("打断当前文章（请求间检测），已完成的导出保留")
         self.cancel_btn.clicked.connect(self._cancel_run)
         self.cancel_btn.setEnabled(False)
@@ -211,12 +245,8 @@ class WechatArticlePage(BasePage):
         self._log(f"固定导出位置: {picked}")
 
     def _current_out_dir(self):
-        cfg = self._cfg()
-        if cfg.get("wechat_use_custom_dir") and cfg.get("wechat_custom_dir"):
-            d = cfg["wechat_custom_dir"]
-            os.makedirs(d, exist_ok=True)
-            return d
-        return str(get_export_subdir("wechat"))
+        from toolbox import wechat_library
+        return wechat_library.current_export_dir()
 
     def _refresh_loc_label(self):
         self.loc_label.setText("→ " + self._current_out_dir())
@@ -231,14 +261,14 @@ class WechatArticlePage(BasePage):
     # ===================== 解析与导出 =====================
 
     def on_return_press(self):
-        if not self.running:
+        if not self.running and self.tabs.currentIndex() == 0:
             self._start()
 
     def _start(self):
         if self.running:
             return
-        from platforms.wechat_article import extract_urls
-        urls = extract_urls(self.input_edit.toPlainText())
+        from toolbox import wechat_library
+        urls = wechat_library.extract_urls(self.input_edit.toPlainText())
         if not urls:
             self.app.toast("未识别到公众号文章链接（需 mp.weixin.qq.com 链接）", "warning")
             return
@@ -247,116 +277,146 @@ class WechatArticlePage(BasePage):
             self.app.toast("请至少勾选一种导出格式", "warning")
             return
 
+        self.log_text.clear()
+        self._log(f"开始解析 {len(urls)} 篇文章，导出格式: {'/'.join(FORMATS_DICT[f] for f in formats)}")
+        out_dir = self._current_out_dir()
+        self.run_library_job(
+            lambda **callbacks: wechat_library.export_links(
+                '\n'.join(urls), formats, out_dir, **callbacks),
+            download_title="公众号解析")
+
+    def _cancel_run(self):
+        self._cancel = True
+        self.status_label.setText("正在停止（当前请求结束后保留已完成部分）")
+
+    def selected_formats(self):
+        return [key for key, _ in FORMATS if self.format_checks[key].isChecked()]
+
+    def run_library_job(self, operation, download_title=""):
+        """仅将 L3 的任务与进度桥接至界面，所有业务编排留在服务层。"""
+        if self.running:
+            self.app.toast("已有任务进行中，请等待或停止后重试", "warning")
+            return
         self.running = True
         self._cancel = False
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
-        self.progress.setValue(0)
-        self.log_text.clear()
-        self._log(f"开始解析 {len(urls)} 篇文章，导出格式: {'/'.join(FORMATS_DICT[f] for f in formats)}")
-        self._log(f"导出位置: {self._current_out_dir()}")
-        # 下载浮窗（主线程创建；文章间串行限速，文章内图片并发）
-        from gui_qt.download_float import get_float
-        card = get_float().add_batch("公众号解析", total=len(urls), threads=1,
-                                     cancel_cb=self._cancel_run)
-        from gui_qt.common import start_page_thread
-        start_page_thread(self, self._worker,
-                          (urls, formats, self._current_out_dir(), card))
+        self.library_panel.set_busy(True)
+        self.progress.setRange(0, 0)
+        self.status_label.setText("进行中")
+        if download_title:
+            from gui_qt.download_float import get_float
+            self._download_batch = get_float().add_batch(
+                download_title, total=1, threads=1, cancel_cb=self._cancel_run)
+            self._download_batch.handle_event("start", "文章导出")
 
-    def _cancel_run(self):
-        self._cancel = True
-        self.status_label.setText("正在取消（完成当前请求后停止）...")
-
-    def _worker(self, urls, formats, out_dir, card=None):
-        from platforms.wechat_article import fetch_article, download_images
-        from exporters import wechat_writer
-        import time
-
-        def _evt(*event):
-            if card is not None:
-                card.handle_event(*event)
-
-        total = len(urls)
-        ok, fail = 0, 0
-        pdf_jobs = []  # (html, pdf_path, title)
-        for i, url in enumerate(urls):
-            if self._cancel:
-                break
-            post_to_main(self._set_status, f"批量解析 {i + 1}/{total}  抓取页面...")
-            title = f"{i + 1}. {url[-24:]}"
+        def worker():
+            from toolbox import wechat_library
             try:
-                art = fetch_article(url)
-                title = (f"{i + 1}. {art.title}")[:46] if art.title else title
-                _evt("start", title)
-                post_to_main(self._log,
-                             f"[{i + 1}/{total}] {art.title}")
-                post_to_main(self._log,
-                             f"  公众号: {art.account or '-'}  发布: {art.publish_time or '-'}  图片: {len(art.images)} 张")
+                return operation(
+                    on_progress=lambda done, total, text: post_to_main(
+                        self._job_progress, done, total, text),
+                    on_log=lambda text: post_to_main(self._log, text),
+                    is_cancelled=lambda: self._cancel)
+            except Exception as exc:
+                # 在 run_bg 将错误转成字符串前保留服务认可的安全提示。
+                return {"_user_error": wechat_library.user_error(exc)}
 
-                def img_prog(n, m, t=title):
-                    post_to_main(self._set_status,
-                                 f"批量解析 {i + 1}/{total}  {t[:24]}  图片 {n}/{m}")
-                    _evt("bytes", t, n, m)
+        run_bg(worker, self._finish_library_job, owner=self)
 
-                download_images(art, progress=img_prog,
-                                should_cancel=lambda: self._cancel,
-                                threads=6)
+    def _job_progress(self, done, total, text):
+        if self._download_batch is not None and total:
+            self._download_batch.handle_event("bytes", "文章导出", done, total)
+        if total:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(min(100, max(0, int(done / total * 100))))
+        else:
+            self.progress.setRange(0, 0)
+        self.status_label.setText(str(text))
 
-                rel_dir, stem = wechat_writer.build_article_path(art, out_dir)
-                art_dir = os.path.join(out_dir, rel_dir)
-                os.makedirs(art_dir, exist_ok=True)
-                if "html" in formats:
-                    wechat_writer.export_html(art, os.path.join(art_dir, stem + ".html"))
-                if "docx" in formats:
-                    wechat_writer.export_docx(art, os.path.join(art_dir, stem + ".docx"))
-                if "md" in formats:
-                    wechat_writer.export_markdown(art, art_dir)
-                if "pdf" in formats:
-                    pdf_jobs.append((wechat_writer.build_full_html(art),
-                                     os.path.join(art_dir, stem + ".pdf"), art.title))
-                ok += 1
-                _evt("done", title, True)
-                post_to_main(self._log,
-                             "  导出完成 → "
-                             + os.path.relpath(art_dir, out_dir).replace(os.sep, "/") + "/"
-                             + ("（PDF 稍后生成）" if "pdf" in formats else ""))
-            except Exception as e:
-                fail += 1
-                _evt("done", title, False)
-                post_to_main(self._log, f"[{i + 1}/{total}] 失败: {str(e)[:120]}")
-            post_to_main(self.progress.setValue, int((i + 1) / total * 100))
-            if i < total - 1 and not self._cancel:
-                time.sleep(1.2)  # 批量限速，降低微信风控概率
-
-        if card is not None:
-            tip = f"完成：成功 {ok} 篇" if not fail else f"完成：成功 {ok} / 失败 {fail}"
-            card.finish(tip)
-        post_to_main(self._finish_batch, pdf_jobs, ok, fail, formats)
-
-    def _finish_batch(self, pdf_jobs, ok, fail, formats):
-        """主线程收尾：渲染 PDF（Qt 必须主线程）+ 恢复按钮。"""
-        if pdf_jobs and not self._cancel:
-            from gui_qt.pdf_render import render_pdf
-            total = len(pdf_jobs)
-            for i, (html, path, title) in enumerate(pdf_jobs):
-                self.status_label.setText(f"生成 PDF {i + 1}/{total}  {title[:24]}")
+    def _finish_library_job(self, result, error):
+        """主线程处理 Qt PDF；PDF 结果通过服务层登记。"""
+        from toolbox import wechat_library
+        result = result or {}
+        pdf_failed = 0
+        pdf_jobs = result.get("pdf_jobs") or []
+        processed_pdf = 0
+        if pdf_jobs and not self._cancel and not result.get("cancelled"):
+            for index, job in enumerate(pdf_jobs, 1):
+                if self._cancel:
+                    break
+                self.status_label.setText(f"生成 PDF {index}/{len(pdf_jobs)}")
                 QApplication.processEvents()
+                if self._cancel:
+                    break
                 try:
-                    render_pdf(html, path)
-                except Exception as e:
-                    self._log(f"  PDF 生成失败: {e}")
+                    self._render_pdf_atomic(job["html"], job["path"])
+                    self._save_pdf_result(job["id"], True)
+                except Exception:
+                    pdf_failed += 1
+                    self._save_pdf_result(job["id"], False, "PDF 生成失败，请重试")
+                    self._log("PDF 生成失败，请检查导出位置后重试")
+                processed_pdf = index
+        cancelled = self._cancel or bool(result.get("cancelled"))
+        if cancelled:
+            for job in pdf_jobs[processed_pdf:]:
+                self._save_pdf_result(job["id"], False, "已取消，可重试")
         self.running = False
         self._cancel = False
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        tip = f"完成：成功 {ok} 篇" if not fail else f"完成：成功 {ok} / 失败 {fail}"
-        if self._cancel:
-            tip = f"已取消（成功 {ok} / 失败 {fail}）"
+        self.library_panel.set_busy(False)
+        self.progress.setRange(0, 100)
+        if error or result.get("_user_error"):
+            tip = str(result.get("_user_error") or "任务失败，请检查输入与网络后重试")
+            self._log(tip)
+        elif cancelled:
+            tip = f"已取消（成功 {result.get('ok', 0)} / 失败 {result.get('failed', 0)}）"
+        else:
+            self.progress.setValue(100)
+            tip = str(result.get("summary") or "已完成，结果已写入文章归档")
+            if pdf_failed:
+                tip += f" · PDF 失败 {pdf_failed} 篇"
         self.status_label.setText(tip)
-        self._log(f"\n{tip}  → {self._current_out_dir()}")
+        if self._download_batch is not None:
+            self._download_batch.handle_event("done", "文章导出", not error and not result.get("_user_error") and not cancelled and not pdf_failed and not result.get("failed"))
+            self._download_batch.finish(tip)
+            self._download_batch = None
+        self.library_panel.refresh_all()
+
+    @staticmethod
+    def _render_pdf_atomic(html, path):
+        """Qt 只写本次临时文件，校验通过后才替换已有导出。"""
+        from gui_qt.pdf_render import render_pdf
+        target = os.path.abspath(path)
+        fd, temporary = tempfile.mkstemp(
+            prefix=".wechat-pdf-", suffix=".pdf", dir=os.path.dirname(target))
+        os.close(fd)
+        try:
+            render_pdf(html, temporary)
+            with open(temporary, "rb") as stream:
+                if stream.read(5) != b"%PDF-" or os.fstat(stream.fileno()).st_size <= 5:
+                    raise OSError("PDF 渲染未生成有效文件")
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+    def _save_pdf_result(self, article_id, success, error=""):
+        from toolbox import wechat_library
+        try:
+            wechat_library.finish_pdf(article_id, success, error)
+        except Exception:
+            self._log("PDF 状态保存失败，请刷新文章归档后重试")
 
     def _set_status(self, text):
         self.status_label.setText(text)
 
     def _log(self, msg):
-        self.log_text.append(str(msg))
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(str(msg) + "\n")
+        self.log_text.setTextCursor(cursor)
+        self.log_text.ensureCursorVisible()

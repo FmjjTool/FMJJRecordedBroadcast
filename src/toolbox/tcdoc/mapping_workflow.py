@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 import re
 from typing import Callable
@@ -34,7 +35,8 @@ def suggest_mapping(headers: list[str], fields: list[dict]) -> dict[str, str]:
     """只自动匹配唯一同名列，不猜测相似字段、不重复使用目标字段。"""
     by_name: dict[str, list[dict]] = defaultdict(list)
     for field in fields:
-        if field.get("fieldID") and field.get("fieldTitle"):
+        if (field.get("fieldID") and field.get("fieldTitle")
+                and int(field.get("fieldType") or 0) in openapi.SUPPORTED_TYPES | {7, 16}):
             by_name[_name(field["fieldTitle"])].append(field)
     result: dict[str, str] = {}
     used: set[str] = set()
@@ -58,7 +60,8 @@ def suggest_key(headers: list[str], mapping: dict[str, str],
         field = field_by_id[mapping[header]]
         name = _name(header)
         title = _name(field.get("fieldTitle"))
-        if name in {"recordid", "作品id", "动态id", "直播id", "唯一id", "唯一标识"}:
+        if name in {"id", "recordid", "记录id", "作品id", "动态id", "直播id",
+                    "唯一id", "唯一标识", "唯一编号"}:
             return 0
         if int(field.get("fieldType") or 0) == 8:
             return 1 if any(word in title for word in ("作品链接", "直播链接", "动态链接")) else 2
@@ -215,8 +218,13 @@ def _fingerprint(action):
 def _check_cancelled(is_cancelled, receipt):
     if is_cancelled and is_cancelled():
         exc = MappingError(f"已取消（已写入 {receipt['added'] + receipt['updated']} 行）")
-        exc.receipt = dict(receipt)
+        receipt["cancelled"] = True
+        exc.receipt = _public_receipt(receipt)
         raise exc
+
+
+def _public_receipt(receipt):
+    return deepcopy({key: value for key, value in receipt.items() if not key.startswith("_")})
 
 
 def _ensure_gate():
@@ -224,6 +232,30 @@ def _ensure_gate():
     allowed, reason = sync_refresh.upload_allowed()
     if not allowed:
         raise MappingError(f"暂不允许写入：{reason}。请先在中间层完成「同步前刷新」。")
+
+
+def _read_cloud_state(client, file_id, sheet_id, log):
+    try:
+        fields = client.get_fields(file_id, sheet_id)
+        records = client.get_records(file_id, sheet_id, log)
+    except Exception:
+        # 读请求失败没有使前面已验证的写入变成未知；外层统一附上已完成回执。
+        # 原始响应可能含平台数据，不传给界面、日志或异常链。
+        raise MappingError("读取云端字段或记录失败，已停止；请检查网络后重新比对") from None
+    return fields, records
+
+
+@contextmanager
+def _selected_write_lock(receipt):
+    from toolbox import sync_refresh
+    from toolbox.tcdoc import import_pending
+    with import_pending._write_lock():
+        try:
+            yield
+        finally:
+            if receipt.pop("_attempted", False):
+                # 必须在释放跨进程锁之前作废，不能让下一写入方抢到旧刷新记录。
+                sync_refresh.invalidate("映射回写已提交，需重新刷新后再写")
 
 
 def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
@@ -248,19 +280,16 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
         if previews.get(number, {}).get("op") not in WRITABLE_OPS:
             raise MappingError(f"本地第 {number} 行不可写入，请重新比对并选择差异行")
     receipt = {"added": 0, "updated": 0, "verified": True,
-               "record_ids": [], "row_nos": [], "unknown_record_outcome": False}
+               "record_ids": [], "row_nos": [], "unknown_record_outcome": False,
+               "cancelled": False}
     _check_cancelled(is_cancelled, receipt)
     _ensure_gate()
-    from toolbox import sync_refresh
-    from toolbox.tcdoc import import_pending
-    attempted = False
     try:
-        with import_pending._write_lock():
+        with _selected_write_lock(receipt):
             _ensure_gate()
             _check_cancelled(is_cancelled, receipt)
-            fields = client.get_fields(file_id, sheet_id)
+            fields, records = _read_cloud_state(client, file_id, sheet_id, log)
             current_fields = {str(item["fieldID"]): item for item in fields}
-            records = client.get_records(file_id, sheet_id, log)
             fresh = {item["row_no"]: item for item in compare(
                 headers, rows, mapping, current_fields, key_col, records)}
             for number in selected:
@@ -270,11 +299,25 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
             by_title = {item["fieldTitle"]: item for item in current_fields.values()}
             for number in selected:
                 _check_cancelled(is_cancelled, receipt)
+                if receipt["row_nos"]:
+                    # 跨进程锁只约束本软件，云端其它编辑者仍可在两行之间改数据。
+                    # 后续行写前再次读取，不能覆盖用户确认后才发生的变动。
+                    latest_fields, latest_records = _read_cloud_state(
+                        client, file_id, sheet_id, log)
+                    latest_by_id = {str(item["fieldID"]): item for item in latest_fields}
+                    latest = compare(headers, rows, mapping, latest_by_id, key_col, latest_records)
+                    current = next((item for item in latest if item["row_no"] == number), {})
+                    if _fingerprint(previews[number]) != _fingerprint(current):
+                        raise MappingError(
+                            f"本地第 {number} 行的匹配或云端内容已变化，已停止后续写入；请重新比对后确认")
+                    fresh[number] = current
                 action = fresh[number]
                 values = deepcopy(action["values"])
                 if not values:
                     raise MappingError(f"本地第 {number} 行没有可写字段，请重新比对")
-                attempted = True
+                # 云端读取可能阻塞；读取期间收到取消时不能继续提交下一行。
+                _check_cancelled(is_cancelled, receipt)
+                receipt["_attempted"] = True
                 try:
                     if action["op"] == "新增":
                         client.add_records(file_id, sheet_id, [{"values": values}])
@@ -303,15 +346,12 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
                     receipt["unknown_record_outcome"] = True
                     unknown = MappingWriteUnknown(
                         f"本地第 {number} 行写入结果未能确认，已停止且不会自动重试；请到云端核对后重新比对")
-                    unknown.receipt = deepcopy(receipt)
+                    unknown.receipt = _public_receipt(receipt)
                     raise unknown from exc
                 receipt["row_nos"].append(number)
                 log(f"本地第 {number} 行已{action['op']}并读回一致（{len(receipt['row_nos'])}/{len(selected)}）")
     except MappingError as exc:
         if not hasattr(exc, "receipt"):
-            exc.receipt = deepcopy(receipt)
+            exc.receipt = _public_receipt(receipt)
         raise
-    finally:
-        if attempted:
-            sync_refresh.invalidate("映射回写已提交，需重新刷新后再写")
     return receipt

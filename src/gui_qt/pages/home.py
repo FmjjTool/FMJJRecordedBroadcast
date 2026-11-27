@@ -1,14 +1,13 @@
-"""首页：数据概览 + 常用工具入口。
+"""工作台：本地业务数据总览。
 
 - 默认启动页；点击侧栏顶部标题可随时回到本页
 - 指标卡：已获取总数 / 覆盖平台 / 近 7 天新增 / 今日新增
 - 图表：平台分布环形图 + 近 7 天新增柱状图（QPainter 自绘，跟随深浅主题）
-- 常用工具：原侧栏中的信息类页面迁到本页，避免信息分组过长
+- 数据明细：按业务分组展示已有本地记录，不触发采集或数据写入
 """
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from datetime import datetime, timedelta
 
@@ -23,8 +22,8 @@ from PySide6.QtWidgets import (
 
 from gui_qt import table_sort, theme
 from gui_qt.common import run_bg
-from gui_qt.navigation import line_icon, tool_icon_name
-from gui_qt.page_index import HOME_COMMON, HOME_INFO, page_meta, page_title
+from gui_qt.navigation import line_icon
+from gui_qt.page_index import page_title
 from gui_qt.pages.base import BasePage
 from toolbox.dashboard_stats import (
     load_account_history, load_dashboard_data, load_tcdoc_history, tcdoc_docs,
@@ -32,19 +31,19 @@ from toolbox.dashboard_stats import (
     watched_account_keys as _watched_account_keys,
 )
 
-# 平台显示名与图表配色
+# 平台显示名与主题语义色；绘制时按当前主题解析。
 PLATFORM_META = {
-    "bilibili": ("B站", "#fb7299"),
-    "douyin": ("抖音", "#00bcd4"),
-    "weibo": ("微博", "#e6a23c"),
-    "weibo_chaohua": ("微博超话", "#ff6b6b"),
-    "tcdoc": ("腾讯文档", "#5b8def"),
-    "assets": ("本地资源", "#26a69a"),
-    "xiaohongshu": ("小红书", "#ff4d6d"),
-    "kuaishou": ("快手", "#ff8f1f"),
-    "acfun": ("AcFun", "#fd4c5b"),
+    "bilibili": ("B站", "link"),
+    "douyin": ("抖音", "success"),
+    "weibo": ("微博", "warning"),
+    "weibo_chaohua": ("微博超话", "danger"),
+    "tcdoc": ("腾讯文档", "accent"),
+    "assets": ("本地资源", "success"),
+    "xiaohongshu": ("小红书", "danger"),
+    "kuaishou": ("快手", "warning"),
+    "acfun": ("AcFun", "link"),
 }
-OTHER_COLOR = "#8b93a7"
+OTHER_COLOR = "muted"
 
 # 账号观察抽屉：键集合（网媒 + 音乐）
 ACCOUNT_DRAWER_KEYS = {"tracked_accounts"}
@@ -53,32 +52,7 @@ SITE_STAT_KEYS = {"site_visitors", "site_sessions", "site_pageviews", "site_onli
 # 下钻抽屉表格最多显示的行数，超出后表格内部滚动；高度按实际行数自适应
 DRAWER_MAX_ROWS = 10
 
-# 常用工具：(key, 标题, 说明)
-# 常用工具卡片：顺序与文案来自 page_index（页面名单一事实来源）
-def _tool_card(key):
-    meta = page_meta(key)
-    return (key, meta.card_title or meta.title, meta.card_note)
-
-
-COMMON_TOOLS = [_tool_card(key) for key in HOME_COMMON]
-
-INFO_TOOLS = [_tool_card(key) for key in HOME_INFO]
-INFO_TOOL_KEYS = {key for key, *_ in INFO_TOOLS}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _dist_items(by_source):
+def _dist_items(by_source, source_labels=None):
     """来源计数 → 环形图数据，未知来源合并为「其他」。"""
     rest = dict(by_source)
     items = []
@@ -86,6 +60,10 @@ def _dist_items(by_source):
         n = rest.pop(key, 0)
         if n:
             items.append((label, n, color))
+    for key, label in (source_labels or {}).items():
+        value = rest.pop(key, 0)
+        if value:
+            items.append((str(label), value, OTHER_COLOR))
     other = sum(rest.values())
     if other:
         items.append(("其他", other, OTHER_COLOR))
@@ -104,6 +82,7 @@ class _DonutChart(QWidget):
 
     def set_items(self, items):
         self._items = list(items or [])
+        self.setMinimumHeight(max(210, len(self._items) * 24 + 28))
         self.update()
 
     def paintEvent(self, _event):
@@ -137,7 +116,7 @@ class _DonutChart(QWidget):
             gap = 1.4 * 16
             for _label, value, color in self._items:
                 span = -max(1, int(value / total * 360 * 16) - int(gap))
-                p.setPen(QPen(QColor(color), thickness, Qt.SolidLine, Qt.FlatCap))
+                p.setPen(QPen(QColor(theme.color(color)), thickness, Qt.SolidLine, Qt.FlatCap))
                 p.drawArc(rect.adjusted(thickness / 2, thickness / 2,
                                         -thickness / 2, -thickness / 2),
                           cursor, span)
@@ -165,7 +144,7 @@ class _DonutChart(QWidget):
         ly = max(14.0, (h - line_h * max(1, len(self._items))) / 2)
         for (_label, _value, color), text in zip(self._items, legend_texts):
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(color))
+            p.setBrush(QColor(theme.color(color)))
             p.drawRoundedRect(QRectF(lx, ly + 7, 9, 9), 4.5, 4.5)
             p.setPen(text_color)
             f.setPointSize(9)
@@ -182,7 +161,7 @@ class _DonutChart(QWidget):
             f.setBold(False)
             p.setFont(f)
             p.drawText(rect.adjusted(0, size * 0.05, 0, 0),
-                       Qt.AlignCenter, "暂无数据")
+                       Qt.AlignCenter, "尚无本地内容\n采集后刷新")
 
 
 class _TrendChart(QWidget):
@@ -264,59 +243,6 @@ class _TrendChart(QWidget):
                        Qt.AlignCenter, "近 7 天暂无新增")
 
 
-class _ToolCard(QPushButton):
-    """整卡可点击的工具入口；支持键盘聚焦与回车/空格激活。"""
-
-    def __init__(self, key, title, desc, callback, parent=None):
-        super().__init__(parent)
-        self._key = key
-        self.setObjectName("workbenchToolCard")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setAttribute(Qt.WA_Hover, True)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(78)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setAccessibleName(title)
-        self.setToolTip(f"{title}：{desc}")
-        self.clicked.connect(callback)
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(15, 13, 13, 13)
-        row.setSpacing(12)
-        self.icon_label = QLabel()
-        self.icon_label.setObjectName("workbenchToolIcon")
-        self.icon_label.setFixedSize(36, 36)
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        row.addWidget(self.icon_label)
-        text = QVBoxLayout()
-        text.setSpacing(5)
-        name = QLabel(title)
-        name.setObjectName("workbenchToolTitle")
-        text.addWidget(name)
-        tip = QLabel(desc)
-        tip.setObjectName("workbenchToolDesc")
-        tip.setWordWrap(True)
-        text.addWidget(tip)
-        row.addLayout(text, 1)
-        arrow = QLabel("›")
-        arrow.setObjectName("workbenchToolArrow")
-        row.addWidget(arrow)
-        for label in self.findChildren(QLabel):
-            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.sync_icon()
-
-    def sync_icon(self):
-        color = theme.current_palette().color(QPalette.Link).name()
-        self.icon_label.setPixmap(line_icon(tool_icon_name(self._key), color, 20).pixmap(20, 20))
-
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self.click()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-
 class _AccountConfigDialog(QDialog):
     """配置要观察的网媒 / 音乐账号。"""
 
@@ -374,8 +300,7 @@ class _AccountConfigDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         foot.addWidget(cancel_btn)
         save_btn = QPushButton("保存")
-        save_btn.setStyleSheet(
-            "background: #2e7d32; color: white; padding: 4px 16px; border-radius: 4px;")
+        save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self.accept)
         foot.addWidget(save_btn)
         layout.addLayout(foot)
@@ -421,7 +346,7 @@ class HomePage(BasePage):
         self._stat_values = {}
         self._stat_previews = {}
         self._refreshing = False
-        self._tool_grids = []
+        self._detail_cards = []
         self._last_layout = None
         self._drawer_mode = ""
         self._drawer_key = ""
@@ -449,11 +374,11 @@ class HomePage(BasePage):
         self.drawer = self._build_drawer()
         v.addWidget(self.drawer)
         self.drawer.hide()
-        v.addWidget(self._section_title("常用工具", "采集、整理与制作"))
-        v.addLayout(self._build_tool_grid(COMMON_TOOLS))
         v.addLayout(self._build_charts())
-        v.addWidget(self._section_title("更多信息工具", "平台内容与文档监控"))
-        v.addLayout(self._build_tool_grid(INFO_TOOLS))
+        v.addWidget(self._section_title("数据明细", "已保存记录 · 按业务分组"))
+        self._details_grid = QGridLayout()
+        self._details_grid.setSpacing(12)
+        v.addLayout(self._details_grid)
         v.addStretch(1)
 
         self._apply_theme_styles()
@@ -469,6 +394,7 @@ class HomePage(BasePage):
         h.setSpacing(12)
 
         self.date_label = QLabel("")
+        self.date_label.setWordWrap(True)
         self.date_label.setObjectName("workbenchHomeMuted")
         self.date_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         h.addWidget(self.date_label)
@@ -488,9 +414,9 @@ class HomePage(BasePage):
         self._stat_cards = []
         cards = [
             ("platform_items", "平台内容", "B站 / 抖音 / 微博 / 小红书 / 快手内容条目"),
-            ("chaohua_posts", "微博超话帖子", "config/weibo_chaohua.db 累计去重帖子"),
+            ("chaohua_posts", "微博超话帖子", "本地已保存的累计去重帖子"),
             ("tcdoc_rows", "腾讯文档行", "腾讯文档智能表格已同步的数据行"),
-            ("asset_files", "资源文件", "asset_index 登记的本地资源文件"),
+            ("asset_files", "资源归档", "本地资源索引中登记的归档条目"),
             ("doc_views", "文档浏览量", "腾讯文档各文档最新浏览量合计"),
             ("doc_members", "文档成员数", "腾讯文档各文档最新成员数合计"),
             ("doc_readers", "已查看人数", "腾讯文档各文档最新已查看人数合计"),
@@ -1348,7 +1274,7 @@ class HomePage(BasePage):
         donut_box.addWidget(self.donut, 1)
         row.addWidget(donut_card, 0, 1)
 
-        trend_card, trend_box = self._panel("采集趋势", "最近 7 天 · 全功能新增")
+        trend_card, trend_box = self._panel("新增趋势", "最近 7 天 · 已记录入库时间的内容")
         self.trend_sub = trend_card.subtitle_label
         self.trend = _TrendChart()
         trend_box.addWidget(self.trend, 1)
@@ -1356,19 +1282,57 @@ class HomePage(BasePage):
         self._chart_cards = [trend_card, donut_card]
         return row
 
+    def _render_sections(self, sections):
+        """只展示统计服务提供的分组，不把功能入口放回工作台。"""
+        while self._details_grid.count():
+            item = self._details_grid.takeAt(0)
+            if item.widget() is not None:
+                item.widget().hide()
+                item.widget().deleteLater()
+        self._detail_cards = []
+        for section in sections:
+            card, box = self._panel(section.get("title") or "本地记录",
+                                    section.get("note") or "")
+            card.setObjectName("workbenchPanelCard")
+            for metric in section.get("metrics") or []:
+                row = QHBoxLayout()
+                row.setSpacing(12)
+                caption = QLabel(str(metric.get("label") or "记录"))
+                caption.setObjectName("workbenchDetailLabel")
+                caption.setTextFormat(Qt.PlainText)
+                caption.setWordWrap(True)
+                row.addWidget(caption, 1)
+                value = metric.get("value")
+                state = metric.get("state")
+                text = ("读取失败" if state == "error" else "—") if value is None else (
+                    f"{int(value):,} {metric.get('unit') or '条'}")
+                number = QLabel(text)
+                number.setObjectName("workbenchDetailValue")
+                number.setTextFormat(Qt.PlainText)
+                number.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                number.setToolTip(str(metric.get("note") or ""))
+                caption.setToolTip(str(metric.get("note") or ""))
+                row.addWidget(number)
+                box.addLayout(row)
+            box.addStretch(1)
+            self._detail_cards.append(card)
+        self._last_layout = None
+        self._layout_for_width()
+
     @staticmethod
     def _panel(title, subtitle):
         card = QFrame()
         card.setObjectName("workbenchPanelCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
         box = QVBoxLayout(card)
-        box.setContentsMargins(18, 16, 18, 12)
+        box.setContentsMargins(16, 16, 16, 12)
         box.setSpacing(4)
         name = QLabel(title)
         name.setObjectName("workbenchPanelTitle")
         box.addWidget(name)
         sub = QLabel(subtitle)
         sub.setObjectName("workbenchHomeMuted")
+        sub.setWordWrap(True)
         box.addWidget(sub)
         card.subtitle_label = sub
         return card, box
@@ -1388,20 +1352,6 @@ class HomePage(BasePage):
         h.addStretch(1)
         return wrap
 
-    def _build_tool_grid(self, tools):
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-        cards = []
-        for i, (key, title, desc) in enumerate(tools):
-            card = _ToolCard(key, title, desc, lambda checked=False, k=key: self._open_tool(k))
-            cards.append(card)
-            grid.addWidget(card, i // 3, i % 3)
-        for col in range(3):
-            grid.setColumnStretch(col, 1)
-        self._tool_grids.append((grid, cards))
-        return grid
-
     @staticmethod
     def _arrange_grid(grid, widgets, columns):
         while grid.count():
@@ -1412,19 +1362,17 @@ class HomePage(BasePage):
             grid.addWidget(widget, index // columns, index % columns)
 
     def _layout_for_width(self):
-        narrow = self.width() < 820
-        layout_key = (2 if narrow else 3, 2 if self.width() < 740 else 4,
+        layout_key = (2 if self.width() < 740 else 4,
                       1 if self.width() < 880 else 2)
         if self._last_layout == layout_key:
             return
         self._last_layout = layout_key
-        tools, stats, charts = layout_key
-        for grid, cards in self._tool_grids:
-            self._arrange_grid(grid, cards, tools)
+        stats, charts = layout_key
         self._arrange_grid(self._stats_grid, self._stat_cards, stats)
         for card in self._stat_cards:
             self._stats_grid.setAlignment(card, Qt.AlignTop)
         self._arrange_grid(self._charts_grid, self._chart_cards, charts)
+        self._arrange_grid(self._details_grid, self._detail_cards, charts)
         self.body.layout().setContentsMargins(16, 16, 16, 16)
 
     def resizeEvent(self, event):
@@ -1434,10 +1382,6 @@ class HomePage(BasePage):
 
     # ==================== 数据刷新 ====================
 
-    def _open_tool(self, key):
-        """由主窗口统一路由，搜索、首页和页面内跳转共用同一实例。"""
-        self.app.show_page(key)
-
     def on_show(self):
         self._refresh()
 
@@ -1446,12 +1390,15 @@ class HomePage(BasePage):
             return
         self._refreshing = True
         self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("读取中…")
         run_bg(load_dashboard_data, self._on_data)
 
     def _on_data(self, data, err):
         self._refreshing = False
         self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText("刷新数据")
         if err or not data:
+            self.date_label.setText("读取数据失败，请点击刷新数据重试")
             return
         stats = data.get("stats") or {}
         by_source = data.get("by_source") or {}
@@ -1459,19 +1406,23 @@ class HomePage(BasePage):
         labels = data.get("labels") or []
 
         for key, label in self._stat_values.items():
-            label.setText(f"{int(stats.get(key, 0)):,}")
+            value = stats.get(key)
+            label.setText("—" if value is None else f"{int(value):,}")
+        platform_note = str(data.get("platform_note") or "各平台已保存的本地内容")
+        self._stat_values["platform_items"].setToolTip(platform_note)
+        self._stat_cards[0].setToolTip(platform_note)
         self._stat_values["doc_views"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新浏览量合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新浏览量合计")
         self._stat_values["doc_members"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新成员数合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新成员数合计")
         self._stat_values["doc_readers"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新已查看人数合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新已查看人数合计")
         self._stat_values["tracked_accounts"].setToolTip(
-            f"已观察 {int(stats.get('tracked_accounts', 0))} / "
-            f"共 {int(stats.get('tracked_total', 0))} 个账号\n点击配置观察账号")
+            f"已观察 {int(stats.get('tracked_accounts') or 0)} / "
+            f"共 {int(stats.get('tracked_total') or 0)} 个账号\n点击配置观察账号")
 
         scope = str(stats.get("site_scope") or "严格验证")
-        if int(stats.get("site_collected", 0)):
+        if int(stats.get("site_collected") or 0):
             fetched = str(stats.get("site_fetched_at") or "")
             stat_date = str(stats.get("site_date") or "")
             head = f"mandisa.wiki 站点访问 · {scope}"
@@ -1484,19 +1435,36 @@ class HomePage(BasePage):
                                ("site_pageviews", "浏览量"),
                                ("site_online", "在线")):
                 self._stat_values[key].setToolTip(
-                    f"{head}\n{label}：{int(stats.get(key, 0)):,}\n点击在卡片内展开摘要")
+                    f"{head}\n{label}：{int(stats.get(key) or 0):,}\n点击在卡片内展开摘要")
         else:
             for key in SITE_STAT_KEYS:
                 self._stat_values[key].setText("—")
                 self._stat_values[key].setToolTip(
                     f"尚无站点访问统计（口径：{scope}）\n点击在卡片内展开摘要")
 
-        self.donut.set_items(_dist_items(by_source))
+        self.donut.set_items(_dist_items(by_source, data.get("source_labels")))
         self.trend.set_data(labels, counts)
+        self._render_sections(data.get("sections") or [])
         week_total = int(data.get("week_total") or sum(counts))
         today_total = int(data.get("today_total") or (counts[-1] if counts else 0))
         self.trend_sub.setText(
-            f"最近 7 天 · 全功能新增 {week_total:,} 条 · 今日 {today_total:,} 条")
+            f"最近 7 天新增 {week_total:,} 条 · 今日 {today_total:,} 条\n"
+            + str(data.get("trend_note") or "仅统计已记录入库时间的内容，不含文件修改时间"))
+        generated = str(data.get("generated_at") or "")
+        if generated:
+            self.date_label.setText(f"{generated} 刷新 · 本地数据")
+        incomplete = data.get("trend_state") == "error"
+        for key, state in (data.get("stat_states") or {}).items():
+            if state == "error":
+                incomplete = True
+                if key in self._stat_values:
+                    self._stat_values[key].setToolTip("读取数据失败，请刷新重试；其他数据仍可查看")
+        if any(metric.get("state") == "error"
+               for section in data.get("sections") or []
+               for metric in section.get("metrics") or []):
+            incomplete = True
+        if incomplete:
+            self.date_label.setText(self.date_label.text() + " · 部分数据读取失败，可刷新重试")
 
     # ==================== 主题 ====================
 
@@ -1512,8 +1480,8 @@ class HomePage(BasePage):
             QLabel#workbenchHomeMuted { color: palette(placeholder-text); background: transparent; font-size: 11px; }
             QPushButton#workbenchRefresh {
                 background: palette(base); color: palette(text);
-                border: 1px solid palette(shadow); border-radius: 7px;
-                padding: 6px 11px; font-size: 11px;
+                border: 1px solid palette(shadow); border-radius: 8px;
+                padding: 6px 12px; font-size: 11px;
             }
             QPushButton#workbenchRefresh:hover { background: palette(midlight); color: palette(link); border-color: palette(highlight); }
             QPushButton#workbenchRefresh:disabled { background: palette(alternate-base); color: palette(placeholder-text); border-color: palette(shadow); }
@@ -1532,24 +1500,13 @@ class HomePage(BasePage):
             QLabel#workbenchStatValue { color: palette(text); background: transparent; font-family: "Segoe UI", "Microsoft YaHei"; font-size: 27px; font-weight: bold; }
             QLabel#workbenchStatCaption { color: palette(placeholder-text); background: transparent; font-size: 11px; }
             QLabel#workbenchStatPreviewLine { color: palette(text); background: transparent; font-size: 12px; }
+            QLabel#workbenchDetailLabel { color: palette(text); background: transparent; font-size: 12px; padding: 4px 0; }
+            QLabel#workbenchDetailValue { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
             QLabel#workbenchPanelTitle, QLabel#workbenchSectionTitle { color: palette(text); background: transparent; font-size: 14px; font-weight: bold; }
-            QPushButton#workbenchToolCard {
-                background: palette(base); border: 1px solid palette(shadow); border-radius: 10px;
-                padding: 0; text-align: left;
-            }
-            QPushButton#workbenchToolCard:hover { background: palette(alternate-base); border-color: palette(highlight); }
-            QPushButton#workbenchToolCard:pressed { background: palette(midlight); }
-            QPushButton#workbenchToolCard:focus { border-color: palette(highlight); }
-            QLabel#workbenchToolIcon { background: palette(midlight); border-radius: 9px; border: none; }
-            QLabel#workbenchToolTitle { color: palette(text); background: transparent; border: none; font-size: 12px; font-weight: bold; }
-            QLabel#workbenchToolArrow { color: palette(placeholder-text); background: transparent; border: none; font-size: 20px; }
-            QLabel#workbenchToolDesc { color: palette(placeholder-text); background: transparent; border: none; font-size: 10px; }
         """)
         icon_color = theme.current_palette().color(QPalette.PlaceholderText).name()
         self.refresh_btn.setIcon(line_icon("refresh", icon_color, 16))
-        for _grid, cards in self._tool_grids:
-            for card in cards:
-                card.sync_icon()
-        self.date_label.setText(
-            datetime.now().strftime("%Y-%m-%d")
-            + "  周" + "一二三四五六日"[datetime.now().weekday()])
+        if not self.date_label.text():
+            self.date_label.setText(
+                datetime.now().strftime("%Y-%m-%d")
+                + "  周" + "一二三四五六日"[datetime.now().weekday()])

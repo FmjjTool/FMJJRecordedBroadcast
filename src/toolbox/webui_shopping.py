@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from toolbox.shopping_parse import (
@@ -37,7 +38,7 @@ def _cookie(platform: str) -> str:
         return ""
 
 
-def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
+def parse(payload: dict, on_log=None, is_cancelled=None, on_models=None) -> dict:
     """解析购物链接 / 分享文案，返回商品行并写入桌面同款产物目录。"""
     payload = prepare_payload(payload)
     plan = plan_shopping_parse(payload["text"], payload["platforms"])
@@ -52,13 +53,13 @@ def parse(payload: dict, on_log=None, is_cancelled=None) -> dict:
     if platform == "taobao":
         result = _parse_taobao(text, say, is_cancelled)
     elif platform == "douyin":
-        result = _parse_douyin(text, say, is_cancelled)
+        result = _parse_douyin(text, say, is_cancelled, on_models=on_models)
     elif platform == "xianyu":
         from toolbox import xianyu_shopping
         result = xianyu_shopping.parse(text, on_log=say,
                                        is_cancelled=is_cancelled)
     else:
-        result = _parse_bili(text, say, is_cancelled)
+        result = _parse_bili(text, say, is_cancelled, on_models=on_models)
     result["platforms"] = payload["platforms"]
     result["selection_note"] = plan["summary"]
     return result
@@ -204,7 +205,7 @@ def _parse_taobao(text: str, say, is_cancelled) -> dict:
     }
 
 
-def _parse_douyin(text: str, say, is_cancelled) -> dict:
+def _parse_douyin(text: str, say, is_cancelled, on_models=None) -> dict:
     from platforms import douyin_shop as ds
 
     say("解析抖音商品分享文案…")
@@ -212,13 +213,26 @@ def _parse_douyin(text: str, say, is_cancelled) -> dict:
         products, errors = ds.parse_many(text, progress=say)
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"解析失败：{exc}") from exc
+    captured = ([replace(product, local_dir="", image_file="")
+                 for product in products] if on_models is not None else None)
+    try:
+        image_root = ds.shop_dir() if on_models is not None and products else None
+    except Exception:
+        # An unavailable optional picture root must not discard parsed rows.
+        image_root = None
     saved = 0
-    for product in products:
+    for index, product in enumerate(products):
         if is_cancelled and is_cancelled():
             raise ValueError("任务已取消（未保存商品）")
         try:
             folder = ds.product_dir(product)
-            ds.download_main_image(product, folder)
+            image = ds.download_main_image(product, folder)
+            if image is not None and captured is not None:
+                # Only the downloader's actual return value may authorize a
+                # picture for the private export snapshot, never client fields.
+                image = Path(image)
+                captured[index].local_dir = str(image.parent)
+                captured[index].image_file = image.name
             ds.save_product_json(product, folder)
             saved += 1
         except Exception as exc:  # noqa: BLE001 - 单条失败不影响其它
@@ -234,6 +248,8 @@ def _parse_douyin(text: str, say, is_cancelled) -> dict:
         "url": product.detail_url or product.share_url or "",
         "image": bool(product.main_image),
     } for product in products]
+    if on_models is not None:
+        on_models("douyin", captured, image_root)
     return {
         "platform": "douyin",
         "kind": "shop",
@@ -249,7 +265,7 @@ def _parse_douyin(text: str, say, is_cancelled) -> dict:
     }
 
 
-def _parse_bili(text: str, say, is_cancelled) -> dict:
+def _parse_bili(text: str, say, is_cancelled, on_models=None) -> dict:
     from platforms import bili_shop as bs
 
     say("解析 B站小店…")
@@ -271,6 +287,8 @@ def _parse_bili(text: str, say, is_cancelled) -> dict:
         "url": item.card_url or "",
         "image": bool(item.cover),
     } for item in (shop.items or [])]
+    if on_models is not None:
+        on_models("bili", shop, None)
     return {
         "platform": "bili",
         "kind": "shop",
@@ -279,5 +297,5 @@ def _parse_bili(text: str, say, is_cancelled) -> dict:
         "items": rows,
         "total": len(rows),
         "summary": f"{shop.name or 'B站小店'}：{len(rows)} 件商品",
-        "note": "小店信息写入「B站小店」导出目录；Excel 导出仍在桌面端。",
+        "note": "小店信息写入「B站小店」导出目录；本次完整结果可导出 Excel。",
     }

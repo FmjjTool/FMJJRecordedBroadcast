@@ -39,8 +39,8 @@ class WeiboChaohuaPage(BasePage):
         self._history_seq = 0
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # ---- 输入卡片 ----
         top = QFrame()

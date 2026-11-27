@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMenu,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QScrollArea, QSplitter,
-    QTabWidget, QVBoxLayout, QWidget,
+    QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 from PIL import Image as PILImage
 
@@ -416,13 +416,16 @@ class CertificateMakerPage(BasePage):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         self.source_label = QLabel("尚未导入协议文档 / 填写表")
         self.source_label.setStyleSheet("color: palette(placeholder-text); font-size: 12px;")
+        self.source_label.setWordWrap(True)
+        self.source_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(self.source_label, 1)
         self.import_btn = QPushButton("导入文档")
         self.import_btn.setToolTip(
@@ -436,30 +439,34 @@ class CertificateMakerPage(BasePage):
         self.number_btn.setToolTip("按所选年份已有证书的 6 位序号顺延，并自动计算校验码")
         self.number_btn.clicked.connect(self._on_auto_number)
         toolbar.addWidget(self.number_btn)
-        self.dir_btn = QPushButton("输出目录")
+        self.more_btn = QPushButton("更多")
+        self.more_btn.setProperty("menuButton", True)
+        more_menu = QMenu(self.more_btn)
+        more_menu.setToolTipsVisible(True)
+        self.more_btn.setMenu(more_menu)
+        self.dir_btn = more_menu.addAction("输出目录")
         self.dir_btn.setToolTip(str(self._out_dir))
-        self.dir_btn.clicked.connect(self._on_pick_dir)
-        toolbar.addWidget(self.dir_btn)
-        self.export_btn = QPushButton("生成证书")
-        self.export_btn.setDefault(True)
-        self.export_btn.clicked.connect(self._on_export)
-        toolbar.addWidget(self.export_btn)
-        self.word_btn = QPushButton("导出 Word")
+        self.dir_btn.triggered.connect(self._on_pick_dir)
+        self.word_btn = more_menu.addAction("导出 Word")
         self.word_btn.setToolTip(
             "导出「证书页 + 完整协议（正文 / 附件一 / 附件二）」的 .docx，"
             "正文按软件当前字段填充，冲突以软件为准")
-        self.word_btn.clicked.connect(self._on_export_docx)
-        toolbar.addWidget(self.word_btn)
-        self.sample_word_btn = QPushButton("导出样本 Word")
+        self.word_btn.triggered.connect(self._on_export_docx)
+        self.sample_word_btn = more_menu.addAction("导出样本 Word")
         self.sample_word_btn.setToolTip(
             "无需填写字段，直接导出一份完整授权协议样本 .docx 到输出目录，"
             "全部为示意内容，可单独转发参考")
-        self.sample_word_btn.clicked.connect(self._on_export_docx_sample)
-        toolbar.addWidget(self.sample_word_btn)
-        self.clear_btn = QPushButton("清空字段")
+        self.sample_word_btn.triggered.connect(self._on_export_docx_sample)
+        more_menu.addSeparator()
+        self.clear_btn = more_menu.addAction("清空字段")
         self.clear_btn.setToolTip("清空表单全部已填内容，图片列表保留")
-        self.clear_btn.clicked.connect(self._on_clear_fields)
-        toolbar.addWidget(self.clear_btn)
+        self.clear_btn.triggered.connect(self._on_clear_fields)
+        toolbar.addWidget(self.more_btn)
+        self.export_btn = QPushButton("生成证书")
+        self.export_btn.setProperty("variant", "primary")
+        self.export_btn.setDefault(True)
+        self.export_btn.clicked.connect(self._on_export)
+        toolbar.addWidget(self.export_btn)
         root.addLayout(toolbar)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -473,7 +480,7 @@ class CertificateMakerPage(BasePage):
 
     def _build_left_panel(self) -> QWidget:
         container = QWidget()
-        container.setMinimumWidth(430)
+        container.setMinimumWidth(400)
         container.setMaximumWidth(580)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 8, 0)

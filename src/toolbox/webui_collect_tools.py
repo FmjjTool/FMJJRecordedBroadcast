@@ -28,13 +28,25 @@ class CollectToolCancelled(Exception):
     """抓取任务被取消。"""
 
 
+def _comments_mode(payload: dict, platform: str) -> str:
+    """兼容旧客户端自动识别；显式模式只接受当前平台支持的值。"""
+    mode = str(payload.get("mode") or "").strip()
+    if mode not in ("", "video", "author"):
+        raise ValueError("不支持的抓取模式，请选择视频或作者")
+    if mode == "author" and platform != "douyin":
+        raise ValueError("当前平台仅支持视频模式")
+    return mode
+
+
 def ensure_comments(payload: dict) -> None:
     """抓取前校验（请求线程执行，失败直接 400）。"""
     platform = str(payload.get("platform") or "douyin").strip()
     if platform not in _COMMENT_BACKENDS:
         raise ValueError("未知平台，只支持抖音 / B站 / 微博")
+    mode = _comments_mode(payload, platform)
     if not str(payload.get("url") or "").strip():
-        raise ValueError("请输入视频链接或 ID")
+        raise ValueError("请输入作者主页链接或 sec_uid" if mode == "author"
+                         else "请输入视频链接或 ID")
     if not payload.get("png", True) and not payload.get("raw", True):
         raise ValueError("请至少选择一种导出内容（长图 / 原始数据）")
 
@@ -63,9 +75,11 @@ def comments_run(payload: dict, on_progress=None, on_log=None,
     platform = str(payload.get("platform") or "douyin").strip()
     if platform not in _COMMENT_BACKENDS:
         raise ValueError("未知平台，只支持抖音 / B站 / 微博")
+    mode = _comments_mode(payload, platform)
     text = str(payload.get("url") or "").strip()
     if not text:
-        raise ValueError("请输入视频链接或 ID")
+        raise ValueError("请输入作者主页链接或 sec_uid" if mode == "author"
+                         else "请输入视频链接或 ID")
     try:
         pages = int(payload.get("pages") or 5)
     except (TypeError, ValueError):
@@ -94,6 +108,10 @@ def comments_run(payload: dict, on_progress=None, on_log=None,
     kind, vid = be.parse_input(text)
     if not kind or not vid:
         raise ValueError("无法识别输入（需要视频链接或 ID）")
+    if mode == "author" and kind != "sec_uid":
+        raise ValueError("作者模式需要抖音作者主页链接或 sec_uid")
+    if mode == "video" and kind == "sec_uid":
+        raise ValueError("视频模式需要视频链接或 ID；作者主页请切换为作者模式")
     _log(on_log, f"{platform_name} · 识别到 {kind}：{vid}")
 
     plan = []
@@ -265,77 +283,17 @@ def _filter_desc(keyword, user, image_mode, min_likes, sort_by) -> str:
 
 def wechat_run(payload: dict, on_progress=None, on_log=None,
                is_cancelled=None) -> dict:
-    """公众号文章批量解析并导出 HTML / Word / Markdown。"""
-    import os
-
-    from platforms.wechat_article import download_images, extract_urls, fetch_article
-    from exporters import wechat_writer
-    from toolbox.config_manager import get_export_subdir, load_convert_config
-    from toolbox.config_manager import get_export_dir
-
-    text = str(payload.get("text") or "")
-    urls = extract_urls(text)
-    if not urls:
-        raise ValueError("未识别到公众号文章链接（需 mp.weixin.qq.com 链接）")
-    if len(urls) > 30:
-        raise ValueError("单次最多 30 篇文章，请分批")
-    formats = [str(item) for item in (payload.get("formats") or [])
-               if str(item) in _WECHAT_FORMATS]
-    if not formats:
-        raise ValueError("请至少选择一种导出格式（HTML / Word / Markdown）")
-    cfg = load_convert_config()
-    if cfg.get("wechat_use_custom_dir") and cfg.get("wechat_custom_dir"):
-        out_dir = Path(str(cfg["wechat_custom_dir"]))
-    else:
-        out_dir = get_export_subdir("wechat")
-    export_root = get_export_dir()
-    ok = 0
-    failed = []
-    outputs = []
-    total = len(urls)
-    for index, url in enumerate(urls, 1):
-        _check_cancelled(is_cancelled)
-        _progress(on_progress, index - 1, total, f"解析第 {index}/{total} 篇")
-        try:
-            art = fetch_article(url)
-            _log(on_log, f"[{index}/{total}] {art.title}")
-            _log(on_log, f"  公众号 {art.account or '-'} · 图片 "
-                         f"{len(art.images)} 张")
-            download_images(
-                art, progress=lambda n, m: _log(on_log, f"  图片 {n}/{m}"),
-                should_cancel=is_cancelled or (lambda: False), threads=6)
-            rel_dir, stem = wechat_writer.build_article_path(art, str(out_dir))
-            art_dir = out_dir / rel_dir
-            art_dir.mkdir(parents=True, exist_ok=True)
-            if "html" in formats:
-                wechat_writer.export_html(art, str(art_dir / (stem + ".html")))
-            if "docx" in formats:
-                wechat_writer.export_docx(art, str(art_dir / (stem + ".docx")))
-            if "md" in formats:
-                wechat_writer.export_markdown(art, str(art_dir))
-            outputs.append({"title": art.title or url,
-                            "dir": _rel(art_dir, export_root),
-                            "formats": list(formats)})
-            ok += 1
-            _log(on_log, "  导出完成 → " + _rel(art_dir, export_root))
-        except CollectToolCancelled:
-            raise
-        except Exception as exc:  # noqa: BLE001 - 单篇失败不影响其它
-            failed.append({"url": url, "error": str(exc)[:200]})
-            _log(on_log, f"[{index}/{total}] 失败：{exc}")
-        if index < total and not (is_cancelled and is_cancelled()):
-            time.sleep(1.2)  # 与桌面一致：批量限速，降低风控
-    _progress(on_progress, total, total, "解析完成")
-    return {
-        "ok": ok,
-        "failed": len(failed),
-        "outputs": outputs,
-        "failures": failed,
-        "summary": (f"公众号解析完成：成功 {ok} 篇"
-                    + (f"，失败 {len(failed)} 篇" if failed else "")),
-        "note": ("导出到公众号分类目录（或桌面设置的自定义目录）；"
-                 "PDF 导出需要桌面端 Qt 渲染，Web 端不提供。"),
-    }
+    """兼容原公众号导出入口，复用同一归档/导出用例。"""
+    from toolbox import wechat_library
+    ensure_wechat(payload)
+    formats = [str(f) for f in payload.get("formats", [])
+               if str(f) in _WECHAT_FORMATS]
+    result = wechat_library.export_links(
+        str(payload.get("text") or ""), formats,
+        on_progress=on_progress, on_log=on_log, is_cancelled=is_cancelled)
+    if result.get("cancelled"):
+        raise CollectToolCancelled("任务已取消")
+    return {key: result[key] for key in ("ok", "failed", "summary")}
 
 
 def _rel(path: Path, root: Path) -> str:

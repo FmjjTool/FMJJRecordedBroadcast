@@ -28,7 +28,8 @@ from toolbox.asset_bilibili import (av_bvid, download_video, dynamic_type,
 from toolbox.asset_images import extract_pic_urls
 from toolbox.asset_media import download_item_images, download_item_media
 from toolbox.asset_video import resolve_video_source
-from toolbox.config_manager import get_export_subdir
+from toolbox.config_manager import (EXPORT_CATEGORIES, get_config_dir_readonly,
+                                    get_export_dir_readonly, get_export_subdir)
 
 _MAX_TASK_ITEMS = 50
 _QUALITY_LABELS = ("最高画质", "8K", "杜比视界", "HDR", "4K",
@@ -232,7 +233,7 @@ def _no_dl_store_path() -> Path:
 
 def _load_no_dl() -> dict:
     try:
-        data = json.loads(_no_dl_store_path().read_text(encoding="utf-8"))
+        data = json.loads((get_config_dir_readonly() / _NO_DL_FILE).read_text(encoding="utf-8"))
         if isinstance(data, dict):
             return {
                 "auto": set(data.get("auto") or []),
@@ -345,7 +346,7 @@ def _status_row(row: dict, media: list[dict], flagged: set, root=None) -> dict:
 
 def _status_snapshot(query) -> dict:
     rows = query.entry_rows()
-    root = str(get_export_subdir("video_data").resolve())
+    root = str((get_export_dir_readonly() / EXPORT_CATEGORIES["video_data"]).resolve())
     snapshot = _status_cache.get(query)
     flagged = _flagged_no_dl()
     if (snapshot and snapshot["root"] == root
@@ -389,7 +390,7 @@ def refresh_entries(paths, *, query=None) -> dict:
     query = query or _default_query()
     with _cache_lock:
         result = query.refresh_entry_paths(list(dict.fromkeys(paths)))
-        root = get_export_subdir("video_data").resolve()
+        root = (get_export_dir_readonly() / EXPORT_CATEGORIES["video_data"]).resolve()
         snapshot = _status_cache.get(query)
         if snapshot and snapshot["root"] != str(root):
             snapshot = None
@@ -501,7 +502,7 @@ def _remember_download(root: Path, rel: str, entry: dict, paths, query) -> list:
 
 def _media_map() -> dict:
     """扫描「已获取数据」下媒体文件（缓存 60 秒），返回桌面同构 media_map。"""
-    root = get_export_subdir("video_data")
+    root = get_export_dir_readonly() / EXPORT_CATEGORIES["video_data"]
     key = str(root)
     now = time.time()
     cached = _media_cache.get(key)

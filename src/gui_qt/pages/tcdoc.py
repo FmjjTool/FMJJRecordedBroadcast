@@ -1121,10 +1121,12 @@ class TcDocPage(BasePage):
         self.sheet_hint = QLabel("点「同步表格」把文档里的表格内容抓到本地；"
                                 "图片字段会自动增量下载到 图片/。默认最新在前，"
                                 "取消勾选可恢复原顺序；本地检测记录见「最近变更」。")
+        self.sheet_hint.setWordWrap(True)
         self.sheet_hint.setStyleSheet("color: #888;")
         v.addWidget(self.sheet_hint)
 
         self._sheet_columns: list[str] = []
+        self._sheet_doc_key = ""
         self._sheet_offset = 0
         self._sheet_total = 0
         return box
@@ -1662,23 +1664,37 @@ class TcDocPage(BasePage):
     def _refresh_sheet_tabs(self):
         """按当前文档刷新工作表下拉（含被跳过的非表格页提示）。"""
         doc = self.current_doc()
-        keep = self._current_tab_id()
+        same_doc = self._sheet_doc_key == (doc or {}).get("key", "")
+        keep = self._current_tab_id() if same_doc else ""
         page_size = max(20, int(tc_cfg.load_cfg().get("tcdoc_table_page") or 200))
         newest = self._newest_first()
+        column = self._data_sorter.col
+        sort_column = (self._sheet_columns[column]
+                       if same_doc and 0 <= column < len(self._sheet_columns) else "")
+        descending = not self._data_sorter.ascending
 
         def work():
             sheets = tables.sheets_of(doc["key"]) if doc else []
             available = [sheet for sheet in sheets if not sheet["skipped"]]
             sheet = next((s for s in available if s["tab_id"] == keep),
                          available[0] if available else {})
-            data = self._read_sheet_page(doc, sheet, 0, page_size, newest)
-            return sheets, data
+            names = [item["name"] for item in sheet.get("columns", [])]
+            selected_sort = (sort_column if sheet.get("tab_id") == keep
+                             and sort_column in names else "")
+            data = self._read_sheet_page(
+                doc, sheet, 0, page_size, newest, selected_sort, descending)
+            return sheets, data, selected_sort
 
         def apply(result, done, valid):
-            sheets, data = result
+            sheets, data, selected_sort = result
             self._sheets = sheets
+            self._sheet_doc_key = (doc or {}).get("key", "")
             self._apply_sheet_tabs(doc, sheets, keep)
+            names = [item["name"] for item in data[0].get("columns", [])]
+            self._data_sorter.col = names.index(selected_sort) if selected_sort else -1
+            self._data_sorter.ascending = not descending if selected_sort else True
             self._apply_sheet_page(data, page_size, done, valid)
+            self._data_sorter._update_indicator()
 
         self._load_local(self.content_tab_index, work, apply)
 
@@ -1779,6 +1795,7 @@ class TcDocPage(BasePage):
         sheet, rows, total, self._sheet_offset, image_stats = data
         self._sheet_total = total
         if not sheet:
+            self._sheet_columns = []
             self.table_data.setRowCount(0)
             self.table_data.setColumnCount(0)
             self.page_label.setText("-/-")

@@ -40,7 +40,8 @@
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
-    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '',
+    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, rowsNewest: true,
+      rowsSort: { order: '', asc: true }, writeTab: 'official', writeDays: 30, writeKey: '',
       bridge: { docKey: '', tabId: '', days: 30, accounts: 'default', dupMode: 'skip' } }
   };
   var routes = {
@@ -396,66 +397,202 @@
   }
 
   function renderHome(host) {
-    host.replaceChildren();
-    host.appendChild(h('div', { class: 'card' },
-      h('div', { class: 'row-title' }, '录播工具箱 Web 服务端'),
-      h('div', { class: 'muted small', style: 'margin-top:6px' },
-        '分组与命名与桌面端一致；这里只列出已接入 Web 的页面，'
-        + '桌面端的采集任务、网络库、账户追踪、音乐工具、本地工具等页面尚未接入。')));
-    [
-      ['常用工具', [
-        ['info_accounts', '采集任务', '账号清单与批量解析'],
-        ['collected', '采集结果', '结果库、下载与导出'],
-        ['info_tools', '采集工具', '评论区 / B站资源 / 公众号 / 表情包'],
-        ['netdisk', '网络库', '网盘备份状态与运行记录'],
-        ['localwiki', '资料站', '部署状态与站点访问统计'],
-        ['livestream_summary', '直播总结', '转录清单与已保存总结'],
-        ['image_sorter', '媒体筛选', '源文件夹扫描与图片预览'],
-        ['rename_batch', '批量改名', '规则预览与冲突检查'],
-        ['tickets', '票务解析', '演出缓存与导出目录'],
-        ['shopping', '购物解析', '淘宝 / 抖音 / B站小店产物'],
-        ['music_playlist', '歌单', '本地预览与执行报告'],
-        ['music_download', '下载', '本地音乐文件列表'],
-        ['music_tag', '标签', '标签编辑、封面与编码修复'],
-        ['assets', '资产库', '资源归档与本地文件'],
-        ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
-        ['rename', '命名投稿', '标准命名与版权标签'],
-        ['subtitle', '字幕转换', '字幕与歌词格式转换'],
-        ['organize', '自动整理', '按日期整理录播文件']
-      ]],
-      ['更多工具', [
-        ['audio', '音频提取', '按音轨提取音频'],
-        ['launcher', '继续操作', '打开链接或启动本机软件'],
-        ['calendar', '日历浏览', '按日期文件夹浏览'],
-        ['migrate', '文件迁移', '复制 / 剪切到目标目录'],
-        ['record', '直播录制', '监控与录制控制（需桌面运行）'],
-        ['music_tracker', '音乐账号', '五平台账号指标与历史'],
-        ['media_tracker', '网媒账号', '网媒账号指标与历史'],
-        ['douyin_index', '抖音指数', '达人核心指标与粉丝画像'],
-        ['weibo_chaohua', '微博超话', '本地累计与增长分析'],
-        ['fan_groups', '粉丝群', 'QQ 群订阅与人数历史'],
-        ['tcdoc', '腾讯文档', '浏览量 / 成员数每日记录']
-      ]],
-      ['全局', [
-        ['tasks', '任务', '定时任务与安装'],
-        ['system', '设置', '目录、主题与依赖'],
-        ['performance', '性能诊断', '本机 CPU / 内存 / 磁盘读数']
-      ]]
-    ].forEach(function (group) {
-      host.appendChild(h('div', {
-        class: 'row-title', style: 'margin:16px 0 8px'
-      }, group[0]));
-      var grid = h('div', { class: 'grid cols-3' });
-      group[1].forEach(function (item) {
-        grid.appendChild(h('button', {
-          class: 'card tool-card', type: 'button',
-          onclick: function () { navigate(item[0]); }
-        },
-          h('div', { class: 'tool-card-title' }, item[1]),
-          h('div', { class: 'muted small' }, item[2])));
+    var page = h('div', { class: 'home-dashboard' });
+    var updated = h('span', { class: 'muted small', role: 'status', 'aria-live': 'polite' }, '正在读取本地数据…');
+    var refreshButton = h('button', { class: 'btn', type: 'button', onclick: refresh }, '刷新数据');
+    var notice = h('div', { class: 'home-notice hidden', role: 'alert' });
+    var body = h('div', { class: 'home-dashboard-body' });
+    var hasData = false;
+    var busy = false;
+    page.appendChild(h('div', { class: 'home-toolbar' }, updated, refreshButton));
+    page.appendChild(notice);
+    page.appendChild(body);
+    host.replaceChildren(page);
+
+    function amount(value) {
+      return value !== null && value !== undefined && Number.isFinite(Number(value))
+        && Number(value) >= 0 ? fmtNumber(value) : '—';
+    }
+
+    function compact(value) {
+      if (value >= 100000000) return (value / 100000000).toFixed(value % 100000000 ? 1 : 0) + '亿';
+      if (value >= 10000) return (value / 10000).toFixed(value % 10000 ? 1 : 0) + '万';
+      return fmtNumber(value);
+    }
+
+    function svg(tag, attrs, text) {
+      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      Object.keys(attrs || {}).forEach(function (key) { node.setAttribute(key, attrs[key]); });
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function overviewCard(label, value, note, metricState) {
+      if (metricState === 'error') { value = null; note = '暂时无法读取，稍后刷新重试'; }
+      return h('div', { class: 'stat home-stat' + (metricState === 'error' ? ' has-error' : '') },
+        h('div', { class: 'label' }, label),
+        h('div', { class: 'value' }, amount(value)),
+        h('div', { class: 'note' }, note));
+    }
+
+    function trendChart(data) {
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '新增趋势：近 7 天数据增量' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '新增趋势'),
+          h('span', { class: 'muted small' }, '近 7 天 ' + amount(data.week_total) + ' · 今日 ' + amount(data.today_total))));
+      var labels = Array.isArray(data.labels) ? data.labels.slice(-7) : [];
+      var counts = (Array.isArray(data.counts) ? data.counts.slice(-7) : []).map(function (value) {
+        return Math.max(0, Number(value) || 0);
       });
-      host.appendChild(grid);
-    });
+      if (!labels.length || !counts.some(function (value) { return value > 0; })) {
+        card.appendChild(h('div', { class: 'home-chart-empty' }, data.trend_state === 'error'
+          ? '趋势数据暂时无法读取，请稍后刷新重试。' : '近 7 天还没有新增记录，完成采集或同步后刷新查看。'));
+        return card;
+      }
+      var max = Math.max.apply(null, counts);
+      var step = Math.pow(10, Math.max(0, Math.floor(Math.log10(max / 4))));
+      var ceiling = Math.ceil(max / (step * 4)) * step * 4;
+      var chart = svg('svg', { class: 'home-trend', width: '100%', height: 252, role: 'img',
+        'aria-label': labels.map(function (label, index) { return label + '：' + amount(counts[index]); }).join('；') });
+      [0, 0.5, 1].forEach(function (fraction) {
+        var y = 210 - fraction * 172;
+        chart.appendChild(svg('line', { x1: '12%', x2: '99%', y1: y, y2: y, class: 'home-chart-gridline' }));
+        chart.appendChild(svg('text', { x: 0, y: y + 4, class: 'home-chart-label' }, compact(ceiling * fraction)));
+      });
+      var gap = 84 / labels.length;
+      labels.forEach(function (label, index) {
+        var value = counts[index] || 0;
+        var x = 14 + gap * (index + 0.5);
+        var height = value / ceiling * 172;
+        var bar = svg('rect', { x: (x - gap * 0.29) + '%', y: 210 - height,
+          width: (gap * 0.58) + '%', height: height, rx: 3, class: 'home-trend-bar' });
+        bar.appendChild(svg('title', {}, label + '：' + amount(value)));
+        chart.appendChild(bar);
+        chart.appendChild(svg('text', { x: x + '%', y: 200 - height, 'text-anchor': 'middle', class: 'home-chart-value' }, compact(value)));
+        chart.appendChild(svg('text', { x: x + '%', y: 236, 'text-anchor': 'middle', class: 'home-chart-label' }, label));
+      });
+      card.appendChild(chart);
+      card.appendChild(h('div', { class: 'muted small home-chart-note' + (data.trend_state === 'error' ? ' home-data-warning' : '') },
+        (data.trend_state === 'error' ? '部分数据读取失败，统计不完整。' : '')
+        + (data.trend_note || '按各来源的本地记录日期汇总')));
+      return card;
+    }
+
+    function sourceChart(data) {
+      var names = { bilibili: '哔哩哔哩', douyin: '抖音', weibo: '微博', xiaohongshu: '小红书',
+        kuaishou: '快手', weibo_chaohua: '微博超话', tcdoc: '腾讯文档', assets: '资源文件',
+        acfun: 'AcFun', baidu: '百度', wechat: '微信公众号', qq: 'QQ', youtube: 'YouTube' };
+      var entries = Object.keys(data.by_source || {}).map(function (key) {
+        return { label: (data.source_labels || {})[key] || names[key] || key,
+          value: Math.max(0, Number(data.by_source[key]) || 0) };
+      }).filter(function (item) { return item.value > 0; }).sort(function (a, b) { return b.value - a.value; });
+      var total = entries.reduce(function (sum, item) { return sum + item.value; }, 0);
+      var incomplete = ['platform_items', 'chaohua_posts', 'tcdoc_rows', 'asset_files'].some(function (key) {
+        return (data.stat_states || {})[key] === 'error';
+      });
+      var card = h('section', { class: 'card home-chart-card', 'aria-label': '内容分布' },
+        h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '内容分布'),
+          h('span', { class: 'muted small' }, (incomplete ? '已读取 ' : '共 ') + amount(total) + ' 条')));
+      if (!total) {
+        card.appendChild(h('div', { class: 'home-chart-empty' + (incomplete ? ' home-data-warning' : '') }, incomplete
+          ? '部分来源读取失败，暂时无法汇总完整分布。' : '还没有可汇总的内容，完成采集或资源登记后刷新查看。'));
+        return card;
+      }
+      var chart = svg('svg', { class: 'home-donut', viewBox: '0 0 200 200', role: 'img',
+        'aria-label': entries.map(function (item) { return item.label + '：' + amount(item.value); }).join('；') });
+      chart.appendChild(svg('circle', { cx: 100, cy: 100, r: 72, class: 'home-donut-track' }));
+      var legend = h('ul', { class: 'home-source-legend' });
+      var offset = 0;
+      entries.forEach(function (item, index) {
+        var percent = item.value / total * 100;
+        var ring = svg('circle', { cx: 100, cy: 100, r: 72, pathLength: 100,
+          'stroke-dasharray': percent + ' ' + (100 - percent), 'stroke-dashoffset': -offset,
+          transform: 'rotate(-90 100 100)', class: 'home-donut-ring home-series-' + (index % 6) });
+        ring.appendChild(svg('title', {}, item.label + '：' + amount(item.value) + '（' + percent.toFixed(1) + '%）'));
+        chart.appendChild(ring);
+        offset += percent;
+        legend.appendChild(h('li', {},
+          h('span', { class: 'home-source-dot home-series-' + (index % 6), 'aria-hidden': 'true' }),
+          h('span', { class: 'home-source-name' }, item.label),
+          h('span', { class: 'home-source-value' }, amount(item.value)),
+          h('span', { class: 'muted home-source-percent' }, percent.toFixed(1) + '%')));
+      });
+      chart.appendChild(svg('text', { x: 100, y: 95, 'text-anchor': 'middle', class: 'home-donut-caption' }, '来源总量'));
+      chart.appendChild(svg('text', { x: 100, y: 121, 'text-anchor': 'middle', class: 'home-donut-total' }, compact(total)));
+      card.appendChild(h('div', { class: 'home-source-body' }, chart, legend));
+      if (incomplete) card.appendChild(h('div', { class: 'small home-data-warning' }, '部分来源读取失败，分布统计不完整。'));
+      return card;
+    }
+
+    function renderData(data) {
+      var stats = data.stats;
+      var metricStates = data.stat_states || {};
+      var siteReady = !!stats.site_collected;
+      var siteNote = siteReady ? [stats.site_scope, stats.site_date].filter(Boolean).join(' · ') : '尚未采集访问统计';
+      var docNote = '已采集 ' + amount(stats.doc_count) + ' 份文档';
+      var cards = h('div', { class: 'home-overview' },
+        overviewCard('平台内容', stats.platform_items, data.platform_note || '各平台已入库内容', metricStates.platform_items),
+        overviewCard('微博超话帖子', stats.chaohua_posts, '去重后的本地帖子', metricStates.chaohua_posts),
+        overviewCard('腾讯文档行', stats.tcdoc_rows, '已同步的本地表格记录', metricStates.tcdoc_rows),
+        overviewCard('资源归档', stats.asset_files, '资产索引已登记条目', metricStates.asset_files),
+        overviewCard('文档浏览量', stats.doc_views, docNote, metricStates.doc_views),
+        overviewCard('文档成员数', stats.doc_members, docNote, metricStates.doc_members),
+        overviewCard('已查看人数', stats.doc_readers, docNote, metricStates.doc_readers),
+        overviewCard('追踪账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号', metricStates.tracked_accounts),
+        overviewCard('站点访客', siteReady ? stats.site_visitors : null, siteNote, metricStates.site_visitors),
+        overviewCard('站点会话', siteReady ? stats.site_sessions : null, siteNote, metricStates.site_sessions),
+        overviewCard('站点浏览量', siteReady ? stats.site_pageviews : null, siteNote, metricStates.site_pageviews),
+        overviewCard('站点在线', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote, metricStates.site_online));
+      var sections = h('div', { class: 'home-sections' });
+      (Array.isArray(data.sections) ? data.sections : []).forEach(function (section) {
+        var metrics = h('dl', { class: 'home-metric-list' });
+        (Array.isArray(section.metrics) ? section.metrics : []).forEach(function (metric) {
+          var note = metric.note || (metric.state === 'error' ? '暂时无法读取，稍后刷新重试'
+            : (metric.state === 'empty' ? '尚无本地记录' : ''));
+          var value = metric.state === 'error' ? null : metric.value;
+          metrics.appendChild(h('div', { class: 'home-metric-row' + (metric.state === 'error' ? ' has-error' : '') },
+            h('dt', {}, h('span', { class: 'home-metric-label' }, metric.label),
+              note ? h('span', { class: 'home-metric-note' }, note) : null),
+            h('dd', {}, h('span', { class: 'home-metric-value' }, amount(value)),
+              metric.unit ? h('span', { class: 'home-metric-unit' }, metric.unit) : null)));
+        });
+        sections.appendChild(h('section', { class: 'card home-section-card' },
+          h('h2', { class: 'card-title' }, section.title),
+          section.note ? h('div', { class: 'muted small home-section-note' }, section.note) : null, metrics));
+      });
+      body.replaceChildren(cards, h('div', { class: 'home-charts' }, trendChart(data), sourceChart(data)), sections);
+      updated.textContent = data.generated_at ? '更新于 ' + data.generated_at : '已读取本地数据';
+    }
+
+    function refresh() {
+      if (busy) return;
+      busy = true;
+      refreshButton.disabled = true;
+      refreshButton.textContent = '刷新中…';
+      page.setAttribute('aria-busy', 'true');
+      notice.classList.add('hidden');
+      if (!hasData) setLoading(body, '正在汇总本地数据…');
+      api('/api/dashboard/overview').then(function (data) {
+        if (!page.isConnected) return;
+        if (!data || typeof data.stats !== 'object' || data.stats === null) throw new Error('invalid overview');
+        renderData(data);
+        hasData = true;
+      }).catch(function () {
+        if (!page.isConnected) return;
+        if (!hasData) body.replaceChildren();
+        updated.textContent = hasData ? '当前显示上次读取的数据' : '本地数据读取失败';
+        notice.replaceChildren(
+          h('span', {}, '读取失败，请确认服务仍在运行后重试。'),
+          h('button', { class: 'btn', type: 'button', onclick: refresh }, '重试'));
+        notice.classList.remove('hidden');
+      }).finally(function () {
+        busy = false;
+        if (!page.isConnected) return;
+        refreshButton.disabled = false;
+        refreshButton.textContent = '刷新数据';
+        page.setAttribute('aria-busy', 'false');
+      });
+    }
+    refresh();
   }
 
   function renderInfoAccounts(root) {
@@ -799,178 +936,16 @@
     }
 
     function commentsCard(reload) {
-      var platformSel = h('select', { class: 'select' },
-        h('option', { value: 'douyin' }, '抖音'),
-        h('option', { value: 'bili' }, 'B站'),
-        h('option', { value: 'weibo' }, '微博'));
-      var urlInput = h('input', {
-        class: 'input grow',
-        placeholder: '视频链接或 ID；抖音支持作者主页（抓最新 N 个）'
+      return window.createVideoCommentsCard({
+        h: h, post: post, toast: toast, watchJob: watchJob, reload: reload
       });
-      var pagesInput = h('input', {
-        class: 'input', style: 'width:70px', type: 'number',
-        min: '1', max: '50', value: '5'
-      });
-      var pngCb = h('input', { type: 'checkbox', checked: true });
-      var rawCb = h('input', { type: 'checkbox', checked: true });
-      var kwInput = h('input', {
-        class: 'input', placeholder: '关键词', style: 'width:130px'
-      });
-      var userInput = h('input', {
-        class: 'input', placeholder: '昵称', style: 'width:120px'
-      });
-      var likesInput = h('input', {
-        class: 'input', placeholder: '最少点赞', style: 'width:90px',
-        type: 'number', min: '0'
-      });
-      var imageSel = h('select', { class: 'select' },
-        h('option', { value: 'all' }, '全部评论'),
-        h('option', { value: 'has' }, '仅带图'),
-        h('option', { value: 'text' }, '仅纯文字'));
-      var sortSel = h('select', { class: 'select' },
-        h('option', { value: 'default' }, '默认排序'),
-        h('option', { value: 'likes' }, '按点赞'),
-        h('option', { value: 'time' }, '按时间'));
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始抓取');
-      var jobHost = h('div');
-      var running = false;
-      btn.addEventListener('click', function () {
-        if (running) return;
-        if (!urlInput.value.trim()) {
-          toast('请输入视频链接或 ID', 'warning');
-          return;
-        }
-        if (!pngCb.checked && !rawCb.checked) {
-          toast('请至少选择一种导出内容', 'warning');
-          return;
-        }
-        running = true;
-        btn.disabled = true;
-        btn.textContent = '抓取中…';
-        post('/api/tools/artifacts/comments', {
-          platform: platformSel.value,
-          url: urlInput.value.trim(),
-          pages: Number(pagesInput.value) || 5,
-          png: pngCb.checked,
-          raw: rawCb.checked,
-          keyword: kwInput.value.trim(),
-          user: userInput.value.trim(),
-          min_likes: Number(likesInput.value) || 0,
-          image_mode: imageSel.value,
-          sort_by: sortSel.value
-        }).then(function (result) {
-          watchJob(jobHost, result.job, function (job) {
-            running = false;
-            btn.disabled = false;
-            btn.textContent = '开始抓取';
-            var outcome = job.result || {};
-            toast(outcome.summary || '抓取完成', 'success');
-            reload();
-          }, {
-            cancelable: true,
-            onSettled: function (job) {
-              running = false;
-              btn.disabled = false;
-              btn.textContent = '开始抓取';
-              if (job.status === 'error') {
-                toast('抓取失败：' + (job.error || '未知错误'), 'error');
-              }
-            }
-          });
-        }).catch(function (error) {
-          running = false;
-          btn.disabled = false;
-          btn.textContent = '开始抓取';
-          toast('抓取失败：' + error.message, 'error');
-        });
-      });
-      return h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '抓取评论区'),
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '平台'), platformSel,
-          urlInput),
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '页数'), pagesInput,
-          h('label', { class: 'muted small' }, pngCb, ' 评论区长图'),
-          h('label', { class: 'muted small' }, rawCb, ' 原始数据'),
-          kwInput, userInput, likesInput, imageSel, sortSel,
-          h('span', { style: 'flex:1' }), btn),
-        h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '导出到「评论区/<平台>/<视频ID>/」，可在下方产物列表预览长图或下载；'
-          + '抓取依赖登录态与网络，作者主页模式对抖音有效。'),
-        jobHost);
     }
 
     function wechatCard(reload) {
-      var textarea = h('textarea', {
-        class: 'textarea', rows: '3',
-        placeholder: '粘贴 mp.weixin.qq.com 文章链接，一行一个（最多 30 篇）'
+      return window.createWechatLibraryCard({
+        h: h, api: api, post: post, toast: toast, watchJob: watchJob,
+        downloadPost: downloadPost, reload: reload
       });
-      var checks = {};
-      var row = h('div', { class: 'toolbar', style: 'margin-top:8px' });
-      [['html', 'HTML'], ['docx', 'Word'], ['md', 'Markdown']]
-        .forEach(function (pair) {
-          checks[pair[0]] = h('input', { type: 'checkbox', checked: true });
-          row.appendChild(h('label', { class: 'muted small' },
-            checks[pair[0]], ' ' + pair[1]));
-        });
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
-      var jobHost = h('div');
-      var running = false;
-      btn.addEventListener('click', function () {
-        if (running) return;
-        if (!textarea.value.trim()) {
-          toast('请粘贴公众号文章链接', 'warning');
-          return;
-        }
-        var formats = Object.keys(checks).filter(function (key) {
-          return checks[key].checked;
-        });
-        if (!formats.length) {
-          toast('请至少选择一种导出格式', 'warning');
-          return;
-        }
-        running = true;
-        btn.disabled = true;
-        btn.textContent = '解析中…';
-        post('/api/tools/artifacts/wechat', {
-          text: textarea.value, formats: formats
-        }).then(function (result) {
-          watchJob(jobHost, result.job, function (job) {
-            running = false;
-            btn.disabled = false;
-            btn.textContent = '开始解析';
-            var outcome = job.result || {};
-            toast(outcome.summary || '解析完成',
-              outcome.failed ? 'warning' : 'success');
-            reload();
-          }, {
-            cancelable: true,
-            onSettled: function (job) {
-              running = false;
-              btn.disabled = false;
-              btn.textContent = '开始解析';
-              if (job.status === 'error') {
-                toast('解析失败：' + (job.error || '未知错误'), 'error');
-              }
-            }
-          });
-        }).catch(function (error) {
-          running = false;
-          btn.disabled = false;
-          btn.textContent = '开始解析';
-          toast('解析失败：' + error.message, 'error');
-        });
-      });
-      return h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '解析公众号文章'),
-        textarea, row,
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' },
-            '导出到公众号分类目录（或桌面设置的自定义目录）；'
-            + 'PDF 需要桌面端渲染，Web 端不提供。'),
-          h('span', { style: 'flex:1' }), btn),
-        jobHost);
     }
 
     function biliCard(reload) {
@@ -1215,7 +1190,8 @@
           }, '共 ' + groups.length + ' 组 · ' + fmtNumber(data.total)
             + ' 个文件 · 图片 ' + fmtNumber(images)));
           if (!groups.length) {
-            listHost.appendChild(empty(data.note || '暂无产物。'));
+            listHost.appendChild(empty(state.artifacts.tab === 'wechat'
+              ? '暂无公众号导出文件。' : (data.note || '暂无产物。')));
             return;
           }
           groups.forEach(function (group) {
@@ -3661,6 +3637,7 @@ function renderLivestreamSummary(root) {
     var tableBody = null;
     var requestSeq = 0;
     var loading = false;
+    var pendingRequest = null;
     var STATUS_BADGE = {
       ok: ['已完整', 'ok'], partial: ['部分下载', 'warn'],
       missing: ['该下未下', 'danger'], text: ['纯文本', ''],
@@ -3750,6 +3727,14 @@ function renderLivestreamSummary(root) {
     function load() {
       var seq = ++requestSeq;
       var scope = scopeKey();
+      if (pendingRequest) pendingRequest.abort();
+      var controller = new AbortController();
+      pendingRequest = controller;
+      var timedOut = false;
+      var timeout = setTimeout(function () {
+        timedOut = true;
+        controller.abort();
+      }, 30000);
       loading = true;
       updateButtons();
       tableHost.setAttribute('aria-busy', 'true');
@@ -3758,16 +3743,19 @@ function renderLivestreamSummary(root) {
         + '&page_size=20&q=' + encodeURIComponent(state.assets.q)
         + '&platform=' + encodeURIComponent(state.assets.platform)
         + '&status=' + encodeURIComponent(state.assets.status || '');
-      return api(url)
+      return api(url, { signal: controller.signal })
         .then(function (data) {
-          if (!host.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+          if (!tableHost.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
           renderPage(data);
         }).catch(function (error) {
-          if (!host.isConnected || seq !== requestSeq) return;
+          if (!tableHost.isConnected || seq !== requestSeq || scope !== scopeKey()) return;
+          if (timedOut) error = new Error('读取资源归档超时，请重试。');
           if (tableBody) toast('资源清单刷新失败：' + error.message, 'error');
           else setError(tableHost, error, load);
         }).finally(function () {
+          clearTimeout(timeout);
           if (seq !== requestSeq) return;
+          pendingRequest = null;
           loading = false;
           tableHost.removeAttribute('aria-busy');
           updateButtons();
@@ -9163,14 +9151,19 @@ function renderLivestreamSummary(root) {
       }
       var searching = false;
       var fetching = !!state.douyin.fetchTask;
+      function isCurrentView() {
+        return state.route === 'douyin_index' && state.douyin.view === view;
+      }
       function setFetching(busy) {
         fetching = busy;
-        keyword.disabled = busy;
-        daysSel.disabled = busy;
-        searchBtn.disabled = busy;
+        keyword.disabled = busy || searching;
+        daysSel.disabled = busy || searching;
+        searchBtn.disabled = busy || searching;
         searchHost.querySelectorAll('button').forEach(function (button) {
           button.disabled = busy;
-          button.textContent = busy ? '抓取中…' : '抓取并回写';
+          if (button.hasAttribute('data-fetch-author')) {
+            button.textContent = busy ? '抓取中…' : '确认并抓取';
+          }
         });
       }
       function watchFetch(task) {
@@ -9205,21 +9198,24 @@ function renderLivestreamSummary(root) {
         });
       }
       searchBtn.addEventListener('click', function () {
-        if (searching || state.douyin.fetchTask) return;
+        if (!isCurrentView() || searching || state.douyin.fetchTask) return;
         if (!keyword.value.trim()) {
           toast('请输入达人名称或抖音号', 'warning');
           return;
         }
+        var query = keyword.value.trim();
         searching = true;
-        searchBtn.disabled = true;
+        setFetching(false);
         searchBtn.textContent = '搜索中…';
         searchHost.replaceChildren(h('div', { class: 'muted small' },
           '正在搜索…'));
-        post('/api/douyin-index/search', { keyword: keyword.value.trim() })
+        post('/api/douyin-index/search', { keyword: query })
           .then(function (result) {
+            if (!isCurrentView()) return;
             searching = false;
-            searchBtn.disabled = false;
+            setFetching(!!state.douyin.fetchTask);
             searchBtn.textContent = '搜索达人';
+            if (keyword.value.trim() !== query || state.douyin.fetchTask) return;
             var items = result.items || [];
             if (!items.length) {
               searchHost.replaceChildren(empty('没有匹配的达人。'));
@@ -9231,13 +9227,12 @@ function renderLivestreamSummary(root) {
             var body = h('tbody');
             items.forEach(function (item) {
               var btn = h('button', {
-                class: 'btn mini primary', type: 'button'
-              }, '抓取并回写');
+                class: 'btn mini primary', type: 'button',
+                'data-fetch-author': item.uid
+              }, '确认并抓取');
               btn.addEventListener('click', function () {
-                if (fetching || state.douyin.fetchTask) return;
-                if (!window.confirm('抓取「' + (item.name || item.uid) + '」并回写已有资产？\n\n'
-                  + '将保存指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。'
-                  + '\n不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。')) return;
+                if (!isCurrentView() || searching || fetching || state.douyin.fetchTask
+                  || keyword.value.trim() !== query || !searchHost.contains(btn)) return;
                 var task = { job: null };
                 state.douyin.fetchTask = task;
                 state.douyin.lastResult = null;
@@ -9271,12 +9266,23 @@ function renderLivestreamSummary(root) {
                 h('td', { class: 'num' }, fmtNumber(item.fans)),
                 h('td', null, btn)));
             });
-            searchHost.replaceChildren(h('div', { class: 'table-wrap' },
+            var cancelSelection = h('button', { class: 'btn', type: 'button' }, '取消');
+            cancelSelection.addEventListener('click', function () {
+              if (fetching || state.douyin.fetchTask) return;
+              searchHost.replaceChildren();
+            });
+            searchHost.replaceChildren(
+              h('div', { class: 'small', style: 'margin-bottom:8px' },
+                '确认所选达人后立即抓取并回写已有资产：将保存指数快照，并按视频 ID 更新点赞、评论、分享、收藏与指数来源信息。'
+                + '不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。'),
+              h('div', { class: 'table-wrap' },
               h('table', { class: 'db-table' },
-                h('thead', null, head), body)));
+                h('thead', null, head), body)),
+              h('div', { class: 'toolbar', style: 'margin-top:8px' }, cancelSelection));
           }).catch(function (error) {
+            if (!isCurrentView()) return;
             searching = false;
-            searchBtn.disabled = false;
+            setFetching(!!state.douyin.fetchTask);
             searchBtn.textContent = '搜索达人';
             searchHost.replaceChildren(h('div', {
               class: 'muted small', style: 'color:var(--danger)'
@@ -9288,7 +9294,7 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           keyword, daysSel, searchBtn,
           h('span', { class: 'muted small' },
-            '搜索需要登录；抓取后保存指数快照，并按视频 ID 回写已有抖音资产。')),
+            '搜索需要登录；确认达人后自动抓取，保存指数快照并回写已有抖音资产。')),
         searchHost, fetchJobHost, fetchResultHost));
       setFetching(!!state.douyin.fetchTask);
       if (state.douyin.fetchTask) watchFetch(state.douyin.fetchTask);
@@ -10115,6 +10121,8 @@ function renderLivestreamSummary(root) {
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
+      var exporting = false;
+      var resultView = null;
       var saveBtn = null;
       var selectionCount = null;
       var xianyuRows = [];
@@ -10143,8 +10151,9 @@ function renderLivestreamSummary(root) {
         var hasSelection = platforms.length;
         var hasXianyu = platforms.indexOf('xianyu') !== -1;
         btn.disabled = running || !hasSelection;
-        btn.textContent = running ? '搜索并解析中…' : '搜索并解析';
+        btn.textContent = running && !exporting ? '搜索并解析中…' : '搜索并解析';
         input.disabled = running;
+        if (resultView) resultView.sync();
         if (saveBtn) saveBtn.disabled = running || !hasXianyu || !selected.size;
         if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' 件 · 本页 ' + xianyuRows.length + ' 件';
         rowBoxes.forEach(function (entry) { entry.disabled = running || !hasXianyu; });
@@ -10159,7 +10168,10 @@ function renderLivestreamSummary(root) {
       }
       api('/api/tools/shopping/options').then(function (data) {
         platformPicker = buildParserPlatformRange(
-          'shopping', data.platform_options, sync);
+          'shopping', data.platform_options, function () {
+            if (resultView) resultView.invalidate();
+            sync();
+          });
         platformHost.replaceChildren(platformPicker.element);
         sync();
       }).catch(function (error) {
@@ -10180,6 +10192,8 @@ function renderLivestreamSummary(root) {
           }, {
             cancelable: true,
             indeterminate: true,
+            clearPollErrorOnSuccess: true,
+            onPollError: function (_error, retry) { setTimeout(retry, 1000); },
             onSettled: function (job) {
               running = false;
               sync();
@@ -10197,6 +10211,7 @@ function renderLivestreamSummary(root) {
 
       function showResult(outcome) {
         var items = outcome.items || [];
+        resultView = null;
         selected.clear();
         rowBoxes = [];
         selectionButtons = [];
@@ -10214,26 +10229,13 @@ function renderLivestreamSummary(root) {
         } else {
           searchState = null;
           xianyuRows = [];
-          if (!items.length) {
-            resultHost.replaceChildren(empty('没有解析到商品，请检查链接后重试。'));
-          } else {
-            var body = h('tbody');
-            items.forEach(function (item) {
-              body.appendChild(h('tr', null,
-                h('td', { class: 'ellipsis' }, item.title || '-'),
-                h('td', null, item.price || '-'),
-                h('td', { class: 'num' }, item.sales || '-'),
-                h('td', { class: 'ellipsis' }, item.url
-                  ? h('a', { href: item.url, target: '_blank',
-                    rel: 'noopener noreferrer' }, item.url) : '-')));
-            });
-            resultHost.replaceChildren(
-              h('div', { class: 'muted small', style: 'margin-bottom:6px' }, outcome.selection_note || ''),
-              h('div', { class: 'table-wrap' },
-                h('table', { class: 'db-table' }, h('thead', null,
-                  h('tr', null, h('th', null, '商品'), h('th', null, '价格'),
-                    h('th', null, '销量'), h('th', null, '链接'))), body)));
-          }
+          resultView = window.createShoppingResultsView({
+            h: h, outcome: outcome, cycleSort: cycleSort, sortRows: sortRows,
+            post: post, watchJob: watchJob, toast: toast, jobHost: jobHost,
+            isBusy: function () { return running; },
+            setBusy: function (busy) { running = busy; exporting = busy; sync(); }
+          });
+          resultHost.replaceChildren(resultView.element);
         }
         reload();
       }
@@ -10435,6 +10437,7 @@ function renderLivestreamSummary(root) {
       btn.addEventListener('click', function () {
         if (running || !platformPicker || !platformPicker.selected().length) return;
         if (!input.value.trim()) { toast('请粘贴链接或分享文案', 'warning'); return; }
+        if (resultView) resultView.invalidate('正在重新解析，完成后可导出新结果。');
         var text = input.value.trim();
         var isXianyuLink = /(?:https?:\/\/)?(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?:\/\/2\.taobao\.com\/item|https?:\/\/h5\.m\.taobao\.com\/app\/idleFish-F2e\//i.test(text);
         if (platformPicker.selected().indexOf('xianyu') !== -1 && !isXianyuLink &&
@@ -10448,6 +10451,9 @@ function renderLivestreamSummary(root) {
         runShoppingJob('/api/tools/shopping/parse', {
           platforms: platformPicker.selected(), text: text
         }, '搜索并解析', showResult);
+      });
+      input.addEventListener('input', function () {
+        if (resultView) resultView.invalidate();
       });
       return h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('label', { class: 'row-title', for: 'shopping-input' }, '链接 / 闲鱼关键词'),
@@ -13429,6 +13435,7 @@ function renderMusicTag(root) {
           state.tcdoc.docKey = docSelect.value;
           state.tcdoc.rowsTab = '';
           state.tcdoc.rowsPage = 1;
+          state.tcdoc.rowsSort = { order: '', asc: true };
           renderTcdoc(root);
         });
         var current = (data.docs || []).filter(function (doc) {
@@ -14391,7 +14398,13 @@ function renderMusicTag(root) {
         }
 
         function renderSyncTab() {
-          var sheets = data.tables.sheets || [];
+          var sheets = (data.tables.sheets || []).filter(function (sheet) {
+            return !sheet.skipped;
+          });
+          var docKey = data.selected;
+          var rowsRequest = 0;
+          var changesOverlay = null;
+          var widths = [];
           var sheetSelect = h('select', { class: 'select' });
           if (!sheets.length) {
             sheetSelect.appendChild(h('option', { value: '' }, '（暂无子表）'));
@@ -14403,24 +14416,202 @@ function renderMusicTag(root) {
               selected: state.tcdoc.rowsTab === sheet.tab_id
             }, sheet.tab_name || sheet.tab_id));
           });
+          if (!sheets.some(function (sheet) { return sheet.tab_id === state.tcdoc.rowsTab; })) {
+            state.tcdoc.rowsTab = '';
+            state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+          }
           if (!state.tcdoc.rowsTab && sheets.length) {
             state.tcdoc.rowsTab = sheets[0].tab_id;
             sheetSelect.value = sheets[0].tab_id;
           }
+          var newest = h('input', { type: 'checkbox', checked: state.tcdoc.rowsNewest });
+          var changesBtn = h('button', { class: 'btn', type: 'button',
+            disabled: !docKey }, '最近变更');
           var rowsHost = h('div');
           var pagerHost = h('div', { class: 'col-pager' });
           tabHost.appendChild(h('div', { class: 'toolbar' },
             h('span', { class: 'muted small' }, '工作表'), sheetSelect,
-            h('span', { style: 'flex:1' })));
+            h('label', { class: 'check' }, newest, ' 最新在前'),
+            h('span', { style: 'flex:1' }), changesBtn));
           tabHost.appendChild(rowsHost);
           tabHost.appendChild(pagerHost);
           sheetSelect.addEventListener('change', function () {
             state.tcdoc.rowsTab = sheetSelect.value;
             state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+            widths = [];
             loadRows();
           });
+          newest.addEventListener('change', function () {
+            state.tcdoc.rowsNewest = newest.checked;
+            state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+            loadRows();
+          });
+          changesBtn.addEventListener('click', openChanges);
+
+          function sortableHeader(label, key, order, redraw) {
+            var active = order.order === key;
+            function sort() { cycleSort(order, key); redraw(); }
+            return h('th', { class: 'sortable', tabIndex: 0,
+              'aria-sort': active ? (order.asc ? 'ascending' : 'descending') : 'none',
+              title: label + '：点击切换升序、降序和默认顺序',
+              onclick: sort, onkeydown: function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault(); sort();
+                }
+              }
+            }, label + (active ? (order.asc ? ' ↑' : ' ↓') : ''));
+          }
+
+          function columnTools(table, footer, columns, records, weights) {
+            var group = h('colgroup');
+            if (weights.length !== columns.length) {
+              weights.splice.apply(weights, [0, weights.length].concat(columns.map(function (column) {
+                return column.key === 'row_no' ? 0.5 : 1;
+              })));
+            }
+            columns.forEach(function () { group.appendChild(h('col')); });
+            table.insertBefore(group, table.firstChild);
+            function apply() {
+              var total = weights.reduce(function (sum, value) { return sum + value; }, 0) || 1;
+              Array.from(group.children).forEach(function (col, i) {
+                col.style.width = (100 * weights[i] / total) + '%';
+              });
+            }
+            function fit() {
+              columns.forEach(function (column, i) {
+                weights[i] = Math.min(40, Math.max(column.label.length, 4,
+                  Math.max.apply(null, records.map(function (row) {
+                    return String(row[column.key] == null ? '' : row[column.key]).length;
+                  }))));
+              });
+              apply();
+            }
+            function reset() {
+              columns.forEach(function (column, i) { weights[i] = column.key === 'row_no' ? 0.5 : 1; });
+              apply();
+            }
+            table.querySelector('thead').addEventListener('contextmenu', function (event) {
+              event.preventDefault();
+              var menu = h('div', { class: 'card', role: 'menu',
+                style: 'position:fixed;pointer-events:auto;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
+                  + 'px;top:' + Math.max(0, Math.min(event.clientY, window.innerHeight - 80)) + 'px' },
+                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+                  onclick: function () { menu.remove(); fit(); } }, '列宽自适应'),
+                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+                  onclick: function () { menu.remove(); reset(); } }, '重置列宽'));
+              menu.addEventListener('focusout', function (focusEvent) {
+                if (!menu.contains(focusEvent.relatedTarget)) menu.remove();
+              });
+              menu.addEventListener('keydown', function (keyEvent) {
+                if (keyEvent.key === 'Escape') { keyEvent.stopPropagation(); menu.remove(); }
+              });
+              (changesOverlay && changesOverlay.contains(table) ? changesOverlay : rowsHost).appendChild(menu);
+              menu.querySelector('button').focus();
+            });
+            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: fit }, '自适应'));
+            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: reset }, '重置'));
+            apply();
+          }
+
+          function openChanges() {
+            if (changesOverlay && changesOverlay.isConnected) {
+              changesOverlay.querySelector('button').focus();
+              return;
+            }
+            var previousFocus = document.activeElement;
+            var overlay = h('div', { class: 'preview-overlay', role: 'dialog',
+              'aria-modal': 'false', 'aria-label': '最近变更',
+              style: 'background:transparent;pointer-events:none' });
+            changesOverlay = overlay;
+            var box = h('div', { class: 'preview-box',
+              style: 'width:1040px;max-width:100%;min-width:0;pointer-events:auto' });
+            var description = h('div', { class: 'muted small' });
+            var changeHost = h('div');
+            var note = h('span', { class: 'muted small', style: 'flex:1' });
+            var widthHost = h('span', { class: 'toolbar', style: 'margin:0' });
+            var refreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新');
+            var closeBtn = h('button', { class: 'btn', type: 'button' }, '关闭');
+            var changeSort = { order: '', asc: true };
+            var changeWidths = [];
+            var changesRequest = 0;
+            function close() {
+              changesRequest += 1;
+              overlay.remove();
+              if (changesOverlay === overlay) changesOverlay = null;
+              if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+            }
+            closeBtn.addEventListener('click', close);
+            refreshBtn.addEventListener('click', loadChanges);
+            overlay.addEventListener('keydown', function (event) {
+              if (event.key === 'Escape') { event.preventDefault(); close(); }
+            });
+            box.appendChild(h('div', { class: 'preview-caption' },
+              h('span', null, '最近变更 · ' + (current.name || docKey))));
+            box.appendChild(h('div', { style: 'padding:12px;overflow:auto;min-height:0;display:grid;gap:12px' },
+              description, changeHost));
+            box.appendChild(h('div', { class: 'toolbar', style: 'padding:12px;margin:0;border-top:1px solid var(--border)' },
+              refreshBtn, note, widthHost, closeBtn));
+            overlay.appendChild(box);
+            tabHost.appendChild(overlay);
+            closeBtn.focus();
+            loadChanges();
+
+            function loadChanges() {
+              var request = ++changesRequest;
+              refreshBtn.disabled = true;
+              widthHost.replaceChildren();
+              note.textContent = '';
+              setLoading(changeHost, '正在读取本地变更记录…');
+              api('/api/tcdoc/recent-changes?doc_key=' + encodeURIComponent(docKey) + '&limit=60')
+                .then(function (result) {
+                  if (!overlay.isConnected || request !== changesRequest) return;
+                  refreshBtn.disabled = false;
+                  description.textContent = result.description;
+                  note.textContent = '最近 ' + fmtNumber(result.total) + ' 条';
+                  var columns = [
+                    { key: 'ts', label: '检测时间' }, { key: 'tab_name', label: '工作表' },
+                    { key: 'kind', label: '变更' }, { key: 'record_id', label: '记录' },
+                    { key: 'summary', label: '内容' }
+                  ];
+                  function drawChanges() {
+                    widthHost.replaceChildren();
+                    if (!result.rows.length) {
+                      changeHost.replaceChildren(empty('还没有本地同步变更记录，完成表格同步后可在此查看。'));
+                      return;
+                    }
+                    var head = h('tr');
+                    columns.forEach(function (column) {
+                      head.appendChild(sortableHeader(column.label, column.key, changeSort, drawChanges));
+                    });
+                    var body = h('tbody');
+                    sortRows(result.rows, columns, changeSort).forEach(function (row) {
+                      var tr = h('tr');
+                      columns.forEach(function (column) {
+                        var value = row[column.key] == null ? '' : String(row[column.key]);
+                        tr.appendChild(h('td', { title: value,
+                          style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, value || '-'));
+                      });
+                      body.appendChild(tr);
+                    });
+                    var table = h('table', { class: 'db-table',
+                      style: 'width:100%;min-width:0;table-layout:fixed' }, h('thead', null, head), body);
+                    changeHost.replaceChildren(h('div', { class: 'table-wrap' }, table));
+                    columnTools(table, widthHost, columns, result.rows, changeWidths);
+                  }
+                  drawChanges();
+                }).catch(function (error) {
+                  if (!overlay.isConnected || request !== changesRequest) return;
+                  refreshBtn.disabled = false;
+                  setError(changeHost, error, loadChanges);
+                });
+            }
+          }
 
           function loadRows() {
+            var request = ++rowsRequest;
             var tabId = state.tcdoc.rowsTab;
             if (!tabId) {
               rowsHost.replaceChildren(empty(
@@ -14428,12 +14619,19 @@ function renderMusicTag(root) {
               pagerHost.replaceChildren();
               return;
             }
+            var order = state.tcdoc.rowsSort;
+            pagerHost.replaceChildren();
             setLoading(rowsHost, '正在读取表格行…');
             api('/api/tcdoc/table-rows?doc_key='
-              + encodeURIComponent(state.tcdoc.docKey)
+              + encodeURIComponent(docKey)
               + '&tab_id=' + encodeURIComponent(tabId)
-              + '&page=' + state.tcdoc.rowsPage + '&page_size=50')
+              + '&page=' + state.tcdoc.rowsPage + '&page_size=200'
+              + '&newest=' + (state.tcdoc.rowsNewest ? '1' : '0')
+              + '&sort_column=' + encodeURIComponent(order.order)
+              + '&direction=' + (order.order ? (order.asc ? 'asc' : 'desc') : ''))
               .then(function (rows) {
+                if (!rowsHost.isConnected || request !== rowsRequest || state.tcdoc.docKey !== docKey) return;
+                state.tcdoc.rowsPage = rows.page;
                 var sheet = sheets.filter(function (item) {
                   return item.tab_id === tabId;
                 })[0] || {};
@@ -14445,9 +14643,14 @@ function renderMusicTag(root) {
                     && rows.rows[0].values) {
                   columns = Object.keys(rows.rows[0].values);
                 }
+                if (!rows.total) {
+                  rowsHost.replaceChildren(empty('该工作表还没有本地记录，请完成表格同步后再查看。'));
+                  return;
+                }
+                function sortRowsPage() { state.tcdoc.rowsPage = 1; loadRows(); }
                 var head = h('tr', null, h('th', null, '行号'));
                 columns.forEach(function (column) {
-                  head.appendChild(h('th', null, column));
+                  head.appendChild(sortableHeader(column, column, order, sortRowsPage));
                 });
                 var body = h('tbody');
                 rows.rows.forEach(function (row) {
@@ -14456,38 +14659,44 @@ function renderMusicTag(root) {
                   columns.forEach(function (column) {
                     var value = row.values ? row.values[column] : '';
                     if (value === null || value === undefined) value = '';
-                    tr.appendChild(h('td', { class: 'ellipsis' },
+                    tr.appendChild(h('td', { class: 'ellipsis', title: String(value),
+                      style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
                       String(value)));
                   });
                   body.appendChild(tr);
                 });
+                var table = h('table', { style: 'width:100%;min-width:0;table-layout:fixed' },
+                  h('thead', null, head), body);
+                var widthBar = h('div', { class: 'toolbar', style: 'margin-top:8px;justify-content:flex-end' });
                 rowsHost.replaceChildren(
                   h('div', { class: 'muted small', style: 'margin-bottom:8px' },
                     (sheet.tab_name || tabId) + ' · ' + rows.total + ' 行'),
-                  h('div', { class: 'table-wrap' },
-                    h('table', null, h('thead', null, head), body)));
+                  h('div', { class: 'table-wrap' }, table), widthBar);
+                var widthColumns = [{ key: 'row_no', label: '行号' }].concat(columns.map(function (column) {
+                  return { key: column, label: column };
+                }));
+                var widthRows = rows.rows.map(function (row) {
+                  return Object.assign({ row_no: row.row_no }, row.values || {});
+                });
+                columnTools(table, widthBar, widthColumns, widthRows, widths);
                 pagerHost.replaceChildren();
+                function pageButton(label, page, disabled) {
+                  return h('button', { class: 'btn ghost mini', type: 'button', disabled: disabled,
+                    onclick: function () { state.tcdoc.rowsPage = page; loadRows(); } }, label);
+                }
                 if (rows.pages > 1) {
-                  pagerHost.appendChild(h('button', {
-                    class: 'btn ghost mini', type: 'button',
-                    disabled: rows.page <= 1,
-                    onclick: function () {
-                      state.tcdoc.rowsPage = rows.page - 1;
-                      loadRows();
-                    }
-                  }, '上一页'));
-                  pagerHost.appendChild(h('span', { class: 'muted small' },
-                    rows.page + ' / ' + rows.pages));
-                  pagerHost.appendChild(h('button', {
-                    class: 'btn ghost mini', type: 'button',
-                    disabled: rows.page >= rows.pages,
-                    onclick: function () {
-                      state.tcdoc.rowsPage = rows.page + 1;
-                      loadRows();
-                    }
-                  }, '下一页'));
+                  pagerHost.appendChild(pageButton('首页', 1, rows.page <= 1));
+                  pagerHost.appendChild(pageButton('上一页', rows.page - 1, rows.page <= 1));
+                }
+                pagerHost.appendChild(h('span', { class: 'muted small' },
+                  '第 ' + rows.page + ' / ' + rows.pages + ' 页 · 共 '
+                  + String(rows.total).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' 条'));
+                if (rows.pages > 1) {
+                  pagerHost.appendChild(pageButton('下一页', rows.page + 1, rows.page >= rows.pages));
+                  pagerHost.appendChild(pageButton('末页', rows.pages, rows.page >= rows.pages));
                 }
               }).catch(function (error) {
+                if (!rowsHost.isConnected || request !== rowsRequest || state.tcdoc.docKey !== docKey) return;
                 setError(rowsHost, error, loadRows);
               });
           }
@@ -15082,6 +15291,20 @@ function renderMusicTag(root) {
   }
 
   function renderTcdocWriteback(host) {
+    var body = h('div');
+    var mode = state.tcdoc.mappingMode || 'local';
+    var tabs = h('div', { class: 'tabs', style: 'margin-bottom:12px' });
+    [['local', '本地表格比对'], ['collected', '本地采集记录']].forEach(function (item) {
+      tabs.appendChild(h('button', { class: 'tab' + (mode === item[0] ? ' active' : ''),
+        type: 'button', onclick: function () { state.tcdoc.mappingMode = item[0]; renderTcdocWriteback(host); } }, item[1]));
+    });
+    host.replaceChildren(tabs, body);
+    if (mode === 'collected') renderTcdocCollectedWriteback(body);
+    else window.renderTcdocMapping(body, { h: h, api: api, post: post, toast: toast,
+      pager: pager, cycleSort: cycleSort, watchJob: watchJob, empty: empty });
+  }
+
+  function renderTcdocCollectedWriteback(host) {
     host.replaceChildren(
       h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
       h('div', { class: 'loading' }, '正在读取写回状态…'));
@@ -15105,7 +15328,7 @@ function renderMusicTag(root) {
           onclick: function () {
             state.tcdoc.writeTab = target.key;
             state.tcdoc.writeKey = '';
-            renderTcdocWriteback(host);
+            renderTcdocCollectedWriteback(host);
           }
         }, target.name));
       });
@@ -15119,7 +15342,7 @@ function renderMusicTag(root) {
       daysSelect.addEventListener('change', function () {
         state.tcdoc.writeDays = Number(daysSelect.value);
         state.tcdoc.writeKey = '';
-        renderTcdocWriteback(host);
+        renderTcdocCollectedWriteback(host);
       });
       var rows = preview.rows || [];
       var known = new Set(rows.map(function (row) { return row.key; }));
@@ -15217,7 +15440,7 @@ function renderMusicTag(root) {
               class: 'muted small', style: 'margin-top:12px'
             }, notes.join('；') || '写回完成'));
             state.tcdoc.writeKey = '';
-            renderTcdocWriteback(host);
+            renderTcdocCollectedWriteback(host);
           }, {
             onSettled: function (job) {
               writeBtn.disabled = false;
@@ -15247,7 +15470,7 @@ function renderMusicTag(root) {
           h('span', { style: 'flex:1' }),
           h('button', {
             class: 'btn', type: 'button',
-            onclick: function () { renderTcdocWriteback(host); }
+            onclick: function () { renderTcdocCollectedWriteback(host); }
           }, '重新加载')),
         tabs,
         h('div', { class: 'toolbar' },
@@ -15264,7 +15487,7 @@ function renderMusicTag(root) {
             '请确认本地腾讯文档数据与登录状态后重试。'),
           h('button', {
             class: 'btn', type: 'button', style: 'margin-top:8px',
-            onclick: function () { renderTcdocWriteback(host); }
+            onclick: function () { renderTcdocCollectedWriteback(host); }
           }, '重试')));
     });
   }

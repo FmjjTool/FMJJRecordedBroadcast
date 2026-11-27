@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from toolbox import asset_groups, asset_index, increment_db
-from toolbox.config_manager import EXPORT_CATEGORIES, get_export_dir
+from toolbox.config_manager import EXPORT_CATEGORIES, get_export_dir_readonly
 
 _KNOWN_PLATFORMS = ("douyin", "bilibili", "weibo", "kuaishou",
                     "xiaohongshu", "tieba", "zhihu")
@@ -68,7 +68,7 @@ class AssetQueryService:
             json_rows, media_rows, db_bytes = asset_index.stats()
         except Exception:
             json_rows, media_rows, db_bytes = 0, 0, 0
-        root = get_export_dir()
+        root = get_export_dir_readonly()
         categories = []
         for name in dict.fromkeys(EXPORT_CATEGORIES.values()):
             if (root / name).is_dir():
@@ -153,7 +153,7 @@ class AssetQueryService:
 
     def refresh_entry_paths(self, paths: list[str]) -> dict:
         """只重读指定 JSON，并修补现有清单；不触发目录枚举或全量加载。"""
-        root = (get_export_dir() / EXPORT_CATEGORIES["video_data"]).resolve()
+        root = (get_export_dir_readonly() / EXPORT_CATEGORIES["video_data"]).resolve()
         targets = list(dict.fromkeys(_entry_target(root, rel) for rel in paths))
         items, removed = [], []
         for target in targets:
@@ -186,7 +186,7 @@ class AssetQueryService:
         return {"items": items, "removed": removed}
 
     def category_root(self, category: str) -> Path:
-        root = get_export_dir() / category
+        root = get_export_dir_readonly() / category
         if category not in set(EXPORT_CATEGORIES.values()) or not root.is_dir():
             raise ValueError("分类目录不存在")
         return root
@@ -214,7 +214,7 @@ class AssetQueryService:
 
     def entry_detail(self, path: str) -> dict:
         """条目二级详情：读取导出 JSON 概要与原始文本（只读，限制 200KB）。"""
-        root = get_export_dir() / EXPORT_CATEGORIES["video_data"]
+        root = get_export_dir_readonly() / EXPORT_CATEGORIES["video_data"]
         rel = str(path or "").replace("\\", "/").strip("/")
         if not rel or ".." in rel.split("/"):
             raise ValueError("条目路径不合法")
@@ -375,7 +375,7 @@ class AssetQueryService:
 
     def _entry_rows(self) -> list[dict]:
         with self._entries_lock:
-            export_root = get_export_dir().resolve()
+            export_root = get_export_dir_readonly().resolve()
             root = (export_root / EXPORT_CATEGORIES["video_data"]).resolve()
             stamp = _entry_stamp(root)
             cached = self._entries_cache
@@ -394,8 +394,15 @@ class AssetQueryService:
                     view = asset_index.fetch_view(str(root), "entries")
             view_token = ((str(export_root), view.get("updated"))
                           if view else None)
-            use_view = (view is not None and isinstance(view.get("items"), list)
-                        and (cached is None or view_token != self._entries_view_updated))
+            use_view = view is not None and isinstance(view.get("items"), list)
+            if (use_view and cached and cached[0] == str(root)
+                    and view_token == self._entries_view_updated):
+                # TTL 到期只核对持久清单版本；相同版本不能退回目录扫描，
+                # 否则会丢失完整清单、媒体匹配及定向刷新后的内存结果。
+                self._entries_loaded_at = now
+                self._entries_cache = (cached[0], stamp, cached[2], cached[3])
+                self._entries_truncated = cached[3]
+                return cached[2]
             self._entry_media = {}
             if use_view:
                 for item in view["items"]:
@@ -420,10 +427,14 @@ class AssetQueryService:
             return None
         file_path = str(item.get("file_path") or "")
         try:
-            target = Path(file_path).resolve()
-            target.relative_to(root.resolve())
-            rel = target.relative_to(root.resolve()).as_posix()
-            _entry_target(root, rel)
+            # 清单展示不访问每条文件。读取详情/下载时仍由 _entry_target
+            # 做真实路径与链接越界检查；此处仅接受根内的规范 JSON 路径。
+            if not file_path or not Path(file_path).is_absolute():
+                return None
+            target = Path(os.path.abspath(file_path))
+            rel = target.relative_to(root).as_posix()
+            if target.suffix.lower() != ".json" or target.stem.endswith(("_raw", "_comments")):
+                return None
         except (ValueError, OSError):
             return None
         return {

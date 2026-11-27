@@ -213,7 +213,8 @@ class TcDocMappingPanel(QWidget):
         mapping_layout.addLayout(buttons)
 
         dialog_layout.addWidget(mapping_box, 1)
-        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box = QDialogButtonBox()
+        close_box.addButton("关闭", QDialogButtonBox.RejectRole)
         close_box.rejected.connect(self.mapping_dialog.hide)
         dialog_layout.addWidget(close_box)
         return panel
@@ -288,13 +289,6 @@ class TcDocMappingPanel(QWidget):
         self.diff_table.itemChanged.connect(self._on_diff_checked)
         self.diff_table.itemSelectionChanged.connect(self._show_diff_detail)
         diff_layout.addWidget(self.diff_table, 3)
-        self.detail_label = QLabel("点一行查看本地值与云端值")
-        self.detail_label.setProperty("role", "caption")
-        diff_layout.addWidget(self.detail_label)
-        self.detail_table = self._make_table(["字段", "本地值", "云端值"])
-        self._detail_sorter = table_sort.install_callback(
-            self.detail_table, self._sort_detail, skip_columns=(), tri_state=True)
-        diff_layout.addWidget(self.detail_table, 2)
         pagination = QHBoxLayout()
         self.diff_page_label = QLabel("第 1 / 1 页 · 共 0 条")
         self.diff_prev_btn = QPushButton("上一页")
@@ -305,6 +299,14 @@ class TcDocMappingPanel(QWidget):
         pagination.addWidget(self.diff_prev_btn)
         pagination.addWidget(self.diff_next_btn)
         diff_layout.addLayout(pagination)
+        self.detail_label = QLabel("点一行查看本地值与云端值")
+        self.detail_label.setProperty("role", "caption")
+        self.detail_label.setWordWrap(True)
+        diff_layout.addWidget(self.detail_label)
+        self.detail_table = self._make_table(["字段", "本地值", "云端值"])
+        self._detail_sorter = table_sort.install_callback(
+            self.detail_table, self._sort_detail, skip_columns=(), tri_state=True)
+        diff_layout.addWidget(self.detail_table, 2)
         row = QHBoxLayout()
         self.execute_btn = QPushButton("写入勾选 0 条")
         self.execute_btn.setProperty("variant", "primary")
@@ -350,6 +352,7 @@ class TcDocMappingPanel(QWidget):
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
+        table_columns.configure_table_columns(table, auto_fit=True)
         return table
 
     def _show_mapping(self) -> None:
@@ -508,28 +511,41 @@ class TcDocMappingPanel(QWidget):
             self.connect_btn.setEnabled(self.doc is not None)
             self.refresh_btn.setEnabled(bool(self.client and self.file_id))
             self._update_selection()
+            local_pages = max(1, (len(self.local_rows) + self._page_size - 1) // self._page_size)
+            self.local_prev_btn.setEnabled(self._local_page > 1)
+            self.local_next_btn.setEnabled(self._local_page < local_pages)
+            self._render_diff()
 
-    def _run(self, fn, on_done, label: str, action: str) -> None:
+    def _run(self, fn, on_done, label: str, action: str, receipt_callback=None) -> None:
         if self._busy or self._closed:
             return
         self._cancel.clear()
         self._set_busy(True)
         self.log(label)
 
+        def checked_work():
+            if self._cancel.is_set():
+                raise workflow.MappingError("任务已取消")
+            return fn()
+
         def done(result, err):
             if self._closed:
                 return
             self._set_busy(False)
+            if self._cancel.is_set() and action != "写入":
+                self.log("任务已取消")
+                self.summary_label.setText("已取消，可重新对比云端")
+                return
             if err:
                 self.log(f"[错误] {err}")
                 receipt = getattr(err, "receipt", None)
-                if receipt:
-                    self._record_history(receipt, self.sheet_combo.currentData())
+                if receipt and receipt_callback:
+                    receipt_callback({**receipt, "error": str(err)})
                 if action == "写入":
                     self._invalidate_preview("本次写入已停止，请重新对比云端后核对结果")
                 QMessageBox.warning(
-                    self, "操作失败",
-                    f"{action}失败：{err}\n\n请检查网络与官方 OpenAPI 配置后重试。")
+                    self, "任务已停止",
+                    f"{action}未完成：{err}\n\n请核对当前状态后重试。")
                 return
             try:
                 on_done(result)
@@ -537,9 +553,9 @@ class TcDocMappingPanel(QWidget):
                 self.log(f"[错误] {exc}")
                 QMessageBox.warning(
                     self, "操作失败",
-                    f"{action}失败：{exc}\n\n请检查网络与官方 OpenAPI 配置后重试。")
+                    f"{action}失败：{exc}\n\n请检查网络与登录状态后重试。")
 
-        thread = run_bg(fn, done, owner=self.page)
+        thread = run_bg(checked_work, done, owner=self.page)
         if thread is None:
             self._set_busy(False)
             self.log("任务未启动，请重试")
@@ -768,11 +784,19 @@ class TcDocMappingPanel(QWidget):
             titles[title] = titles.get(title, 0) + 1
         self.mapping = {col: fid for col, fid in self.mapping.items()
                         if col in self.local_headers and fid in self.field_by_id}
-        headers = self._ordered(
-            self.local_headers, self._map_sorter,
-            lambda header, col: header if col == 0 else (
-                FIELD_TYPES.get(int(self.field_by_id.get(self.mapping.get(header), {}).get(
-                    "fieldType") or 0), "") if col == 2 else ""))
+        def mapping_value(header, col):
+            if col == 0:
+                return header
+            field = self.field_by_id.get(self.mapping.get(header), {})
+            if col == 2:
+                return FIELD_TYPES.get(int(field.get("fieldType") or 0), "")
+            for record in self.sample_records:
+                values = record.get("values") or {}
+                if field.get("fieldTitle") in values:
+                    return openapi.display_value(field, values[field["fieldTitle"]])
+            return ""
+
+        headers = self._ordered(self.local_headers, self._map_sorter, mapping_value)
         self.map_table.setRowCount(len(headers))
         self.map_combos: dict[str, QComboBox] = {}
         for row, header in enumerate(headers):
@@ -867,6 +891,7 @@ class TcDocMappingPanel(QWidget):
             if not quiet:
                 QMessageBox.information(self, "无法匹配", "请先载入本地文件并连接字段")
             return
+        previous_key = self.key_combo.currentData()
         suggested = workflow.suggest_mapping(self.local_headers, self.fields)
         matched = 0
         for header in self.local_headers:
@@ -881,6 +906,9 @@ class TcDocMappingPanel(QWidget):
                 combo.setCurrentIndex(index)
                 matched += 1
         self._rebuild_key_combo()
+        if not previous_key:
+            key = workflow.suggest_key(self.local_headers, self.mapping, self.field_by_id)
+            self.key_combo.setCurrentIndex(self.key_combo.findData(key))
         if not quiet:
             self.log(f"同名匹配 {matched} 列")
 
@@ -954,13 +982,12 @@ class TcDocMappingPanel(QWidget):
             return
         self.local_path = path
         self.local_headers, self.local_rows = headers, rows
+        self._local_page = 1
         self.local_label.setText(
             f"{Path(path).name}（{len(rows)} 行 × {len(headers)} 列）")
         self.local_label.setToolTip(path)
         self._render_local_table()
-        self.actions = []
-        self.execute_btn.setEnabled(False)
-        self.summary_label.setText("本地数据已载入，请生成预览")
+        self._invalidate_preview("本地表格已导入，连接后点击「对比云端」")
         self.log(f"载入本地文件：{path}，{len(rows)} 行，{len(headers)} 列")
         self._rebuild_mapping_table()
         self.auto_match(quiet=True)
@@ -972,7 +999,12 @@ class TcDocMappingPanel(QWidget):
             self.local_table.horizontalHeader().setSortIndicatorShown(False)
         self.local_table.setColumnCount(len(headers))
         self.local_table.setHorizontalHeaderLabels(headers)
-        preview = self.local_rows[:100]
+        ordered = self._ordered(self.local_rows, self._local_sorter,
+                                lambda record, col: record.get(headers[col], ""))
+        pages = max(1, (len(ordered) + self._page_size - 1) // self._page_size)
+        self._local_page = max(1, min(self._local_page, pages))
+        start = (self._local_page - 1) * self._page_size
+        preview = ordered[start:start + self._page_size]
         self.local_table.setRowCount(len(preview))
         for row, record in enumerate(preview):
             for col, header in enumerate(headers):
@@ -980,14 +1012,18 @@ class TcDocMappingPanel(QWidget):
                 item = QTableWidgetItem(text)
                 item.setToolTip(text)
                 self.local_table.setItem(row, col, item)
-        self.local_table.resizeColumnsToContents()
         self.local_table.horizontalHeader().setStretchLastSection(True)
-        self._local_sorter.reapply()
+        table_columns.fit_table_columns(self.local_table)
+        self.local_page_label.setText(
+            f"第 {self._local_page} / {pages} 页 · 共 {len(ordered)} 条")
+        self.local_prev_btn.setEnabled(self._local_page > 1 and not self._busy)
+        self.local_next_btn.setEnabled(self._local_page < pages and not self._busy)
 
     # ==================== 预览 / 写入 ====================
 
     def _writable_actions(self) -> list[dict]:
-        return [a for a in self.actions if a.get("op") in ("新增", "更新")]
+        return [a for a in self.actions if a.get("op") in ("新增", "更新")
+                and a.get("row_no") in self._selected_rows]
 
     def _validate_ready(self) -> bool:
         if not (self.client and self.file_id and self.sheet_combo.currentData()):
@@ -996,12 +1032,12 @@ class TcDocMappingPanel(QWidget):
         try:
             current = self._credentials()
         except RuntimeError as exc:
-            QMessageBox.warning(self, "官方 OpenAPI 不可用", str(exc))
+            QMessageBox.warning(self, "连接不可用", str(exc))
             return False
         if self._cred_snapshot is not None and current != self._cred_snapshot:
             QMessageBox.warning(
-                self, "凭证已变更",
-                "官方 OpenAPI 凭证已变更或关闭，请重新连接当前文档后再操作。")
+                self, "登录已变更",
+                "当前登录已变更或关闭，请重新连接当前文档后再操作。")
             return False
         try:
             openapi.validate_write_scope((self.doc or {}).get("key", ""),
@@ -1017,7 +1053,7 @@ class TcDocMappingPanel(QWidget):
             QMessageBox.warning(self, "没有映射", "请至少映射一列")
             return False
         if not self.key_combo.currentData():
-            QMessageBox.warning(self, "没有主键", "请选择用于匹配记录的主键列")
+            QMessageBox.warning(self, "没有匹配列", "请选择用于判断同一条记录的匹配列")
             return False
         return True
 
@@ -1032,19 +1068,22 @@ class TcDocMappingPanel(QWidget):
         field_by_id = dict(self.field_by_id)
         headers = list(self.local_headers)
         rows = list(self.local_rows)
-        self.actions = []
-        self.execute_btn.setEnabled(False)
+        self._invalidate_preview("正在对比本地表格与云端…")
+        revision = self._revision
 
         def work():
             records = client.get_records(
                 file_id, sheet_id, lambda t: post_to_main(self.log, t))
-            actions = openapi.build_actions(
+            if self._cancel.is_set():
+                raise RuntimeError("对比已取消")
+            actions = workflow.compare(
                 headers, rows, mapping, field_by_id, key_col, records)
             return actions, records
 
         def done(result):
             if (self.client is not client or self.file_id != file_id
-                    or self.sheet_combo.currentData() != sheet_id):
+                    or self.sheet_combo.currentData() != sheet_id
+                    or self._revision != revision):
                 return
             actions, records = result
             self.actions = actions
@@ -1061,49 +1100,99 @@ class TcDocMappingPanel(QWidget):
                 f" · 更新 {counts.get('更新', 0)} · 不变 {counts.get('不变', 0)}"
                 f" · 错误 {counts.get('错误', 0)} · 腾讯记录 {len(records)} 条")
             self._render_diff()
-            self.execute_btn.setEnabled(bool(self._writable_actions()))
+            self.content_tabs.setCurrentIndex(0)
             self.log(f"预览完成：{self.summary_label.text()}")
 
-        self._run(work, done, "正在读取腾讯记录并计算差异…", "生成预览")
+        self._run(work, done, "正在读取云端记录并对比差异…", "对比云端")
 
     def _render_diff(self) -> None:
+        self.diff_table.blockSignals(True)
         self.diff_table.setRowCount(0)
-        preview = self.actions[:500]
+        mode = self.diff_filter.currentData()
+        filtered = [action for action in self.actions
+                    if mode == "all" or (mode == "diff" and action.get("op") != "不变")
+                    or action.get("op") == mode]
+        columns = ("", "row_no", "op", "key", "message")
+        filtered = self._ordered(filtered, self._diff_sorter,
+                                 lambda action, col: action.get(columns[col], ""))
+        pages = max(1, (len(filtered) + self._page_size - 1) // self._page_size)
+        self._diff_page = max(1, min(self._diff_page, pages))
+        start = (self._diff_page - 1) * self._page_size
+        preview = filtered[start:start + self._page_size]
         self.diff_table.setRowCount(len(preview))
         for row, action in enumerate(preview):
+            check = QTableWidgetItem()
+            check.setData(Qt.UserRole, action["row_no"])
+            if action.get("op") in ("新增", "更新"):
+                check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                check.setCheckState(Qt.Checked if action["row_no"] in self._selected_rows
+                                    else Qt.Unchecked)
+            else:
+                check.setFlags(Qt.ItemIsSelectable)
+                check.setToolTip("此行无可写差异或需要先处理错误")
+            self.diff_table.setItem(row, 0, check)
             values = [str(action.get("row_no", "")), action.get("op", ""),
                       str(action.get("key", "")), action.get("message", "")]
-            for col, text in enumerate(values):
+            for col, text in enumerate(values, start=1):
                 item = QTableWidgetItem(text)
                 item.setToolTip(text)
                 self.diff_table.setItem(row, col, item)
-        self.diff_table.setColumnWidth(0, 60)
-        self.diff_table.setColumnWidth(1, 70)
-        self.diff_table.setColumnWidth(2, 180)
-        self.diff_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._diff_sorter.reapply()
+        self.diff_table.setColumnWidth(0, 36)
+        self.diff_table.setColumnWidth(1, 48)
+        self.diff_table.setColumnWidth(2, 60)
+        self.diff_table.setColumnWidth(3, 160)
+        self.diff_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.diff_table.blockSignals(False)
+        self.diff_page_label.setText(
+            f"第 {self._diff_page} / {pages} 页 · 共 {len(filtered)} 条")
+        self.diff_prev_btn.setEnabled(self._diff_page > 1 and not self._busy)
+        self.diff_next_btn.setEnabled(self._diff_page < pages and not self._busy)
+        self._show_diff_detail()
+        self._update_selection()
 
     def on_execute(self) -> None:
         if not self._validate_ready():
             return
         writable = self._writable_actions()
         if not writable:
-            QMessageBox.information(self, "没有可写数据", "请先生成预览，且没有新增/更新项")
+            QMessageBox.information(self, "未勾选记录", "请先对比云端，再勾选要写入的新增或更新行")
             return
         counts: dict[str, int] = {}
         for action in writable:
             counts[action["op"]] = counts.get(action["op"], 0) + 1
-        box = QMessageBox(self)
+        revision = self._revision
+        box = QDialog(self)
         box.setWindowTitle("确认写入")
-        box.setIcon(QMessageBox.Question)
-        box.setText(f"将向腾讯文档写入：新增 {counts.get('新增', 0)} 条，"
-                    f"更新 {counts.get('更新', 0)} 条。")
-        box.setInformativeText("只新增与更新，不删除表内记录；写入后自动重新生成预览。")
-        ok = box.addButton("写入", QMessageBox.AcceptRole)
-        cancel = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec()
-        if box.clickedButton() is not ok:
+        box.resize(720, 520)
+        box.setMinimumSize(420, 300)
+        content = QVBoxLayout(box)
+        label = QLabel(
+            f"{(self.doc or {}).get('name', '')} · {self.sheet_combo.currentText()}\n"
+            f"仅写入勾选 {len(writable)} 条：新增 {counts.get('新增', 0)} 条，"
+            f"更新 {counts.get('更新', 0)} 条。")
+        label.setWordWrap(True)
+        content.addWidget(label)
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText("\n\n".join(
+            f"第 {a['row_no']} 行 · {a['op']} · {a.get('key', '')}\n" +
+            "\n".join(f"{c['field']}：{c.get('remote') or '（空）'} → "
+                        f"{c.get('local') or '（空）'}" for c in a.get('changes') or [])
+            for a in writable))
+        content.addWidget(details, 1)
+        note = QLabel("写入前再次核对云端；只更新列出的差异字段，空白单元格不清空云端。")
+        note.setWordWrap(True)
+        content.addWidget(note)
+        buttons = QDialogButtonBox()
+        cancel = buttons.addButton("取消", QDialogButtonBox.RejectRole)
+        ok = buttons.addButton("写入勾选行", QDialogButtonBox.AcceptRole)
+        ok.setProperty("variant", "primary")
+        cancel.setDefault(True)
+        ok.setAutoDefault(False)
+        buttons.accepted.connect(box.accept)
+        buttons.rejected.connect(box.reject)
+        content.addWidget(buttons)
+        if box.exec() != QDialog.Accepted or self._revision != revision:
             return
 
         client = self.client
@@ -1114,21 +1203,27 @@ class TcDocMappingPanel(QWidget):
         field_by_id = dict(self.field_by_id)
         headers = list(self.local_headers)
         rows = list(self.local_rows)
+        preview_actions = list(self.actions)
+        selected_row_nos = sorted(self._selected_rows)
+        history_doc = dict(self.doc or {})
+        history_sheet = dict(next((item for item in self.sheets
+                                   if item.get("sheetID") == sheet_id), {}))
+
+        def record_result(result):
+            self._record_history(result, sheet_id, doc=history_doc, sheet=history_sheet)
 
         def work():
-            records = client.get_records(
-                file_id, sheet_id, lambda t: post_to_main(self.log, t))
-            actions = openapi.build_actions(
-                headers, rows, mapping, field_by_id, key_col, records)
-            result = openapi.execute_actions(
-                client, file_id, sheet_id, actions,
-                lambda t: post_to_main(self.log, t))
-            return result
+            if self._revision != revision or self._credentials() != self._cred_snapshot:
+                raise RuntimeError("当前文档或登录已变化，请重新连接后对比")
+            return workflow.execute_selected(
+                client, file_id, sheet_id, headers, rows, mapping, field_by_id,
+                key_col, preview_actions, selected_row_nos,
+                lambda t: post_to_main(self.log, t), self._cancel.is_set)
 
         def done(result):
             self.log(f"写入完成：新增 {result.get('added', 0)}，"
                      f"更新 {result.get('updated', 0)}")
-            self._record_history(result, sheet_id)
+            record_result(result)
             toast = getattr(getattr(self.page, "app", None), "toast", None)
             if callable(toast):
                 toast(f"写入完成：新增 {result.get('added', 0)} 条，"
@@ -1137,18 +1232,32 @@ class TcDocMappingPanel(QWidget):
                     and self.sheet_combo.currentData() == sheet_id):
                 self.on_preview()
 
-        self._run(work, done, "正在写入腾讯文档…", "写入")
+        self._run(work, done, f"正在写入勾选 {len(writable)} 条并读回核对…", "写入",
+                  receipt_callback=record_result)
 
-    def _record_history(self, result: dict, sheet_id: str) -> None:
+    def _record_history(self, result: dict, sheet_id: str, *, doc=None, sheet=None) -> None:
+        if not (result.get("added") or result.get("updated")
+                or result.get("unknown_record_outcome")):
+            return
         try:
             from toolbox.tcdoc import push_history
         except Exception:  # noqa: BLE001 - 历史不可用不影响写入结果
             return
-        sheet = next((item for item in self.sheets
-                      if item.get("sheetID") == sheet_id), {})
+        if sheet is None:
+            sheet = next((item for item in self.sheets
+                          if item.get("sheetID") == sheet_id), {})
+        if doc is None:
+            doc = self.doc or {}
+        status = ("需核对" if not result.get("verified") else
+                  "已取消" if result.get("cancelled") else
+                  "部分完成" if result.get("error") else "成功")
         push_history.record(
             tab_name=str(sheet.get("title") or ""), tab_id=str(sheet_id or ""),
-            doc_key=str((self.doc or {}).get("key") or ""), profile="mapping",
-            source="映射回写", status="成功",
+            doc_key=str(doc.get("key") or ""), profile="mapping",
+            source="映射回写", status=status,
             added=int(result.get("added") or 0),
-            note=f"更新 {int(result.get('updated') or 0)} 条")
+            record_ids=result.get("record_ids") or [],
+            failed=int(bool(result.get("error") and not result.get("cancelled"))),
+            note=f"更新 {int(result.get('updated') or 0)} 条；"
+                 f"已核对 {len(result.get('row_nos') or [])} 行；"
+                 f"{result.get('error') or ''}")

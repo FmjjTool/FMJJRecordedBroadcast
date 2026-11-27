@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QProgressBar, QProgressDialog, QPushButton, QSpinBox, QSplitter,
-    QStackedWidget, QStatusBar, QTableView,
+    QSizePolicy, QStackedWidget, QStatusBar, QTableView,
     QVBoxLayout, QWidget,
 )
 
@@ -341,50 +341,23 @@ class PlatformPane(QWidget):
         self.manager.load_dict(state)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(4)
+        if getattr(win, "embedded", False):
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(12)
+        else:
+            lay.setContentsMargins(8, 6, 8, 6)
+            lay.setSpacing(4)
 
-        # ---- 工具栏（分两行：上排主播与监控，下排设置与工具）----
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
-        self._tbtn(bar, "添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
-        self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
-        self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
-        self.btn_batch.clicked.connect(self._on_batch_menu)
-        bar.addSpacing(10)
-        self.btn_mon = self._tbtn(bar, "开启监控录制", self.on_toggle_monitor,
-                                  "按间隔检测开播，开播即自动录制")
-        self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
-        self._tbtn(bar, "立即检测", self.on_check_now, "立刻检测所有监控中的主播")
-        bar.addStretch(1)
-        self._tbtn(bar, "全选", lambda: self._check_all(True))
-        self._tbtn(bar, "取消", lambda: self._check_all(False))
-        lay.addLayout(bar)
-
-        bar2 = QHBoxLayout()
-        bar2.setSpacing(6)
-        self._tbtn(bar2, "录制设置", self.on_settings)
-        self._tbtn(bar2, "推送设置", self.on_push_settings)
-        self._tbtn(bar2, "FLV / TS 修复", self.on_repair_flv,
-                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
-        self._tbtn(bar2, "写时间码", self.on_timecode,
-                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
-        self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
-        self._tbtn(bar2, "清除状态", self.on_clear_states,
-                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
-                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
-        bar2.addStretch(1)
-        bt_dm = self._tbtn(bar2, "弹幕姬",
-                           self.win._open_danmaku_window,
-                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT")
-        bt_dm.setProperty("variant", "primary")
-        lay.addLayout(bar2)
+        self._build_toolbars(lay)
 
         # ---- 顶部详情条 ----
         self.info = QLabel("共 0 个主播")
         self.info.setStyleSheet(
             "background:#FFFFFF;border:1px solid #E0E0E0;padding:3px 8px;color:#333;")
         self.info.setMinimumHeight(24)
+        if getattr(win, "embedded", False):
+            self.info.setWordWrap(True)
+            self.info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         lay.addWidget(self.info)
 
         # ---- 表格 + 日志 ----
@@ -442,6 +415,54 @@ class PlatformPane(QWidget):
         lay.addWidget(split, 1)
 
         self._log(f"{self.pinfo['name']}录制面板就绪（保存目录：{self.manager.out_dir()}）", "info")
+
+    def _build_toolbars(self, lay):
+        if getattr(self.win, "embedded", False):
+            self._build_embedded_toolbars(lay)
+            return
+        self._build_direct_toolbars(lay, spacing=6)
+
+    def _build_embedded_toolbars(self, lay):
+        self._build_direct_toolbars(lay, spacing=8)
+
+    def _build_direct_toolbars(self, lay, spacing):
+        # 直接展示常用操作；分三行排布，避免横向溢出并保留完整按钮文字。
+        bar = QHBoxLayout()
+        bar.setSpacing(spacing)
+        self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
+        self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
+        self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
+        self.btn_batch.clicked.connect(self._on_batch_menu)
+        self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
+        bar.addStretch(1)
+        self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
+                                  "按间隔检测开播，开播即自动录制")
+        lay.addLayout(bar)
+
+        bar2 = QHBoxLayout()
+        bar2.setSpacing(spacing)
+        self._tbtn(bar2, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
+        self._tbtn(bar2, "全选", lambda: self._check_all(True))
+        self._tbtn(bar2, "取消", lambda: self._check_all(False))
+        self._tbtn(bar2, "录制设置", self.on_settings)
+        self._tbtn(bar2, "推送设置", self.on_push_settings)
+        lay.addLayout(bar2)
+
+        bar3 = QHBoxLayout()
+        bar3.setSpacing(spacing)
+        self._tbtn(bar3, "FLV / TS 修复", self.on_repair_flv,
+                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
+        self._tbtn(bar3, "写时间码", self.on_timecode,
+                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
+        self._tbtn(bar3, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
+        self._tbtn(bar3, "清除状态", self.on_clear_states,
+                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
+                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
+        bar3.addStretch(1)
+        bt_dm = self._tbtn(bar3, "弹幕姬", self.win._open_danmaku_window,
+                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT")
+        bt_dm.setProperty("variant", "primary")
+        lay.addLayout(bar3)
 
     # ---------- 小工具 ----------
     def _tbtn(self, layout, text, slot, tip=""):
@@ -2055,7 +2076,7 @@ class LiveRecordWindow(QMainWindow):
         size = self.state.get("window") or [1360, 760]
         self.resize(int(size[0]), int(size[1]))
         if self.embedded:
-            self.setMinimumSize(880, 520)
+            self.setMinimumSize(0, 520)
         else:
             self.setMinimumSize(1080, 600)
 
@@ -2070,14 +2091,22 @@ class LiveRecordWindow(QMainWindow):
         central = QWidget()
         v = QVBoxLayout(central)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        v.setSpacing(12 if self.embedded else 0)
         v.addWidget(self.stack, 1)
 
         # ---- 底部平台切换 ----
         bottom = QWidget()
         bottom.setStyleSheet("background:#F5F6F8;border-top:1px solid #E0E0E0;")
-        bh = QHBoxLayout(bottom)
-        bh.setContentsMargins(10, 5, 10, 5)
+        if self.embedded:
+            bottom_layout = QVBoxLayout(bottom)
+            bottom_layout.setContentsMargins(0, 0, 0, 0)
+            bottom_layout.setSpacing(12)
+            bh = QHBoxLayout()
+            bh.setSpacing(8)
+            bottom_layout.addLayout(bh)
+        else:
+            bh = QHBoxLayout(bottom)
+            bh.setContentsMargins(10, 5, 10, 5)
         self.plat_btns = {}
         for key in LR.PLATFORMS:
             b = QPushButton(LR.PLATFORMS[key]["name"])
@@ -2091,11 +2120,19 @@ class LiveRecordWindow(QMainWindow):
         bh.addStretch(1)
         self.plat_hint = QLabel("各平台的列表与录制任务互相独立，切换不会中断录制")
         self.plat_hint.setStyleSheet("color:#777;font-size:11px;")
-        bh.addWidget(self.plat_hint)
+        if self.embedded:
+            self.plat_hint.setWordWrap(True)
+            self.plat_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            bottom_layout.addWidget(self.plat_hint)
+        else:
+            bh.addWidget(self.plat_hint)
         v.addWidget(bottom)
         self.setCentralWidget(central)
 
         self.status_label = QLabel("就绪")
+        if self.embedded:
+            self.status_label.setWordWrap(True)
+            self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         sb = QStatusBar()
         sb.addWidget(self.status_label, 1)
         self.setStatusBar(sb)

@@ -21,7 +21,7 @@ import weakref
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
+    QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
@@ -315,7 +315,8 @@ class NeteasePage(BasePage):
         self.setStyleSheet(ROW_QSS)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         layout.addWidget(self._build_func())
 
     # ===================== 公共：登录态 =====================
@@ -389,14 +390,19 @@ class NeteasePage(BasePage):
 
         # 底部：操作栏
         bottom = QHBoxLayout()
+        bottom.setSpacing(8)
+        self.more_btn = QPushButton("更多")
+        self.more_btn.setProperty("menuButton", True)
+        more_menu = QMenu(self.more_btn)
+        more_menu.setToolTipsVisible(True)
+        self.more_btn.setMenu(more_menu)
         self.selection_action_buttons = []
         for label, mode in (("全选", "all"), ("反选", "invert"),
                             ("□ 全不选", "none")):
-            button = QPushButton(label)
-            button.clicked.connect(
+            action = more_menu.addAction(label)
+            action.triggered.connect(
                 lambda _checked=False, value=mode: self._sel(value))
-            self.selection_action_buttons.append(button)
-            bottom.addWidget(button)
+            self.selection_action_buttons.append(action)
         self.fallback_check = QCheckBox("自动换源")
         self.fallback_check.setChecked(self._load_fallback())
         self.fallback_check.toggled.connect(self._save_fallback)
@@ -429,18 +435,25 @@ class NeteasePage(BasePage):
         pick_dir_btn.setToolTip("选择固定导出位置（文件夹）")
         pick_dir_btn.clicked.connect(self._pick_music_dir)
         bottom.addWidget(pick_dir_btn)
+        bottom.addStretch(1)
         self.download_btn = QPushButton("下载选中")
-        self.download_btn.setStyleSheet("background: #2e7d32; color: white; padding: 5px 14px; border-radius: 4px;")
+        self.download_btn.setProperty("variant", "primary")
         self.download_btn.clicked.connect(self._download_selected)
-        bottom.addWidget(self.download_btn)
-        self.export_btn = QPushButton("导出选中")
+        more_menu.addSeparator()
+        self.export_btn = more_menu.addAction("导出选中")
         self.export_btn.setToolTip("把勾选结果导出为 Excel/JSON/Markdown（原「音乐信息获取」能力）")
-        self.export_btn.clicked.connect(self._export_selected)
-        bottom.addWidget(self.export_btn)
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #888;")
-        bottom.addWidget(self.status_label, 1)
+        self.export_btn.triggered.connect(self._export_selected)
         v.addLayout(bottom)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: palette(placeholder-text);")
+        self.status_label.setWordWrap(True)
+        self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self.status_label, 1)
+        action_row.addWidget(self.more_btn)
+        action_row.addWidget(self.download_btn)
+        v.addLayout(action_row)
 
         # 默认平台/模式：沿用原行为（网易云 + 歌曲搜索）
         self.platform_menu.blockSignals(True)
@@ -487,8 +500,8 @@ class NeteasePage(BasePage):
         self.results = [row]
         self.check_boxes = [checkbox]
         # 单曲只有一个结果，直接自动选中并隐藏批量选择操作。
-        for button in self.selection_action_buttons:
-            button.hide()
+        for action in self.selection_action_buttons:
+            action.setVisible(False)
 
     # ===================== 导出位置（默认/固定 双选项） =====================
     def _on_export_loc_changed(self, index):
@@ -626,8 +639,8 @@ class NeteasePage(BasePage):
         self._cover_epoch += 1
         self._cover_pending = []
         self._cover_retry = 0
-        for button in self.selection_action_buttons:
-            button.show()
+        for action in self.selection_action_buttons:
+            action.setVisible(True)
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():

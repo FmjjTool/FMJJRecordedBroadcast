@@ -150,15 +150,9 @@ def lottery_files(act_id: str, act: dict, bag: dict, lotteries: list[dict]) -> l
 
 
 class BiliGarbPage(BasePage):
-    _flat_tabs = None   # 嵌入 B站资源聚合页时指向平铺外层 QTabWidget
-    _tab_map = None     # 本页各 tab 在平铺外层的下标表（顺序交错时非连续）
-
     def _switch_tab(self, index: int):
-        """切到本页第 index 个功能 tab：嵌入 B站资源聚合页时映射到平铺外层 tab。"""
-        if self._flat_tabs is not None:
-            self._flat_tabs.setCurrentIndex(self._tab_map[index])
-        else:
-            self.tabs.setCurrentIndex(index)
+        """切换装扮或收藏集活动页签。"""
+        self.tabs.setCurrentIndex(index)
 
     def __init__(self, app):
         super().__init__(app)
@@ -167,8 +161,8 @@ class BiliGarbPage(BasePage):
         layout.setContentsMargins(4, 4, 4, 4)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_garb_tab(), "装扮 / 收藏集")
-        self.tabs.addTab(self._build_lottery_tab(), "收藏集活动（按ID）")
+        self.tabs.addTab(self._build_garb_tab(), "装扮与收藏集")
+        self.tabs.addTab(self._build_lottery_tab(), "活动详情")
 
     # ---------- 装扮 / 收藏集（搜索 + 按ID详情） ----------
     def _build_garb_tab(self):
@@ -192,7 +186,7 @@ class BiliGarbPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("① 搜索装扮 / 收藏集")
+        title = QLabel("搜索装扮 / 收藏集")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
@@ -301,7 +295,7 @@ class BiliGarbPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("② 按 ID 查看装扮详情")
+        title = QLabel("按 ID 查看装扮详情")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
@@ -358,7 +352,7 @@ class BiliGarbPage(BasePage):
             if parsed:
                 typ, oid = parsed
                 if typ == "lottery":  # 收藏集链接输到装扮页 → 自动跳收藏集 Tab
-                    self.suit_info.setText(f"识别到收藏集链接（act_id={oid}），已跳「收藏集」tab")
+                    self.suit_info.setText(f"识别到收藏集链接（act_id={oid}），已打开活动详情")
                     self.open_act(oid)
                     return
                 if typ == "suit":
@@ -392,7 +386,7 @@ class BiliGarbPage(BasePage):
                 return
             if result["acts"]:  # 命中收藏集 → 自动跳转
                 iid, t = result["acts"][0]
-                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」（装扮接口无数据），已自动跳「收藏集活动」tab")
+                self.suit_info.setText(f"{iid} 是收藏集活动「{t}」，已自动打开活动详情")
                 self.open_act(iid)
                 return
             self._current = result
@@ -411,7 +405,7 @@ class BiliGarbPage(BasePage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        title = QLabel("收藏集活动（按 ID）")
+        title = QLabel("收藏集活动")
         title.setProperty("role", "sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
@@ -423,7 +417,7 @@ class BiliGarbPage(BasePage):
         act_label.setProperty("role", "caption")
         row.addWidget(act_label)
         self.lottery_entry = QLineEdit()
-        self.lottery_entry.setPlaceholderText("收藏集 act_id 或收藏集页链接（如 107423），装扮搜索 tab 可跳转")
+        self.lottery_entry.setPlaceholderText("收藏集 act_id 或收藏集页链接（如 107423），也可在装扮与收藏集页查看")
         self.lottery_entry.setClearButtonEnabled(True)
         self.lottery_entry.returnPressed.connect(self._load_lottery)
         row.addWidget(self.lottery_entry, 1)

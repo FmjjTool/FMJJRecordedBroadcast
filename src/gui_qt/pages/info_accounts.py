@@ -15,7 +15,7 @@ from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QDate, QSize, Qt, QTimer
+from PySide6.QtCore import QDate, QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QBoxLayout, QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
@@ -25,10 +25,10 @@ from PySide6.QtWidgets import (
 
 from toolbox import download_ops
 from gui_qt import theme
-from gui_qt.common import _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
+from gui_qt.common import FlowLayout, _collect, _db_insert, icon_button, post_to_main, refresh_results_count, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
-from gui_qt.row_widgets import RowCheckList
+from gui_qt.row_widgets import ElidedLabel, RowCheckList
 
 
 def _set_button_variant(button, variant="secondary", compact=False):
@@ -85,13 +85,19 @@ class _AccountsContent(QWidget):
 
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()
-        if hasattr(self.page, "_settings_strategy"):
+        if hasattr(self.page, "_settings_fields"):
             hint.setWidth(self.page._minimum_content_width())
         return hint
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.page._update_settings_layout()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() == QEvent.LayoutRequest:
+            self.page._update_settings_layout()
+        return result
 
 
 class InfoAccountsPage(BasePage):
@@ -133,7 +139,7 @@ class InfoAccountsPage(BasePage):
 
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()
-        if hasattr(self, "_settings_strategy"):
+        if hasattr(self, "_settings_fields"):
             hint.setWidth(self._minimum_content_width()
                           + self._scroll.verticalScrollBar().sizeHint().width())
         return hint
@@ -144,8 +150,9 @@ class InfoAccountsPage(BasePage):
         inner = self._settings_card.layout().contentsMargins()
         frame_width = (self._settings_card.minimumSizeHint().width()
                        - self._settings_card.layout().minimumSize().width())
-        settings_width = (max(self._settings_params.minimumSize().width(),
-                              self._settings_strategy.minimumSize().width())
+        settings_width = (max(self._settings_fields.minimumSizeHint().width(),
+                              self._run_buttons.minimumSizeHint().width(),
+                              self._run_progress.minimumWidth())
                           + inner.left() + inner.right() + frame_width)
         widths = [settings_width]
         for index in range(layout.count()):
@@ -155,21 +162,28 @@ class InfoAccountsPage(BasePage):
         return max(widths) + outer.left() + outer.right()
 
     def _update_settings_layout(self):
-        """窄窗口将策略开关换到参数下方，不重建控件或修改采集设置。"""
-        if not hasattr(self, "_settings_strategy"):
+        """参数按组自然换行，进度优先复用操作行右侧空间。"""
+        if not hasattr(self, "_settings_fields"):
             return
         outer = self._content.layout().contentsMargins()
         inner = self._settings_card.layout().contentsMargins()
-        available = self._content.width() - outer.left() - outer.right() - inner.left() - inner.right()
-        required = (self._settings_params.minimumSize().width()
-                    + self._settings_strategy.minimumSize().width()
-                    + 1 + 2 * self._settings_columns.spacing())
-        wide = available >= required
-        direction = QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom
-        if self._settings_columns.direction() != direction:
-            self._settings_columns.setDirection(direction)
+        frame_width = (self._settings_card.minimumSizeHint().width()
+                       - self._settings_card.layout().minimumSize().width())
+        available = (self._content.width() - outer.left() - outer.right()
+                     - inner.left() - inner.right() - frame_width)
+        height = self._settings_flow.heightForWidth(max(1, available))
+        changed = self._settings_fields.height() != height
+        if changed:
+            self._settings_fields.setFixedHeight(height)
+        required = (self._run_buttons.minimumSizeHint().width()
+                    + self._run_progress.minimumWidth()
+                    + self._run_controls.spacing())
+        direction = QBoxLayout.LeftToRight if available >= required else QBoxLayout.TopToBottom
+        if self._run_controls.direction() != direction:
+            self._run_controls.setDirection(direction)
+            changed = True
+        if changed:
             self._content.updateGeometry()
-        self._settings_separator.setVisible(wide)
 
     def on_return_press(self):
         """主窗口回车统一入口 → 触发「获取最新」。"""
@@ -351,84 +365,63 @@ class InfoAccountsPage(BasePage):
     def _build_settings_card(self) -> QFrame:
         card, head, body = self._new_card("采集设置")
         self._settings_card = card
-        body.setSpacing(10)
+        body.setContentsMargins(12, 10, 12, 12)
+        body.setSpacing(8)
         head.addWidget(self._caption("范围 / 条数 / 限流 / 日期"))
         head.addStretch(1)
 
-        # 左侧两行参数，右侧一列策略开关；窄窗口也不挤压
-        columns = QHBoxLayout()
-        self._settings_columns = columns
-        columns.setSpacing(12)
-        params = QVBoxLayout()
-        self._settings_params = params
-        params.setSpacing(8)
+        # 每个标签与对应控件作为一组；只在组间换行，不拉散组内间距。
+        self._settings_fields = QWidget()
+        self._settings_flow = FlowLayout(self._settings_fields, spacing=8, center_items=True)
 
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        row.addWidget(self._caption("采集范围"))
+        def add_group(*widgets):
+            group = QWidget()
+            group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            row = QHBoxLayout(group)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            for widget in widgets:
+                row.addWidget(widget)
+            self._settings_flow.addWidget(group)
+
         self.fetch_mode = QComboBox()
         self.fetch_mode.addItems(["全部账号", "选中账号", "按组采集"])
         self.fetch_mode.setFixedWidth(110)
         self.fetch_mode.currentTextChanged.connect(self._on_fetch_mode_change)
-        row.addWidget(self.fetch_mode)
-        row.addWidget(self._caption("分组"))
+        add_group(self._caption("采集范围"), self.fetch_mode)
         self.fetch_group = QComboBox()
         self.fetch_group.setFixedWidth(110)
-        row.addWidget(self.fetch_group)
-        row.addSpacing(8)
-        row.addWidget(self._caption("条数"))
+        add_group(self._caption("分组"), self.fetch_group)
         self.count_entry = QLineEdit("10")
         self.count_entry.setFixedWidth(56)
         self.count_entry.setToolTip("每个账号取多少条；0 = 不限")
-        row.addWidget(self.count_entry)
-        row.addSpacing(6)
-        row.addWidget(self._caption("0 = 不限"))
-        params.addLayout(row)
-
-        row2 = QHBoxLayout()
-        row2.setSpacing(6)
-        row2.addWidget(self._caption("限流"))
-        row2.addWidget(self._caption("每"))
+        add_group(self._caption("条数"), self.count_entry, self._caption("0 = 不限"))
         self.rate_count_entry = QLineEdit("10")
         self.rate_count_entry.setFixedWidth(40)
         self.rate_count_entry.setToolTip("每采集多少个账号停顿一次")
-        row2.addWidget(self.rate_count_entry)
-        row2.addWidget(self._caption("个停"))
         self.rate_interval_entry = QLineEdit("10")
         self.rate_interval_entry.setFixedWidth(40)
         self.rate_interval_entry.setToolTip("停顿秒数")
-        row2.addWidget(self.rate_interval_entry)
-        row2.addWidget(self._caption("秒"))
-        row2.addSpacing(12)
+        add_group(self._caption("限流 每"), self.rate_count_entry,
+                  self._caption("个停"), self.rate_interval_entry, self._caption("秒"))
         self.date_btn = QPushButton("日期段: 不限")
         self.date_btn.setProperty("variant", "secondary")
         self.date_btn.setToolTip("只采集指定发布日期范围内的内容")
         self.date_btn.clicked.connect(self._show_date_range_dialog)
-        row2.addWidget(self.date_btn)
-        params.addLayout(row2)
-
-        columns.addLayout(params)
-        self._settings_separator = self._separator(vertical=True)
-        columns.addWidget(self._settings_separator)
-
-        strategy = QVBoxLayout()
-        self._settings_strategy = strategy
-        strategy.setSpacing(6)
+        add_group(self.date_btn)
         self.inc_check = QCheckBox("增量模式（写入数据库）")
         self.inc_check.setToolTip("只写入未入库的新内容，重复内容自动跳过")
         self.inc_check.setChecked(self._load_inc_checked())
         self.inc_check.toggled.connect(self._save_inc_checked)
-        strategy.addWidget(self.inc_check)
+        add_group(self.inc_check)
         self.auto_dl_check = QCheckBox("获取后自动下载")
         self.auto_dl_check.setToolTip(
             "勾选后：获取完成 → 保存（已获取/数据库）→ 自动下载本次获取的内容，"
             "一次性完成。下载画质/线程数用「已获取」页的全局设置")
         self.auto_dl_check.setChecked(self._load_auto_dl_checked())
         self.auto_dl_check.toggled.connect(self._save_auto_dl_checked)
-        strategy.addWidget(self.auto_dl_check)
-        columns.addLayout(strategy)
-        columns.addStretch(1)
-        body.addLayout(columns)
+        add_group(self.auto_dl_check)
+        body.addWidget(self._settings_fields)
 
         # 同一张卡片里的下拉/输入/按钮统一高度，两行基线一致
         for widget in (self.fetch_mode, self.fetch_group, self.count_entry,
@@ -444,8 +437,13 @@ class InfoAccountsPage(BasePage):
         return card
 
     def _build_run_controls(self, layout: QVBoxLayout) -> None:
-        """将采集操作和进度放进设置卡片，避免相邻卡片重复描边。"""
-        row = QHBoxLayout()
+        """操作左对齐，状态与进度共用右侧剩余宽度。"""
+        self._run_controls = QHBoxLayout()
+        self._run_controls.setSpacing(12)
+        self._run_buttons = QWidget()
+        self._run_buttons.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        row = QHBoxLayout(self._run_buttons)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         self.fetch_btn = QPushButton("获取最新")
         self.fetch_btn.setProperty("variant", "primary")
@@ -477,23 +475,27 @@ class InfoAccountsPage(BasePage):
 
         self.timer_dot = self._caption("定时未开启")
         row.addWidget(self.timer_dot)
-        row.addStretch(1)
-        layout.addLayout(row)
+        self._run_controls.addWidget(self._run_buttons)
 
-        prog_row = QHBoxLayout()
-        prog_row.setSpacing(8)
-        self.prog_label = QLabel("空闲")
+        self._run_progress = QWidget()
+        self._run_progress.setMinimumWidth(160)
+        self._run_progress.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        prog_row = QVBoxLayout(self._run_progress)
+        prog_row.setContentsMargins(0, 0, 0, 0)
+        prog_row.setSpacing(2)
+        self.prog_label = ElidedLabel("空闲")
         self.prog_label.setProperty("role", "caption")
-        self.prog_label.setMinimumWidth(150)
-        self.prog_label.setMaximumWidth(220)
-        self.prog_label.setWordWrap(True)
+        self.prog_label.setFixedHeight(18)
+        self.prog_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         prog_row.addWidget(self.prog_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1)
-        self.progress_bar.setFormat("空闲")
+        self.progress_bar.setFormat("%p%")
         self.progress_bar.setValue(0)
-        prog_row.addWidget(self.progress_bar, 1)
-        layout.addLayout(prog_row)
+        self.progress_bar.setFixedHeight(18)
+        prog_row.addWidget(self.progress_bar)
+        self._run_controls.addWidget(self._run_progress, 1)
+        layout.addLayout(self._run_controls)
 
     def _build_log_card(self) -> QFrame:
         card, head, body = self._new_card("运行日志")

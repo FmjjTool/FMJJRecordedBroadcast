@@ -232,10 +232,20 @@ class WebUILauncher:
                 flags |= subprocess.CREATE_NEW_PROCESS_GROUP
         handle = open(log_path, "ab", buffering=0)
         try:
+            # 临时阅读会话仍由桌面内存唯一持有；子进程只得到只读本机能力。
+            child_env = os.environ.copy()
+            child_env.pop("FMJJ_WECHAT_SESSION_ENDPOINT", None)
+            child_env.pop("FMJJ_WECHAT_SESSION_CAPABILITY", None)
+            try:
+                from wechat_session import webui_environment
+                child_env.update(webui_environment())
+            except Exception:
+                # 微信阅读为可选能力，本机临时通道异常不阻断既有 WebUI。
+                _log.warning("临时阅读共享通道不可用，WebUI 将以无阅读会话模式启动")
             return subprocess.Popen(
                 command, cwd=str(root), stdin=subprocess.DEVNULL,
                 stdout=handle, stderr=subprocess.STDOUT,
-                creationflags=flags, close_fds=True)
+                creationflags=flags, close_fds=True, env=child_env)
         finally:
             handle.close()
 

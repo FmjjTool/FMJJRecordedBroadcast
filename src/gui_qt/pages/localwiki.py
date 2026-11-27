@@ -65,7 +65,7 @@ class LocalWikiPage(BasePage):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(16, 16, 16, 16)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
@@ -74,8 +74,8 @@ class LocalWikiPage(BasePage):
         body.setObjectName("wikiBody")
         scroll.setWidget(body)
         v = QVBoxLayout(body)
-        v.setContentsMargins(24, 20, 24, 24)
-        v.setSpacing(14)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(12)
 
         v.addWidget(self._build_hero())
         v.addWidget(self._build_status_card())

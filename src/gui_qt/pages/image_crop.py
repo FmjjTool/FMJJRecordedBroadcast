@@ -113,6 +113,15 @@ class ImageSlot:
         return self.source_size.height() if self.source_size is not None else self.image.height()
 
 
+class _ImageCropListWidget(QListWidget):
+    importRequested = Signal(QPoint)
+
+    def mouseDoubleClickEvent(self, event):
+        super().mouseDoubleClickEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.importRequested.emit(event.position().toPoint())
+
+
 def _image_stamp(path):
     stat = os.stat(path)
     return stat.st_mtime_ns, stat.st_size
@@ -550,7 +559,7 @@ class CropCanvas(QWidget):
             f.setPointSize(11)
             p.setFont(f)
             p.drawText(self.rect(), Qt.AlignCenter,
-                       "将图片拖入窗口，或点击「导入」选择图片\n\n"
+                       "将图片拖入窗口，或双击左侧列表导入图片/文件夹\n\n"
                        "支持 PNG / JPG / JPEG / WebP，可多选批量导入")
             return
         lay = self._layout()
@@ -969,14 +978,6 @@ class ImageCropPage(BasePage):
         h.setContentsMargins(12, 10, 12, 10)
         h.setSpacing(8)
 
-        self.btn_import = QPushButton("导入图片", bar)
-        self.btn_import.setProperty("variant", "primary")
-        self.btn_import.setToolTip("选择图片导入（PNG / JPG / JPEG / WebP，可多选）")
-        self.btn_import.clicked.connect(self._pick_files)
-        self._register_icon(self.btn_import, "image", "primary")
-        h.addWidget(self.btn_import)
-
-        h.addWidget(self._separator(vertical=True))
         self.btn_undo = icon_button("↩", "撤销 (Ctrl+Z)", (30, 26), emoji=False,
                                     on_click=self.undo)
         self.btn_redo = icon_button("↪", "重做 (Ctrl+Y)", (30, 26), emoji=False,
@@ -1007,13 +1008,6 @@ class ImageCropPage(BasePage):
         self.btn_auto.clicked.connect(self._auto_align)
         self._register_icon(self.btn_auto, "expand")
         h.addWidget(self.btn_auto)
-        self.btn_precise = QPushButton("精确输入", bar)
-        self.btn_precise.setProperty("variant", "secondary")
-        self.btn_precise.setToolTip("输入上下左右像素坐标定位参考线")
-        self.btn_precise.clicked.connect(self._open_precise_input)
-        self._register_icon(self.btn_precise, "keyboard")
-        h.addWidget(self.btn_precise)
-
         h.addWidget(self._separator(vertical=True))
         self.cb_fine = QCheckBox("精细模式", bar)
         self.cb_fine.setToolTip("精细模式：鼠标移动 20px → 参考线移动 1px")
@@ -1054,16 +1048,19 @@ class ImageCropPage(BasePage):
         head.addWidget(self.list_count_label)
         v.addLayout(head)
 
-        self.list_widget = QListWidget(card)
+        self.list_widget = _ImageCropListWidget(card)
         self.list_widget.setIconSize(QSize(40, 40))
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._list_menu)
+        self.list_widget.importRequested.connect(self._show_list_import_menu)
         self.list_widget.currentRowChanged.connect(self._on_list_row_changed)
         v.addWidget(self.list_widget, 1)
 
-        v.addWidget(self._caption("右键删除单张 · Delete 快速删除"))
+        hint = self._caption("拖入图片/文件夹，双击导入图片/文件夹")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
         return card
 
     def _build_canvas_panel(self) -> QWidget:
@@ -1080,7 +1077,7 @@ class ImageCropPage(BasePage):
         head = QHBoxLayout()
         head.setSpacing(6)
         self.status_label = _ElidedLabel(
-            "将图片拖入窗口，或点击「导入图片」选择图片（支持 PNG/JPG/JPEG/WebP）", card)
+            "将图片拖入窗口，或双击左侧图片列表导入图片或文件夹", card)
         self.status_label.setProperty("role", "caption")
         head.addWidget(self.status_label, 1)
         self.file_label = _ElidedLabel("", card)
@@ -1150,6 +1147,18 @@ class ImageCropPage(BasePage):
             "图片 (*.png *.jpg *.jpeg *.webp);;所有文件 (*.*)")
         if paths:
             self._load_paths(list(paths))
+
+    def _pick_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "选择图片文件夹")
+        if path:
+            self.add_dropped_folder(path)
+
+    def _show_list_import_menu(self, position: QPoint):
+        menu = QMenu(self.list_widget)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        menu.addAction("导入图片…", self._pick_files)
+        menu.addAction("导入文件夹…", self._pick_folder)
+        menu.popup(self.list_widget.viewport().mapToGlobal(position))
 
     def add_dropped_files(self, files: list):
         imgs = [f for f in files if os.path.splitext(f)[1].lower() in VALID_EXTS]
@@ -1597,7 +1606,6 @@ class ImageCropPage(BasePage):
         self.btn_undo.setEnabled(has and slot.history_index > 0)
         self.btn_redo.setEnabled(has and slot.history_index < len(slot.history) - 1)
         self.btn_auto.setEnabled(ready and not self._auto_running)
-        self.btn_precise.setEnabled(has)
         self.btn_export.setEnabled(ready)
         self.btn_copy.setEnabled(ready)
         self.btn_clear.setEnabled(bool(self._slots))
@@ -1620,5 +1628,5 @@ class ImageCropPage(BasePage):
             self.file_label.setToolTip("")
             self.status_label.setText(
                 "选择左侧图片开始裁切" if self._slots else
-                "将图片拖入窗口，或点击「导入图片」选择图片（支持 PNG/JPG/JPEG/WebP）")
+                "将图片拖入窗口，或双击左侧图片列表导入图片或文件夹")
             self.status_label.setToolTip(self.status_label.text())

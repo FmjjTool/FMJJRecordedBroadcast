@@ -10,6 +10,7 @@ from toolbox.webui.services.assets import AssetService
 from toolbox.webui.services.artifacts import ArtifactService
 from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.cover import CoverService
+from toolbox.webui.services.dashboard import DashboardService
 from toolbox.webui.services.certificate import CertificateService
 from toolbox.webui.services.douyin_index import DouyinIndexService
 from toolbox.webui.services.dependencies import DependencyService
@@ -36,12 +37,14 @@ from toolbox.webui.services.tcdoc import TCDocService
 from toolbox.webui.services.tools import ToolService
 from toolbox.webui.services.trackers import TrackerService
 from toolbox.webui.services.weibo_chaohua import WeiboChaohuaService
+from toolbox.webui.services.wechat import WechatService
 from version import APP_VERSION
 
 
 def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer:
     jobs = JobManager()
     collected = CollectedService()
+    dashboard = DashboardService()
     cover = CoverService(jobs)
     certificates = CertificateService()
     assets = AssetService(jobs)
@@ -57,6 +60,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     chaohua = WeiboChaohuaService(jobs)
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService(jobs)
+    wechat = WechatService(jobs)
     netdisk = NetdiskService(jobs)
     publish = PublishService(jobs)
     shopping = ShoppingService(jobs)
@@ -75,6 +79,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/health", lambda req: {
         "ok": True, "name": "录播工具箱 WebUI", "version": APP_VERSION})
+    server.get("/api/dashboard/overview", lambda req: dashboard.overview())
 
     server.get("/api/cover/overview", lambda req: cover.overview())
     server.post("/api/cover/preview", lambda req: cover.preview(req.json))
@@ -353,6 +358,25 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return artifacts.start_wechat(dict(req.json or {}))
     server.post("/api/tools/artifacts/wechat", start_wechat_parse)
 
+    server.get("/api/wechat/schema", lambda req: wechat.schema())
+
+    def wechat_query(req):
+        return {key: values[0] for key, values in req.query.items() if values}
+
+    server.get("/api/wechat/accounts", lambda req: wechat.accounts(wechat_query(req)))
+    server.get("/api/wechat/articles", lambda req: wechat.articles(wechat_query(req)))
+    server.post("/api/wechat/accounts/save", lambda req: wechat.save_account(req.json))
+    server.post("/api/wechat/collect", lambda req: wechat.start("collect", req.json))
+    server.post("/api/wechat/sync", lambda req: wechat.start("sync", req.json))
+    server.post("/api/wechat/export", lambda req: wechat.start("export", req.json))
+    server.post("/api/wechat/retry", lambda req: wechat.start("retry", req.json))
+
+    def export_wechat_index(req):
+        return AttachmentResponse(wechat.index_csv(req.json),
+                                  "wechat-articles.csv", "text/csv; charset=utf-8")
+
+    server.post("/api/wechat/index", export_wechat_index)
+
     def bili_emote_search(req):
         return artifacts.bili_emote_search(dict(req.json or {}))
     server.post("/api/tools/bili/emote/search", bili_emote_search)
@@ -524,6 +548,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_shopping_parse(req):
         return shopping.start_parse(dict(req.json or {}))
     server.post("/api/tools/shopping/parse", start_shopping_parse)
+    server.post("/api/tools/shopping/export", lambda req: shopping.start_export(req.json))
 
     def search_xianyu_shopping(req):
         """JSON page 默认为 1，由购物用例校验平台允许的页码范围。"""
@@ -873,6 +898,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return tcdoc.start_writeback_upload(dict(req.json or {}))
     server.post("/api/tcdoc/writeback/upload", start_tcdoc_writeback)
 
+    server.post("/api/tcdoc/mapping/import",
+                lambda req: tcdoc.mapping_import(dict(req.json or {})), max_body=6 * 1024 * 1024)
+    server.get("/api/tcdoc/mapping/rows", lambda req: tcdoc.mapping_rows(
+        req.q("session"), req.q_int("page", 1, 1, 10000), req.q("mode", "all"),
+        req.q("sort_column"), req.q("direction"), req.q("preview")))
+    for operation in ("schema", "compare", "apply"):
+        server.post("/api/tcdoc/mapping/" + operation,
+                    lambda req, action=operation: tcdoc.start_mapping(action, dict(req.json or {})))
+
     server.get("/api/tcdoc/edit/status", lambda req: tcdoc.edit_status())
 
     def tcdoc_edit_preview(req):
@@ -941,7 +975,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         path = jobs.download(job_id)
         if path is None:
             raise NotFound("任务文件不存在")
-        return FileResponse(path, path.name, "application/zip")
+        job = jobs.get(job_id)
+        content_type = "application/zip"
+        if job is not None and job.kind == "shopping_export" and path.suffix.lower() == ".xlsx":
+            content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return FileResponse(path, path.name, content_type)
 
     def cancel_job(req, job_id):
         if not jobs.cancel(job_id):
