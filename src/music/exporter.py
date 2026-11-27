@@ -16,7 +16,8 @@ from .models import SongInfo, AlbumInfo, SearchResult
 # ================================================================
 #  主入口
 # ================================================================
-def export_all_formats(result: SearchResult, base_dir: str = "music_data"):
+def export_all_formats(result: SearchResult, base_dir: str = "music_data", *,
+                       literal_strings: bool = False):
     if not result.songs:
         print("  无歌曲数据，跳过导出")
         return {}
@@ -47,7 +48,8 @@ def export_all_formats(result: SearchResult, base_dir: str = "music_data"):
     results["完整JSON"] = fp
 
     # Excel
-    xp = _export_excel(result, os.path.join(trans_root, f"{safe_dir}.xlsx"))
+    xp = _export_excel(result, os.path.join(trans_root, f"{safe_dir}.xlsx"),
+                       literal_strings=literal_strings)
     results["Excel"] = xp
 
     # Markdown
@@ -288,7 +290,7 @@ def _album_to_chinese(a: AlbumInfo) -> dict:
 # ================================================================
 #  Excel
 # ================================================================
-def _export_excel(result: SearchResult, filepath: str):
+def _export_excel(result: SearchResult, filepath: str, *, literal_strings: bool = False):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     import json as _json
@@ -375,6 +377,14 @@ def _export_excel(result: SearchResult, filepath: str):
                   _json.dumps(a.extra, ensure_ascii=False, indent=1) if a.extra else ""])
         wid(ws5, mx=80)
 
+    if literal_strings:
+        # Public metadata may start with '='. Web exports must preserve such
+        # values as text in every sheet, including overview and raw API cells.
+        for sheet in wb.worksheets:
+            for cells in sheet.iter_rows():
+                for cell in cells:
+                    if isinstance(cell.value, str):
+                        cell.data_type = "s"
     wb.save(filepath)
     return filepath
 

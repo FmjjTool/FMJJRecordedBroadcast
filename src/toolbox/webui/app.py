@@ -556,6 +556,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_music_search(req):
         return music_download.start_search(dict(req.json or {}))
     server.post("/api/tools/music/search", start_music_search)
+    server.post("/api/tools/music/export", lambda req: music_download.start_export(req.json))
 
     def start_music_download(req):
         payload = dict(req.json or {})

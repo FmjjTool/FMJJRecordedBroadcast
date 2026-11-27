@@ -10991,7 +10991,7 @@ function renderLivestreamSummary(root) {
   }
 
   function buildMusicSearch() {
-    var platformSel = h('select', { class: 'select' },
+    var platformSel = h('select', { class: 'select', 'aria-label': '音乐平台' },
       h('option', { value: 'all' }, '五平台对比'),
       h('option', { value: 'netease' }, '网易云音乐'),
       h('option', { value: 'qq' }, 'QQ 音乐'),
@@ -10999,12 +10999,12 @@ function renderLivestreamSummary(root) {
       h('option', { value: 'kuwo' }, '酷我音乐'),
       h('option', { value: '5sing' }, '5sing 音乐'),
       h('option', { value: 'kugou_lite' }, '酷狗概念版'));
-    var limitSel = h('select', { class: 'select' },
+    var limitSel = h('select', { class: 'select', 'aria-label': '每平台条数' },
       h('option', { value: '10' }, '每个平台 10 首'),
       h('option', { value: '20', selected: 'selected' }, '每个平台 20 首'),
       h('option', { value: '30' }, '每个平台 30 首'));
     var keyword = h('input', {
-      class: 'input', type: 'text', placeholder: '歌曲名 / 歌手 / 专辑关键词',
+      class: 'input', type: 'text', placeholder: '歌曲名 / 歌手 / 专辑关键词', 'aria-label': '歌曲关键词',
       style: 'flex:1;min-width:160px'
     });
     var searchBtn = h('button', { class: 'btn primary', type: 'button' }, '搜索');
@@ -11039,25 +11039,42 @@ function renderLivestreamSummary(root) {
     var resultHost = h('div');
     var rows = [];
     var busy = false;
+    var searchOrder = { order: '', asc: true };
+    var exportControl = window.createMusicExportControl({
+      h: h, post: post, watchJob: watchJob, jobHost: jobHost,
+      isBusy: function () { return busy; },
+      setBusy: function (value) { busy = value; syncSelection(); },
+      getSelectedIds: function () {
+        return rows.filter(function (item) { return item.checked; })
+          .map(function (item) { return item.row.export_id; });
+      }
+    });
 
     function syncSelection() {
       var count = rows.filter(function (row) { return row.checked; }).length;
       downloadBtn.textContent = '下载选中（' + count + '）';
       downloadBtn.disabled = busy || !count;
+      [searchBtn, platformSel, keyword, limitSel, qualitySel, fallbackBox, coverBox].forEach(function (control) {
+        control.disabled = busy;
+      });
+      resultHost.querySelectorAll('input,button').forEach(function (control) { control.disabled = busy; });
+      exportControl.sync();
     }
 
     function renderRows() {
       if (!rows.length) {
-        resultHost.replaceChildren(empty('输入关键词后点「搜索」，勾选结果即可下载。'));
+        resultHost.replaceChildren(empty('输入关键词后点「搜索」，勾选结果即可下载或导出信息。'));
         syncSelection();
         return;
       }
       var body = h('tbody');
-      rows.forEach(function (item, index) {
-        var box = h('input', { type: 'checkbox' });
+      var columns = [{ key: 'platform_name', label: '平台' }, { key: 'name', label: '歌名' },
+        { key: 'singer', label: '歌手' }, { key: 'album', label: '专辑' }, { key: 'duration', label: '时长' }];
+      sortRows(rows, columns, searchOrder).forEach(function (item) {
+        var box = h('input', { type: 'checkbox', 'aria-label': '选择 ' + item.row.platform_name + ' ' + item.row.name });
         box.checked = item.checked;
         box.addEventListener('change', function () {
-          rows[index].checked = box.checked;
+          item.checked = box.checked;
           syncSelection();
         });
         body.appendChild(h('tr', null,
@@ -11078,18 +11095,26 @@ function renderLivestreamSummary(root) {
         rows.forEach(function (row) { row.checked = !row.checked; });
         renderRows();
       });
+      var headers = h('tr', null, h('th', null));
+      columns.forEach(function (column) {
+        var header = h('th', { scope: 'col', tabindex: '0' }, column.label
+          + (searchOrder.order === column.key ? (searchOrder.asc ? ' ↑' : ' ↓') : ''));
+        var sort = function () { cycleSort(searchOrder, column.key); renderRows(); };
+        header.addEventListener('click', sort);
+        header.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); sort(); }
+        });
+        headers.appendChild(header);
+      });
+      var table = h('table', { class: 'db-table music-search-table' }, h('thead', null, headers), body);
+      var footer = h('div', { class: 'toolbar music-search-actions' });
+      window.installMusicSearchColumns(table, footer, h);
+      footer.appendChild(exportControl.button);
       resultHost.replaceChildren(
         h('div', { class: 'toolbar', style: 'margin:8px 0' },
           allBtn, noneBtn,
           h('span', { class: 'muted small' }, rows.length + ' 条结果')),
-        h('div', { class: 'table-wrap' },
-          h('table', { class: 'db-table' },
-            h('thead', null, h('tr', null,
-              h('th', { style: 'width:32px' }),
-              h('th', null, '平台'), h('th', null, '歌名'),
-              h('th', null, '歌手'), h('th', null, '专辑'),
-              h('th', { class: 'num' }, '时长'))),
-            body)));
+        h('div', { class: 'table-wrap' }, table), footer, exportControl.notice);
       syncSelection();
     }
 
@@ -11100,6 +11125,7 @@ function renderLivestreamSummary(root) {
         return;
       }
       busy = true;
+      syncSelection();
       searchBtn.disabled = true;
       searchBtn.textContent = '搜索中…';
       post('/api/tools/music/search', {
@@ -11114,8 +11140,10 @@ function renderLivestreamSummary(root) {
           toast(outcome.summary || '搜索完成',
             outcome.failures && outcome.failures.length ? 'warning' : 'success');
           rows = (outcome.items || []).map(function (row) {
-            return { row: row, checked: false };
+            return Object.assign({}, row, { row: row, checked: false });
           });
+          searchOrder = { order: '', asc: true };
+          exportControl.setResult(outcome);
           renderRows();
         }, {
           cancelable: true,
@@ -11127,12 +11155,14 @@ function renderLivestreamSummary(root) {
               toast('搜索失败：' + (job.error || '未知错误'), 'error');
             }
             syncSelection();
-          }
+          },
+          onPollError: function (_error, retry) { setTimeout(retry, 1000); }
         });
       }).catch(function (error) {
         busy = false;
         searchBtn.disabled = false;
         searchBtn.textContent = '搜索';
+        syncSelection();
         toast('搜索失败：' + error.message, 'error');
       });
     });
@@ -11146,6 +11176,7 @@ function renderLivestreamSummary(root) {
         return;
       }
       busy = true;
+      syncSelection();
       downloadBtn.disabled = true;
       downloadBtn.textContent = '下载中…';
       fallbackBox.disabled = coverBox.disabled = true;
@@ -11189,7 +11220,8 @@ function renderLivestreamSummary(root) {
             if (job.status === 'error') {
               toast('下载失败：' + (job.error || '未知错误'), 'error');
             }
-          }
+          },
+          onPollError: function (_error, retry) { setTimeout(retry, 1000); }
         });
       }).catch(function (error) {
         busy = false;
@@ -11203,7 +11235,7 @@ function renderLivestreamSummary(root) {
       if (event.key === 'Enter') searchBtn.click();
     });
     renderRows();
-    return h('div', { class: 'card', style: 'margin-bottom:12px' },
+    return h('div', { class: 'card music-search-card', style: 'margin-bottom:12px' },
       h('div', { class: 'row-title' }, '搜索并下载'),
       h('div', { class: 'toolbar', style: 'margin-top:8px' },
         platformSel, keyword, limitSel, searchBtn),

@@ -84,7 +84,8 @@ def _song_from_row(row: dict):
 
 
 def search(payload: dict, on_log: Callable[[str], None] | None = None,
-           is_cancelled: Callable[[], bool] | None = None) -> dict:
+           is_cancelled: Callable[[], bool] | None = None,
+           on_songs: Callable[[list], None] | None = None) -> dict:
     """按关键词搜索歌曲；platform=all 时五平台依次搜并合并。"""
     log = on_log or (lambda _msg: None)
     keyword = str(payload.get("keyword") or "").strip()
@@ -102,6 +103,7 @@ def search(payload: dict, on_log: Callable[[str], None] | None = None,
         targets = [(pid, name) for pid, name, _ in _platforms()]
 
     items: list[dict] = []
+    captured_songs = []
     failures: list[dict] = []
     for pid, name in targets:
         if is_cancelled and is_cancelled():
@@ -116,6 +118,12 @@ def search(payload: dict, on_log: Callable[[str], None] | None = None,
             log(f"{name} 失败：{exc}")
             continue
         for song in songs:
+            if on_songs is not None:
+                # The scraper's identity labels are not a filesystem authority.
+                # Keep the original model untouched and canonicalize only the
+                # optional snapshot branch used by information exports.
+                song = song.model_copy(update={"platform": pid, "platform_name": name})
+                captured_songs.append(song)
             items.append(_row(song))
         log(f"{name} 命中 {len(songs)} 首")
 
@@ -125,6 +133,8 @@ def search(payload: dict, on_log: Callable[[str], None] | None = None,
     summary = f"{keyword} · {len(items)} 首"
     if failures:
         summary += f"（{len(failures)} 个平台失败）"
+    if on_songs is not None:
+        on_songs(captured_songs)
     return {"keyword": keyword, "items": items, "total": len(items),
             "failures": failures, "summary": summary}
 

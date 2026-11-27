@@ -700,4 +700,11 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-rename-table th:nth-child(2), .music-rename-table th:nth-child(3) { width: 34%; }
 .music-rename-table td { white-space: normal; overflow-wrap: anywhere; }
 .music-rename-actions { justify-content: flex-end; margin-top: 8px; }
+.music-search-table { min-width: 0; table-layout: fixed; }
+.music-search-table th { cursor: pointer; }
+.music-search-table th:first-child { width: 36px; cursor: default; }
+.music-search-table td { white-space: normal; overflow-wrap: anywhere; }
+.music-search-table td .badge { max-width: 100%; white-space: normal; }
+.music-search-actions { justify-content: flex-end; margin-top: 8px; }
+.music-export-notice:not(:empty) { margin: 8px 0; overflow-wrap: anywhere; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }
