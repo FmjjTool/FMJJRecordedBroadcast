@@ -10,6 +10,7 @@ import http.client
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -17,7 +18,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit
 
 import httpx
 
@@ -64,16 +65,28 @@ class _StaticProxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     _PUBLIC_EXACT = frozenset({
-        "/api/health", "/api/visibility", "/api/wiki",
+        "/api/visibility",
+        "/api/wiki/home", "/api/wiki/artists",
+        "/api/wiki/recent-events", "/api/wiki/artist",
+        "/api/wiki/guide",
         "/api/schedules", "/api/img", "/api/song-search",
+        "/api/songs", "/api/events", "/api/goods",
+        "/api/posts", "/api/live-records",
         "/api/albums", "/api/albums/detail", "/api/anniversaries",
         "/api/live-songs", "/api/live-songs/detail", "/api/changelogs",
         "/api/gallery", "/api/gallery/search",
         "/api/gallery/search/status",
     })
-    _PUBLIC_RESOURCES = frozenset({
-        "songs", "events", "goods", "posts",
-        "live-records", "changelogs",
+    _PUBLIC_WIKI_ASSETS = frozenset({
+        "avatar.webp", "signature_1.webp", "signature_2.webp",
+        "signature_3.webp", "signature_4.webp",
+        "ticket_guide_1.jpg", "ticket_guide_2.jpg",
+    })
+    _PUBLIC_FILTER_RESOURCES = frozenset({
+        "songs", "events", "goods", "posts", "live-records",
+    })
+    _PUBLIC_DETAIL_RESOURCES = frozenset({
+        "songs", "events", "goods", "posts", "live-records",
     })
 
     @classmethod
@@ -81,16 +94,17 @@ class _StaticProxy(BaseHTTPRequestHandler):
         """判断路径是否属于资料浏览所需的公开只读接口。"""
         if path in cls._PUBLIC_EXACT:
             return True
-        if path.startswith("/api/wiki/"):
+        parts = path.split("/")
+        if (len(parts) == 4 and parts[:3] == ["", "api", "filters"]
+                and parts[3] in cls._PUBLIC_FILTER_RESOURCES):
             return True
-        if path.startswith("/api/filters/"):
-            resource = path.removeprefix("/api/filters/").split("/", 1)[0]
-            return resource in cls._PUBLIC_RESOURCES
-        if path.startswith("/api/"):
-            tail = path.removeprefix("/api/")
-            resource = tail.split("/", 1)[0]
-            if resource in cls._PUBLIC_RESOURCES:
-                return tail == resource or tail.startswith(resource + "/")
+        if (len(parts) == 4 and parts[:2] == ["", "api"]
+                and parts[2] in cls._PUBLIC_DETAIL_RESOURCES
+                and re.fullmatch(r"[1-9][0-9]*", parts[3])):
+            return True
+        if (len(parts) == 5 and parts[:4] == ["", "api", "wiki", "assets"]
+                and parts[4] in cls._PUBLIC_WIKI_ASSETS):
+            return True
         return False
 
     def log_message(self, _format, *args):  # noqa: A003 - 静默访问日志
@@ -120,6 +134,10 @@ class _StaticProxy(BaseHTTPRequestHandler):
 
     def _handle(self, head: bool):
         parts = urlsplit(self.path)
+        decoded_path = unquote(parts.path)
+        if decoded_path == "/admin" or decoded_path.startswith("/admin/"):
+            self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+            return
         if parts.path == "/api/img":
             self._image(parts, head)
             return
@@ -129,7 +147,7 @@ class _StaticProxy(BaseHTTPRequestHandler):
                 return
             self._proxy(parts, head)
             return
-        if parts.path.startswith("/uploads/"):
+        if decoded_path == "/uploads" or decoded_path.startswith("/uploads/"):
             self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
             return
         dist = Path(self.server.dist_dir)  # type: ignore[attr-defined]
@@ -192,14 +210,24 @@ class _StaticProxy(BaseHTTPRequestHandler):
 
     def _proxy(self, parts, head: bool, cache_hint=None):
         api_port = int(self.server.api_port)  # type: ignore[attr-defined]
-        path = parts.path + (("?" + parts.query) if parts.query else "")
+        query = parts.query
+        path_parts = parts.path.split("/")
+        if (len(path_parts) == 3 and path_parts[:2] == ["", "api"]
+                and path_parts[2] in self._PUBLIC_DETAIL_RESOURCES and query):
+            # The API's generic list route has an optional `fields` selector.
+            # The public site uses its fixed list schema, so do not expose extra
+            # database columns through the local read-only entry.
+            query = urlencode([
+                (key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                if key.casefold() != "fields"
+            ])
+        path = parts.path + (("?" + query) if query else "")
         headers = {}
-        for key, value in self.headers.items():
-            if key.lower() in ("connection", "keep-alive", "host",
-                               "proxy-authenticate", "proxy-authorization",
-                               "te", "trailers", "transfer-encoding", "upgrade"):
-                continue
-            headers[key] = value
+        for key in ("Accept", "Accept-Language", "If-None-Match",
+                    "If-Modified-Since", "Cache-Control"):
+            value = self.headers.get(key)
+            if value:
+                headers[key] = value
         headers["Host"] = f"127.0.0.1:{api_port}"
         conn = http.client.HTTPConnection("127.0.0.1", api_port, timeout=60)
         try:
