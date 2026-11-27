@@ -792,6 +792,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.get("/api/tcdoc/body", lambda req: tcdoc.body(req.q("doc_key")))
 
+    server.get("/api/tcdoc/versions", lambda req: tcdoc.versions(req.q("doc_key")))
+    server.get("/api/tcdoc/versions/open", lambda req: tcdoc.open_version(
+        req.q("doc_key"), req.q("version_id")))
+
+    def tcdoc_version_image(req):
+        data, mime = tcdoc.version_image(
+            req.q("doc_key"), req.q("version_id"), req.q("asset_id"))
+        return BytesResponse(data, mime)
+    server.get("/api/tcdoc/versions/image", tcdoc_version_image)
+
     def tcdoc_body_fetch(req):
         if not isinstance(req.json, dict):
             raise ValueError("抓取参数格式错误，请刷新页面后重试")

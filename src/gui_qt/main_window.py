@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._fit_nav_scroll)
         # 首帧先让导航与骨架完成排版并上屏，再构造首页；否则首页构造会一直
         # 占用主线程，用户长时间看到未排版的空白侧栏。
-        QTimer.singleShot(50, lambda: self._deferred_boot(first_key))
+        QTimer.singleShot(50, lambda: self._start_deferred_boot(first_key))
 
         # 主题定时开关：启动对齐一次 + 每 10 秒强制对齐（到点即变，无需手动触发）
         self._check_theme_schedule()
@@ -403,6 +403,15 @@ class MainWindow(QMainWindow):
             "双击托盘图标恢复窗口，右键托盘图标可退出。",
             QSystemTrayIcon.Information, 5000)
         self._tray_hint_shown = True
+
+    def _start_deferred_boot(self, first_key):
+        """首屏重依赖等短淡入结束后再加载，避免在过渡中间卡住一帧。"""
+        if self._closed:
+            return
+        if self._window_transitions.appearing:
+            QTimer.singleShot(16, lambda: self._start_deferred_boot(first_key))
+            return
+        self._deferred_boot(first_key)
 
     def _deferred_boot(self, first_key):
         """事件循环就绪后的启动收尾：构造首个真实页面 + 重依赖初始化。"""

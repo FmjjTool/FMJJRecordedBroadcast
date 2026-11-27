@@ -267,6 +267,12 @@ def save_preview(doc: dict, pages: list[dict], text: str, complete: bool = True,
         stats["images"] = sum(len(page.get("images") or []) for page in saved_pages)
     except Exception as exc:  # noqa: BLE001 - 快照失败不影响预览
         stats["file_error"] = str(exc)[:160]
+    try:
+        from . import versions
+        stats["version"] = versions.capture_body(
+            doc, path=path, complete=bool(complete and not stats["skipped"]))
+    except Exception:  # noqa: BLE001 - 版本失败不能丢失刚提交的正文，调用方单独展示
+        stats["version_error"] = "当前正文已保存，但采集版本保存失败，请检查磁盘空间后重试"
     return stats
 
 

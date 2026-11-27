@@ -127,6 +127,19 @@ class TCDocService:
     def body(self, doc_key: str) -> dict:
         return _body_module().cached(doc_key)
 
+    def versions(self, doc_key: str) -> dict:
+        from toolbox import webui_tcdoc_versions
+        return webui_tcdoc_versions.overview(doc_key)
+
+    def open_version(self, doc_key: str, version_id: str) -> dict:
+        from toolbox import webui_tcdoc_versions
+        return webui_tcdoc_versions.open_version(doc_key, version_id)
+
+    def version_image(self, doc_key: str, version_id: str,
+                      asset_id: str) -> tuple[bytes, str]:
+        from toolbox import webui_tcdoc_versions
+        return webui_tcdoc_versions.image(doc_key, version_id, asset_id)
+
     def body_image(self, doc_key: str, page_id: str,
                    image_key: str) -> tuple[bytes, str]:
         return _body_module().read_image(doc_key, page_id, image_key)

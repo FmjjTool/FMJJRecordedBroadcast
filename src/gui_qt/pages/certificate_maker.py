@@ -286,7 +286,7 @@ class EvidenceExportDialog(QDialog):
         self.save_button.setEnabled(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(buttons, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         self.password_edit.textChanged.connect(self._validate)
         self.confirm_edit.textChanged.connect(self._validate)
 

@@ -203,6 +203,7 @@ def _store_tables(item: dict, info: dict, on_status=None) -> None:
         item["tables_unchanged"] = True
         log(f"[{item['name']}] 文档未变化（rev={info.get('rev') or '-'}），跳过拉取")
         _download_images(item, on_status, tab_ids)
+        _capture_table_version(item, complete=selected is None)
         return
     try:
         stats = tables.save_doc(info, tab_ids=tab_ids)
@@ -234,9 +235,21 @@ def _store_tables(item: dict, info: dict, on_status=None) -> None:
         elif excel_ok and info.get("rev"):
             tables.set_rev(item["doc_key"], info["rev"])
         _download_images(item, on_status, tab_ids)
+        _capture_table_version(item, complete=not partial and selected is None)
     except Exception as exc:  # noqa: BLE001
         item["tables_error"] = f"表格落库失败：{exc}"
         log(f"[{item['name']}] {item['tables_error']}")
+
+
+def _capture_table_version(item: dict, *, complete: bool) -> None:
+    """图片采集结束后保存不可变本地版本；失败不影响已提交的当前数据。"""
+    try:
+        from . import versions
+        item["version"] = versions.capture_tables(
+            {"key": item["doc_key"], "name": item.get("name")}, complete=complete)
+    except Exception:  # noqa: BLE001 - 版本存档失败必须单独反馈，不覆盖当前采集结果
+        item["version_error"] = "当前表格已保存，但采集版本保存失败，请检查磁盘空间后重试"
+        log(f"[{item.get('name')}] {item['version_error']}")
 
 
 def _download_images(item: dict, on_status=None, tab_ids: set | None = None) -> None:

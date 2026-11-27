@@ -36,6 +36,7 @@ class WindowTransitions(QObject):
         super().__init__(window)
         self.window = window
         self.enabled = bool(enabled)
+        self.appearing = False
         self.dismissing = False
         self.dismiss_kind = None
         self._animation = None
@@ -55,6 +56,7 @@ class WindowTransitions(QObject):
             animation.deleteLater()
 
     def _reveal(self):
+        self.appearing = False
         self._serial += 1
         self._stop_animation()
         self.window.setWindowOpacity(1.0)
@@ -97,6 +99,7 @@ class WindowTransitions(QObject):
             self._reveal()
             return
         self.window.setWindowOpacity(0.0)
+        self.appearing = True
         self._fade(1.0, self.SHOW_MS, self._reveal)
 
     def dismiss(self, callback, *, kind="hide"):
