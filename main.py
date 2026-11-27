@@ -305,15 +305,19 @@ def main():
 
         def _probe_ffmpeg():
             with _startup_phase("检查媒体运行环境"):
-                subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+                # 与依赖检测、直播录制共用定位方式，支持包内与自定义位置。
+                from toolbox.utils import find_ffmpeg_exe
+                subprocess.run([find_ffmpeg_exe(), "-version"],
+                               capture_output=True, timeout=5, check=True)
 
         def _on_ffmpeg_checked(_result, err):
             # run_bg 的完成回调回到主线程，提示框及浏览器检查保持原顺序。
             if err is not None:
+                reason = ("未找到可用的 FFmpeg。" if isinstance(err, FileNotFoundError)
+                          else "FFmpeg 运行检查未通过，可能无法启动或响应超时。")
                 QMessageBox.warning(
-                    win, "⚠️ 依赖缺失",
-                    "未检测到 ffmpeg！\n\n视频转换和音频提取功能将不可用。\n"
-                    "请安装 ffmpeg 并添加到系统 PATH。\n下载: https://ffmpeg.org/download.html"
+                    win, "媒体环境检查",
+                    reason + "\n\n请到「全局设置 → 运行环境与组件」检查依赖及 FFmpeg 位置。"
                 )
 
             # 浏览器环境只读注册表等本地信息，耗时很短。
@@ -329,8 +333,8 @@ def main():
                     QMessageBox.information(
                         win, "浏览器环境",
                         "未检测到系统 Edge / Chrome，也未下载过采集引擎。\n\n"
-                        "数据采集功能需要浏览器内核，首次使用时会提示下载（约 91 MB），\n"
-                        "也可现在到「Cookie 管理 → 下载采集引擎」提前下载。")
+                        "数据采集功能需要浏览器内核。\n"
+                        "请到「全局设置 → 运行环境与组件」检查或下载采集引擎。")
             except Exception:
                 pass
 
