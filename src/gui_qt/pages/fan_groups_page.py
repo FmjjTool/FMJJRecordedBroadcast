@@ -100,8 +100,8 @@ class FanGroupsPage(BasePage):
         self._qq_sources: dict[str, str] = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         top = QFrame()
         top.setObjectName("fanGroupsTop")

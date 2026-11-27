@@ -416,8 +416,8 @@ class CertificateMakerPage(BasePage):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)

@@ -68,9 +68,10 @@
       modeBtn.textContent = authorMode ? '作者' : '视频';
       modeBtn.disabled = running || platformSel.value !== 'douyin';
       modeBtn.setAttribute('aria-pressed', String(authorMode));
-      modeBtn.setAttribute('aria-label', authorMode
-        ? '当前为作者模式，点击切换为视频模式'
-        : '当前为视频模式，点击切换为作者模式');
+      modeBtn.setAttribute('aria-label', platformSel.value !== 'douyin'
+        ? '当前平台仅支持视频模式'
+        : (authorMode ? '当前为作者模式，点击切换为视频模式'
+          : '当前为视频模式，点击切换为作者模式'));
       modeBtn.title = platformSel.value === 'douyin'
         ? (authorMode ? '点击切换为视频模式' : '点击切换为作者模式')
         : '当前平台仅支持视频模式';

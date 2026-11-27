@@ -86,6 +86,9 @@ class VideoCommentsPage(BasePage):
         self._stop = False
         self._busy = False
         self._icons: list = []
+        self.setStyleSheet(
+            "QPushButton#videoCommentsMode:checked { background: palette(midlight); "
+            "color: palette(link); border-color: palette(highlight); }")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -116,6 +119,8 @@ class VideoCommentsPage(BasePage):
         pal = current_palette()
         if role == "primary":
             return pal.color(QPalette.ColorRole.HighlightedText).name()
+        if role == "link":
+            return pal.color(QPalette.ColorRole.Link).name()
         return pal.color(QPalette.ColorRole.ButtonText).name()
 
     def _icon_button(self, text: str, icon_name: str, variant: str = "secondary") -> QPushButton:
@@ -130,7 +135,7 @@ class VideoCommentsPage(BasePage):
     def on_theme_changed(self):
         for btn, name, role in self._icons:
             if btn is self.mode_btn and self.mode_btn.isChecked():
-                role = "primary"
+                role = "link"
             btn.setIcon(line_icon(name, self._icon_color(role), 16))
 
     def _build_fetch_card(self) -> QFrame:
@@ -162,6 +167,7 @@ class VideoCommentsPage(BasePage):
         row1.addWidget(self.platform_combo)
 
         self.mode_btn = self._icon_button("视频", "swap")
+        self.mode_btn.setObjectName("videoCommentsMode")
         self.mode_btn.setCheckable(True)
         self.mode_btn.setFixedWidth(80)
         self.mode_btn.toggled.connect(self._mode_changed)
@@ -336,7 +342,7 @@ class VideoCommentsPage(BasePage):
         self.mode_btn.setChecked(is_author)
         self.mode_btn.setText("作者" if is_author else "视频")
         self.mode_btn.setIcon(line_icon(
-            "swap", self._icon_color("primary" if is_author else "button"), 16))
+            "swap", self._icon_color("link" if is_author else "button"), 16))
         self.mode_btn.setToolTip(
             ("当前为作者模式，点击切换为视频模式" if is_author
              else "当前为视频模式，点击切换为作者模式") if supported

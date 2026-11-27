@@ -288,8 +288,8 @@ class TasksPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         v = QVBoxLayout(self)
-        v.setContentsMargins(10, 8, 10, 10)
-        v.setSpacing(6)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
 
         card = QFrame()
         card.setProperty("variant", "card")

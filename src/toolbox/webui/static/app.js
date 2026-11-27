@@ -9203,14 +9203,19 @@ function renderLivestreamSummary(root) {
       }
       var searching = false;
       var fetching = !!state.douyin.fetchTask;
+      function isCurrentView() {
+        return state.route === 'douyin_index' && state.douyin.view === view;
+      }
       function setFetching(busy) {
         fetching = busy;
-        keyword.disabled = busy;
-        daysSel.disabled = busy;
-        searchBtn.disabled = busy;
+        keyword.disabled = busy || searching;
+        daysSel.disabled = busy || searching;
+        searchBtn.disabled = busy || searching;
         searchHost.querySelectorAll('button').forEach(function (button) {
           button.disabled = busy;
-          button.textContent = busy ? '抓取中…' : '抓取并回写';
+          if (button.hasAttribute('data-fetch-author')) {
+            button.textContent = busy ? '抓取中…' : '确认并抓取';
+          }
         });
       }
       function watchFetch(task) {
@@ -9245,21 +9250,24 @@ function renderLivestreamSummary(root) {
         });
       }
       searchBtn.addEventListener('click', function () {
-        if (searching || state.douyin.fetchTask) return;
+        if (!isCurrentView() || searching || state.douyin.fetchTask) return;
         if (!keyword.value.trim()) {
           toast('请输入达人名称或抖音号', 'warning');
           return;
         }
+        var query = keyword.value.trim();
         searching = true;
-        searchBtn.disabled = true;
+        setFetching(false);
         searchBtn.textContent = '搜索中…';
         searchHost.replaceChildren(h('div', { class: 'muted small' },
           '正在搜索…'));
-        post('/api/douyin-index/search', { keyword: keyword.value.trim() })
+        post('/api/douyin-index/search', { keyword: query })
           .then(function (result) {
+            if (!isCurrentView()) return;
             searching = false;
-            searchBtn.disabled = false;
+            setFetching(!!state.douyin.fetchTask);
             searchBtn.textContent = '搜索达人';
+            if (keyword.value.trim() !== query || state.douyin.fetchTask) return;
             var items = result.items || [];
             if (!items.length) {
               searchHost.replaceChildren(empty('没有匹配的达人。'));
@@ -9271,13 +9279,12 @@ function renderLivestreamSummary(root) {
             var body = h('tbody');
             items.forEach(function (item) {
               var btn = h('button', {
-                class: 'btn mini primary', type: 'button'
-              }, '抓取并回写');
+                class: 'btn mini primary', type: 'button',
+                'data-fetch-author': item.uid
+              }, '确认并抓取');
               btn.addEventListener('click', function () {
-                if (fetching || state.douyin.fetchTask) return;
-                if (!window.confirm('抓取「' + (item.name || item.uid) + '」并回写已有资产？\n\n'
-                  + '将保存指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。'
-                  + '\n不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。')) return;
+                if (!isCurrentView() || searching || fetching || state.douyin.fetchTask
+                  || keyword.value.trim() !== query || !searchHost.contains(btn)) return;
                 var task = { job: null };
                 state.douyin.fetchTask = task;
                 state.douyin.lastResult = null;
@@ -9311,12 +9318,23 @@ function renderLivestreamSummary(root) {
                 h('td', { class: 'num' }, fmtNumber(item.fans)),
                 h('td', null, btn)));
             });
-            searchHost.replaceChildren(h('div', { class: 'table-wrap' },
+            var cancelSelection = h('button', { class: 'btn', type: 'button' }, '取消');
+            cancelSelection.addEventListener('click', function () {
+              if (fetching || state.douyin.fetchTask) return;
+              searchHost.replaceChildren();
+            });
+            searchHost.replaceChildren(
+              h('div', { class: 'small', style: 'margin-bottom:8px' },
+                '确认所选达人后立即抓取并回写已有资产：将保存指数快照，并按视频 ID 更新点赞、评论、分享、收藏与指数来源信息。'
+                + '不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。'),
+              h('div', { class: 'table-wrap' },
               h('table', { class: 'db-table' },
-                h('thead', null, head), body)));
+                h('thead', null, head), body)),
+              h('div', { class: 'toolbar', style: 'margin-top:8px' }, cancelSelection));
           }).catch(function (error) {
+            if (!isCurrentView()) return;
             searching = false;
-            searchBtn.disabled = false;
+            setFetching(!!state.douyin.fetchTask);
             searchBtn.textContent = '搜索达人';
             searchHost.replaceChildren(h('div', {
               class: 'muted small', style: 'color:var(--danger)'
@@ -9328,7 +9346,7 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           keyword, daysSel, searchBtn,
           h('span', { class: 'muted small' },
-            '搜索需要登录；抓取后保存指数快照，并按视频 ID 回写已有抖音资产。')),
+            '搜索需要登录；确认达人后自动抓取，保存指数快照并回写已有抖音资产。')),
         searchHost, fetchJobHost, fetchResultHost));
       setFetching(!!state.douyin.fetchTask);
       if (state.douyin.fetchTask) watchFetch(state.douyin.fetchTask);

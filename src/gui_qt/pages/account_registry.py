@@ -26,8 +26,8 @@ class AccountRegistryPage(BasePage):
         self._overview = {"accounts": [], "stats": {}}
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
 
         self.summary = QLabel("加载中…")
         self.summary.setProperty("role", "caption")

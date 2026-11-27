@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -57,7 +56,7 @@ def readonly_roots():
     config = get_config_dir_readonly()
     values = read_json(config / "config.json", dict, {})
     export = Path(values.get("export_dir") or root / "download")
-    convert = values.get("convert") or {}
+    convert = values.get("convert", {})
     if not isinstance(convert, dict):
         raise CatalogError("本地设置格式不支持")
     return root, config, export, convert
@@ -78,6 +77,19 @@ class _ReadSession:
     def __init__(self):
         self.connections = {}
         self.temporary = None
+
+    @staticmethod
+    def copy_file(source, target):
+        remaining = _MAX_DB_SNAPSHOT
+        with source.open("rb") as reader, target.open("wb") as writer:
+            while True:
+                block = reader.read(min(1024 * 1024, remaining + 1))
+                if not block:
+                    return
+                remaining -= len(block)
+                if remaining < 0:
+                    raise CatalogError("数据文件正在更新或过大")
+                writer.write(block)
 
     @staticmethod
     def stamp(path):
@@ -119,9 +131,9 @@ class _ReadSession:
                     raise CatalogError("数据文件正在更新")
                 if sum(stamp[2] for stamp in before[:2] if stamp) > _MAX_DB_SNAPSHOT:
                     raise CatalogError("数据量较大，请在对应页面查看完整数据")
-                shutil.copyfile(source, target)
+                self.copy_file(source, target)
                 if before[1] is not None:
-                    shutil.copyfile(wal, target_wal)
+                    self.copy_file(wal, target_wal)
                 elif target_wal.exists():
                     target_wal.unlink()
                 after = tuple(self.stamp(path) for path in (source, wal, journal))
@@ -217,8 +229,10 @@ def account_entries(root, config, source):
     folder = config if getattr(sys, "frozen", False) else root / "src" / (
         "tracker" if source == "tracker" else "music_account")
     filename = "accounts.json" if source == "tracker" else "music_accounts.json"
-    return [item for item in read_json(folder / filename, list, [])
-            if isinstance(item, dict)]
+    items = read_json(folder / filename, list, [])
+    if not all(isinstance(item, dict) for item in items):
+        raise CatalogError("账号清单格式不支持")
+    return items
 
 
 def load_catalog(root, config, export, convert):
@@ -229,7 +243,12 @@ def load_catalog(root, config, export, convert):
     def files(category, depth=2):
         key = (category, depth)
         if key not in cache:
-            cache[key] = _files(sub(category), depth=depth)
+            try:
+                cache[key] = _files(sub(category), depth=depth)
+            except (OSError, ValueError) as exc:
+                cache[key] = exc
+        if isinstance(cache[key], Exception):
+            raise cache[key]
         return cache[key]
 
     def manifest_count(category, predicate, depth=2):
@@ -251,14 +270,16 @@ def load_catalog(root, config, export, convert):
         if "live_counts" in cache:
             return cache["live_counts"]
         state = read_json(config / "live_record.json", dict, {})
-        platforms = state.get("platforms") or {}
+        platforms = state.get("platforms", {})
         if not isinstance(platforms, dict):
             raise CatalogError("主播设置格式不支持")
         anchors = []
         for item in platforms.values():
             if not isinstance(item, dict) or not isinstance(item.get("anchors", []), list):
                 raise CatalogError("主播设置格式不支持")
-            anchors.extend(a for a in item.get("anchors", []) if isinstance(a, dict))
+            if not all(isinstance(anchor, dict) for anchor in item.get("anchors", [])):
+                raise CatalogError("主播设置格式不支持")
+            anchors.extend(item.get("anchors", []))
         cache["live_counts"] = (
             len(anchors), sum(bool(a.get("monitoring")) for a in anchors),
             sum(bool(a.get("want_record", a.get("recording"))) for a in anchors))
@@ -270,7 +291,10 @@ def load_catalog(root, config, export, convert):
             if path.name != "最新.json" or "QQ群" in path.parts:
                 continue
             payload = read_json(path, dict, {})
-            for group in payload.get("groups") or []:
+            groups = payload.get("groups", [])
+            if not isinstance(groups, list):
+                raise CatalogError("群快照格式不支持")
+            for group in groups:
                 if isinstance(group, dict):
                     known.add((str(payload.get("platform") or path.parent.parent.name),
                                str(group.get("group_id") or group.get("group_no") or "")))
@@ -322,7 +346,7 @@ def load_catalog(root, config, export, convert):
 
     def listing_count(folder, key):
         payload = read_json(export / folder / "_latest.json", dict, {})
-        values = payload.get(key) or []
+        values = payload.get(key, [])
         if not isinstance(values, list):
             raise CatalogError("清单格式不支持")
         return len(values)
@@ -393,11 +417,14 @@ def _load_snapshot():
     def add_days(loader):
         try:
             rows = loader()
+            source_counts = [0] * 7
             for day, count in rows:
                 index = (datetime.strptime(str(day)[:10], "%Y-%m-%d").date()
                          - start.date()).days
                 if 0 <= index < 7:
-                    counts[index] += max(0, int(count or 0))
+                    source_counts[index] += max(0, int(count or 0))
+            for index, count in enumerate(source_counts):
+                counts[index] += count
         except (OSError, ValueError, TypeError, sqlite3.Error, OverflowError):
             trend_errors.append(True)
 

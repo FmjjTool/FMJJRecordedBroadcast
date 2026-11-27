@@ -289,13 +289,6 @@ class TcDocMappingPanel(QWidget):
         self.diff_table.itemChanged.connect(self._on_diff_checked)
         self.diff_table.itemSelectionChanged.connect(self._show_diff_detail)
         diff_layout.addWidget(self.diff_table, 3)
-        self.detail_label = QLabel("点一行查看本地值与云端值")
-        self.detail_label.setProperty("role", "caption")
-        diff_layout.addWidget(self.detail_label)
-        self.detail_table = self._make_table(["字段", "本地值", "云端值"])
-        self._detail_sorter = table_sort.install_callback(
-            self.detail_table, self._sort_detail, skip_columns=(), tri_state=True)
-        diff_layout.addWidget(self.detail_table, 2)
         pagination = QHBoxLayout()
         self.diff_page_label = QLabel("第 1 / 1 页 · 共 0 条")
         self.diff_prev_btn = QPushButton("上一页")
@@ -306,6 +299,14 @@ class TcDocMappingPanel(QWidget):
         pagination.addWidget(self.diff_prev_btn)
         pagination.addWidget(self.diff_next_btn)
         diff_layout.addLayout(pagination)
+        self.detail_label = QLabel("点一行查看本地值与云端值")
+        self.detail_label.setProperty("role", "caption")
+        self.detail_label.setWordWrap(True)
+        diff_layout.addWidget(self.detail_label)
+        self.detail_table = self._make_table(["字段", "本地值", "云端值"])
+        self._detail_sorter = table_sort.install_callback(
+            self.detail_table, self._sort_detail, skip_columns=(), tri_state=True)
+        diff_layout.addWidget(self.detail_table, 2)
         row = QHBoxLayout()
         self.execute_btn = QPushButton("写入勾选 0 条")
         self.execute_btn.setProperty("variant", "primary")
@@ -351,6 +352,7 @@ class TcDocMappingPanel(QWidget):
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
+        table_columns.configure_table_columns(table, auto_fit=True)
         return table
 
     def _show_mapping(self) -> None:
