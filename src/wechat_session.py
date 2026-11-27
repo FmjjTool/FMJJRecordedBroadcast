@@ -27,6 +27,8 @@ _lock = threading.RLock()
 _session = None
 _broker = None
 _broker_capability = ""
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
         return None
@@ -97,9 +99,12 @@ def set_session_from_url(url: str) -> SessionSnapshot:
     params = {}
     for key, val in pairs:
         if key in ("__biz", "key", "uin", "pass_ticket", "appmsg_token"):
-            if key in params or not val or len(val) > 8192 or any(ord(c) < 33 for c in val):
+            if (key in params or not val or len(val) > 8192
+                    or any(not 33 <= ord(c) <= 126 for c in val)):
                 raise SessionInputError("阅读信息不完整或格式不正确")
             params[key] = val
+    if sum(len(value) for value in params.values()) > 16384:
+        raise SessionInputError("阅读信息超过安全大小限制")
     biz = params.get("__biz", "")
     if (not re.fullmatch(r"[A-Za-z0-9_+/=-]{4,256}", biz)
             or not params.get("key") or not params.get("uin")):
@@ -225,9 +230,14 @@ def webui_environment() -> dict[str, str]:
     with _lock:
         if _broker is None:
             _broker_capability = secrets.token_hex(32)
-            _broker = _BrokerServer(("127.0.0.1", 0), _BrokerHandler)
-            threading.Thread(target=_broker.serve_forever, daemon=True,
-                             name="wechat-session-reader").start()
+            server = _BrokerServer(("127.0.0.1", 0), _BrokerHandler)
+            try:
+                threading.Thread(target=server.serve_forever, daemon=True,
+                                 name="wechat-session-reader").start()
+            except Exception:
+                server.server_close()
+                raise
+            _broker = server
         return {
             _ENDPOINT_ENV: f"http://127.0.0.1:{_broker.server_port}{_PATH}",
             _CAPABILITY_ENV: _broker_capability,

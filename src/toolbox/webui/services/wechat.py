@@ -30,7 +30,13 @@ class WechatService:
         try:
             return fn(dict(payload or {}))
         except Exception as exc:
-            raise ValueError(webui_wechat.safe_message(exc)) from None
+            raise ValueError(WechatService._error(exc)) from None
+
+    @staticmethod
+    def _error(exc):
+        if isinstance(exc, webui_wechat.WebWechatError):
+            return str(exc)
+        return webui_wechat.safe_message(webui_wechat._library().user_error(exc))
 
     def start(self, action, payload):
         if action not in ("collect", "sync", "export", "retry"):
@@ -59,6 +65,6 @@ class WechatService:
             except JobCancelled:
                 raise
             except Exception as exc:
-                raise ValueError(webui_wechat.safe_message(exc)) from None
+                raise ValueError(self._error(exc)) from None
 
         return {"job": self.jobs.submit("wechat_" + action, worker).id}

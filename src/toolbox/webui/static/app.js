@@ -942,75 +942,10 @@
     }
 
     function wechatCard(reload) {
-      var textarea = h('textarea', {
-        class: 'textarea', rows: '3',
-        placeholder: '粘贴 mp.weixin.qq.com 文章链接，一行一个（最多 30 篇）'
+      return window.createWechatLibraryCard({
+        h: h, api: api, post: post, toast: toast, watchJob: watchJob,
+        downloadPost: downloadPost, reload: reload
       });
-      var checks = {};
-      var row = h('div', { class: 'toolbar', style: 'margin-top:8px' });
-      [['html', 'HTML'], ['docx', 'Word'], ['md', 'Markdown']]
-        .forEach(function (pair) {
-          checks[pair[0]] = h('input', { type: 'checkbox', checked: true });
-          row.appendChild(h('label', { class: 'muted small' },
-            checks[pair[0]], ' ' + pair[1]));
-        });
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
-      var jobHost = h('div');
-      var running = false;
-      btn.addEventListener('click', function () {
-        if (running) return;
-        if (!textarea.value.trim()) {
-          toast('请粘贴公众号文章链接', 'warning');
-          return;
-        }
-        var formats = Object.keys(checks).filter(function (key) {
-          return checks[key].checked;
-        });
-        if (!formats.length) {
-          toast('请至少选择一种导出格式', 'warning');
-          return;
-        }
-        running = true;
-        btn.disabled = true;
-        btn.textContent = '解析中…';
-        post('/api/tools/artifacts/wechat', {
-          text: textarea.value, formats: formats
-        }).then(function (result) {
-          watchJob(jobHost, result.job, function (job) {
-            running = false;
-            btn.disabled = false;
-            btn.textContent = '开始解析';
-            var outcome = job.result || {};
-            toast(outcome.summary || '解析完成',
-              outcome.failed ? 'warning' : 'success');
-            reload();
-          }, {
-            cancelable: true,
-            onSettled: function (job) {
-              running = false;
-              btn.disabled = false;
-              btn.textContent = '开始解析';
-              if (job.status === 'error') {
-                toast('解析失败：' + (job.error || '未知错误'), 'error');
-              }
-            }
-          });
-        }).catch(function (error) {
-          running = false;
-          btn.disabled = false;
-          btn.textContent = '开始解析';
-          toast('解析失败：' + error.message, 'error');
-        });
-      });
-      return h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '解析公众号文章'),
-        textarea, row,
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' },
-            '导出到公众号分类目录（或桌面设置的自定义目录）；'
-            + 'PDF 需要桌面端渲染，Web 端不提供。'),
-          h('span', { style: 'flex:1' }), btn),
-        jobHost);
     }
 
     function biliCard(reload) {
@@ -1255,7 +1190,8 @@
           }, '共 ' + groups.length + ' 组 · ' + fmtNumber(data.total)
             + ' 个文件 · 图片 ' + fmtNumber(images)));
           if (!groups.length) {
-            listHost.appendChild(empty(data.note || '暂无产物。'));
+            listHost.appendChild(empty(state.artifacts.tab === 'wechat'
+              ? '暂无公众号导出文件。' : (data.note || '暂无产物。')));
             return;
           }
           groups.forEach(function (group) {

@@ -144,8 +144,8 @@ class TrackerPage(BasePage):
         accounts = load_accounts()
         if not accounts:
             self._accounts_loading = False
-            lbl = QLabel("（暂无账号，请在「Cookie 管理 → 账号配置」里添加）")
-            lbl.setStyleSheet("color: gray;")
+            lbl = QLabel("（暂无可用账号）")
+            lbl.setStyleSheet("color: palette(placeholder-text);")
             lbl.setAlignment(Qt.AlignCenter)
             self.cards_layout.takeAt(self.cards_layout.count() - 1)
             self.cards_layout.addWidget(lbl)
@@ -787,7 +787,7 @@ class TrackerPage(BasePage):
         from tracker.accounts import get_groups
         groups = get_groups()
         if not groups:
-            self.app.toast("暂无分组，请先在「Cookie 管理 → 账号配置」里新建分组", "warning")
+            self.app.toast("暂无可用分组", "warning")
             return
         win = QDialog(self)
         win.setWindowTitle("按组导出")

@@ -75,8 +75,7 @@ class AccountRegistryPage(BasePage):
         outer.addWidget(self.table, 1)
 
         self.note = QLabel(
-            "只读总览：账号的添加/删除、分组与「可用于哪些功能」统一在"
-            "「Cookie 管理 → 账号配置」里维护，本页不改写任何账号文件。")
+            "只读总览：展示各平台账号、分组及可用功能，本页不改写账号信息。")
         self.note.setProperty("role", "caption")
         self.note.setWordWrap(True)
         outer.addWidget(self.note)

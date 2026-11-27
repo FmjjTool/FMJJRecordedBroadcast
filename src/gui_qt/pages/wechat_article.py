@@ -10,7 +10,7 @@
 """
 import os
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
@@ -18,9 +18,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QWidget,
 )
 
-from toolbox.config_manager import (
-    get_export_subdir, load_convert_config, save_convert_config,
-)
+from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.common import post_to_main, run_bg
 from gui_qt.navigation import line_icon
@@ -41,6 +39,7 @@ class WechatArticlePage(BasePage):
         super().__init__(app)
         self.running = False
         self._cancel = False
+        self._download_batch = None
         self._icons: list = []
 
         layout = QVBoxLayout(self)
@@ -281,7 +280,8 @@ class WechatArticlePage(BasePage):
         out_dir = self._current_out_dir()
         self.run_library_job(
             lambda **callbacks: wechat_library.export_links(
-                '\n'.join(urls), formats, out_dir, **callbacks))
+                '\n'.join(urls), formats, out_dir, **callbacks),
+            download_title="公众号解析")
 
     def _cancel_run(self):
         self._cancel = True
@@ -290,7 +290,7 @@ class WechatArticlePage(BasePage):
     def selected_formats(self):
         return [key for key, _ in FORMATS if self.format_checks[key].isChecked()]
 
-    def run_library_job(self, operation):
+    def run_library_job(self, operation, download_title=""):
         """仅将 L3 的任务与进度桥接至界面，所有业务编排留在服务层。"""
         if self.running:
             self.app.toast("已有任务进行中，请等待或停止后重试", "warning")
@@ -302,17 +302,29 @@ class WechatArticlePage(BasePage):
         self.library_panel.set_busy(True)
         self.progress.setRange(0, 0)
         self.status_label.setText("进行中")
+        if download_title:
+            from gui_qt.download_float import get_float
+            self._download_batch = get_float().add_batch(
+                download_title, total=1, threads=1, cancel_cb=self._cancel_run)
+            self._download_batch.handle_event("start", "文章导出")
 
         def worker():
-            return operation(
-                on_progress=lambda done, total, text: post_to_main(
-                    self._job_progress, done, total, text),
-                on_log=lambda text: post_to_main(self._log, text),
-                is_cancelled=lambda: self._cancel)
+            from toolbox import wechat_library
+            try:
+                return operation(
+                    on_progress=lambda done, total, text: post_to_main(
+                        self._job_progress, done, total, text),
+                    on_log=lambda text: post_to_main(self._log, text),
+                    is_cancelled=lambda: self._cancel)
+            except Exception as exc:
+                # 在 run_bg 将错误转成字符串前保留服务认可的安全提示。
+                return {"_user_error": wechat_library.user_error(exc)}
 
         run_bg(worker, self._finish_library_job, owner=self)
 
     def _job_progress(self, done, total, text):
+        if self._download_batch is not None and total:
+            self._download_batch.handle_event("bytes", "文章导出", done, total)
         if total:
             self.progress.setRange(0, 100)
             self.progress.setValue(min(100, max(0, int(done / total * 100))))
@@ -326,7 +338,8 @@ class WechatArticlePage(BasePage):
         result = result or {}
         pdf_failed = 0
         pdf_jobs = result.get("pdf_jobs") or []
-        if pdf_jobs and not self._cancel:
+        processed_pdf = 0
+        if pdf_jobs and not self._cancel and not result.get("cancelled"):
             from gui_qt.pdf_render import render_pdf
             for index, job in enumerate(pdf_jobs, 1):
                 if self._cancel:
@@ -337,21 +350,24 @@ class WechatArticlePage(BasePage):
                     break
                 try:
                     render_pdf(job["html"], job["path"])
-                    wechat_library.finish_pdf(job["id"], True)
+                    self._save_pdf_result(job["id"], True)
                 except Exception:
                     pdf_failed += 1
-                    wechat_library.finish_pdf(job["id"], False, "PDF 生成失败，请重试")
+                    self._save_pdf_result(job["id"], False, "PDF 生成失败，请重试")
                     self._log("PDF 生成失败，请检查导出位置后重试")
+                processed_pdf = index
         cancelled = self._cancel or bool(result.get("cancelled"))
+        if cancelled:
+            for job in pdf_jobs[processed_pdf:]:
+                self._save_pdf_result(job["id"], False, "已取消，可重试")
         self.running = False
         self._cancel = False
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.library_panel.set_busy(False)
         self.progress.setRange(0, 100)
-        if error:
-            # 底层异常可能带 URL 或路径；页面只显示服务认可的通用提示。
-            tip = "任务失败，请检查输入与网络后重试"
+        if error or result.get("_user_error"):
+            tip = str(result.get("_user_error") or "任务失败，请检查输入与网络后重试")
             self._log(tip)
         elif cancelled:
             tip = f"已取消（成功 {result.get('ok', 0)} / 失败 {result.get('failed', 0)}）"
@@ -361,7 +377,18 @@ class WechatArticlePage(BasePage):
             if pdf_failed:
                 tip += f" · PDF 失败 {pdf_failed} 篇"
         self.status_label.setText(tip)
+        if self._download_batch is not None:
+            self._download_batch.handle_event("done", "文章导出", not error and not result.get("_user_error") and not cancelled and not pdf_failed and not result.get("failed"))
+            self._download_batch.finish(tip)
+            self._download_batch = None
         self.library_panel.refresh_all()
+
+    def _save_pdf_result(self, article_id, success, error=""):
+        from toolbox import wechat_library
+        try:
+            wechat_library.finish_pdf(article_id, success, error)
+        except Exception:
+            self._log("PDF 状态保存失败，请刷新文章归档后重试")
 
     def _set_status(self, text):
         self.status_label.setText(text)

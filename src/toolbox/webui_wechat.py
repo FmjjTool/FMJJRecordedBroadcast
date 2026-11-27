@@ -6,7 +6,11 @@ from copy import deepcopy
 from datetime import date
 import re
 
-from toolbox.wechat_store import ACCOUNT_SORTS, ARTICLE_SORTS, STATUS_LABELS
+from toolbox.wechat_store import ACCOUNT_SORTS, ARTICLE_SORTS, STATUS_LABELS, article_id
+
+
+class WebWechatError(ValueError):
+    """仅包含本模块定义的公开校验提示。"""
 
 
 _FORMATS = [{"value": "html", "label": "HTML"},
@@ -19,7 +23,7 @@ FIELDS = {
         "sort": {"type": "choice", "default": "", "allow": ["", *ACCOUNT_SORTS], "hidden": True},
         "order": {"type": "choice", "default": "", "allow": _SORT_ORDER, "hidden": True},
         "offset": {"type": "int", "default": 0, "min": 0, "max": 10000000, "hidden": True},
-        "limit": {"type": "int", "label": "每页条数", "default": 200, "min": 1, "max": 500},
+        "limit": {"type": "int", "label": "每页条数", "default": 200, "min": 1, "max": 200},
     },
     "articles": {
         "biz": {"type": "str", "label": "公众号标识", "default": "", "max_length": 256},
@@ -30,7 +34,7 @@ FIELDS = {
         "sort": {"type": "choice", "default": "", "allow": ["", *ARTICLE_SORTS], "hidden": True},
         "order": {"type": "choice", "default": "", "allow": _SORT_ORDER, "hidden": True},
         "offset": {"type": "int", "default": 0, "min": 0, "max": 10000000, "hidden": True},
-        "limit": {"type": "int", "label": "每页条数", "default": 200, "min": 1, "max": 500},
+        "limit": {"type": "int", "label": "每页条数", "default": 200, "min": 1, "max": 200},
     },
     "account": {
         "biz": {"type": "str", "label": "公众号标识", "default": "", "max_length": 256, "required": True, "readonly": True},
@@ -43,10 +47,10 @@ FIELDS = {
     "sync": {
         "biz": {"type": "str", "default": "", "max_length": 256, "required": True, "hidden": True},
         "mode": {"type": "choice", "label": "同步方式", "default": "latest", "options": [{"value": "latest", "label": "同步最新"}, {"value": "continue", "label": "继续同步"}]},
-        "max_pages": {"type": "int", "label": "最多页数", "default": 10, "min": 1, "max": 100},
+        "max_pages": {"type": "int", "label": "最多页数", "default": 10, "min": 1, "max": 50},
     },
     "export": {
-        "ids": {"type": "intlist", "default": [], "required": True, "hidden": True, "max_items": 500},
+        "ids": {"type": "idlist", "label": "文章", "default": [], "required": True, "hidden": True, "max_items": 200},
         "formats": {"type": "strlist", "label": "导出格式", "default": ["html", "docx", "md"], "options": _FORMATS, "required": True},
     },
     "retry": {
@@ -75,41 +79,40 @@ def normalize(group: str, payload: dict | None = None) -> dict:
                     raise ValueError
                 value = int(value)
             except (TypeError, ValueError):
-                raise ValueError(f"{label}必须是整数") from None
+                raise WebWechatError(f"{label}必须是整数") from None
             if not spec["min"] <= value <= spec["max"]:
-                raise ValueError(f"{label}超出允许范围")
-        elif kind in ("strlist", "intlist"):
+                raise WebWechatError(f"{label}超出允许范围")
+        elif kind in ("strlist", "idlist"):
             if not isinstance(value, list) or len(value) > spec.get("max_items", 10):
-                raise ValueError(f"{label}数量不正确")
+                raise WebWechatError(f"{label}数量不正确")
             clean = []
             for item in value:
-                if kind == "intlist":
-                    if isinstance(item, bool) or not str(item).isdigit() or int(item) <= 0:
-                        raise ValueError("文章选择无效")
-                    item = int(item)
+                if kind == "idlist":
+                    if not isinstance(item, str) or not re.fullmatch(r"[a-f0-9]{64}", item):
+                        raise WebWechatError("文章选择无效")
                 elif item not in allowed:
-                    raise ValueError("不支持的导出格式")
+                    raise WebWechatError("不支持的导出格式")
                 if item not in clean:
                     clean.append(item)
             value = clean
         else:
             if not isinstance(value, str):
-                raise ValueError(f"{label}格式不正确")
+                raise WebWechatError(f"{label}格式不正确")
             value = value.strip()
             if len(value) > spec.get("max_length", 1000):
-                raise ValueError(f"{label}过长")
+                raise WebWechatError(f"{label}过长")
             if kind == "choice" and value not in allowed:
-                raise ValueError(f"{label}选项无效")
+                raise WebWechatError(f"{label}选项无效")
             if kind == "date" and value:
                 try:
                     date.fromisoformat(value)
                 except ValueError:
-                    raise ValueError(f"{label}格式不正确") from None
+                    raise WebWechatError(f"{label}格式不正确") from None
         if spec.get("required") and not value:
-            raise ValueError(f"请填写或选择{label}")
+            raise WebWechatError(f"请填写或选择{label}")
         result[name] = value
     if result.get("date_from") and result.get("date_to") and result["date_from"] > result["date_to"]:
-        raise ValueError("开始日期不能晚于结束日期")
+        raise WebWechatError("开始日期不能晚于结束日期")
     return result
 
 
@@ -123,7 +126,7 @@ def safe_message(value, fallback: str = "操作失败，请稍后重试") -> str
     text = str(value or "")
     if "需要登录" in text or "未登录" in text or "登录已失效" in text:
         return "需要登录"
-    if re.search(r"(?:[A-Za-z]:[\\/]|/(?:Users|home|tmp|var)/|https?://|cookie|token|secret|pass_ticket|key=)", text, re.I):
+    if re.search(r"(?:[A-Za-z]:[\\/]|\\\\|/(?:[A-Za-z0-9_.-]+/)+|https?://|cookie|token|secret|authorization|pass_ticket|[?&](?:key|uin|ticket)=)", text, re.I):
         return fallback
     if len(text) > 160 or not text.strip():
         return fallback
@@ -142,8 +145,14 @@ def _account(item: dict) -> dict:
 
 def _article(item: dict) -> dict:
     status = item.get("status", "archived")
-    return {"id": int(item["id"]), "biz": _text(item.get("biz"), 256),
+    url = str(item.get("url") or "")
+    try:
+        article_id(url)  # 仅接受主库允许的公开链接；拒绝会话参数和外部地址。
+    except ValueError:
+        url = ""
+    return {"id": _text(item["id"], 64), "biz": _text(item.get("biz"), 256),
             "account": _text(item.get("account"), 200), "title": _text(item.get("title"), 1000),
+            "url": url,
             "publish_time": _text(item.get("publish_time"), 40),
             "status": status if status in STATUS_LABELS else "archived",
             "error": safe_message(item.get("error"), "处理失败，请重试") if item.get("error") else ""}
