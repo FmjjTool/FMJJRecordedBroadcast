@@ -156,7 +156,6 @@ class MainWindow(QMainWindow):
         self.pages = {}
         self._closed = False
         self._quitting = False
-        self._close_animation_done = False
         self._window_transitions = WindowTransitions(
             self, enabled=bool(cfg.get("window_animations_enabled", True)))
         self._tray = None
@@ -372,9 +371,8 @@ class MainWindow(QMainWindow):
     def _restore_from_tray(self, *_args):
         if self._quitting:
             return
-        self._window_transitions.cancel()
         if self.isMinimized():
-            self.showNormal()
+            self._window_transitions.restore()
         else:
             self.show()
         self.raise_()
@@ -405,11 +403,8 @@ class MainWindow(QMainWindow):
         self._tray_hint_shown = True
 
     def _start_deferred_boot(self, first_key):
-        """首屏重依赖等短淡入结束后再加载，避免在过渡中间卡住一帧。"""
+        """首帧排版后继续启动；原生窗口过渡不提供异步淡入状态。"""
         if self._closed:
-            return
-        if self._window_transitions.appearing:
-            QTimer.singleShot(16, lambda: self._start_deferred_boot(first_key))
             return
         self._deferred_boot(first_key)
 
@@ -509,7 +504,7 @@ class MainWindow(QMainWindow):
         divider.setFixedSize(1, 18)
         row.addWidget(divider)
         self.window_controls = WindowControlBar(bar)
-        self.window_controls.minimize_requested.connect(self.showMinimized)
+        self.window_controls.minimize_requested.connect(self._window_transitions.minimize)
         self.window_controls.maximize_requested.connect(self.toggle_max_restore)
         self.window_controls.close_requested.connect(self.close)
         row.addWidget(self.window_controls)
@@ -1088,13 +1083,9 @@ class MainWindow(QMainWindow):
         return self.pages[key]
 
     def closeEvent(self, event):
-        if self._window_transitions.dismissing:
-            if self._quitting and self._window_transitions.dismiss_kind != "quit":
-                # 托盘退出/更新退出优先于尚未结束的后台隐藏，不能吞掉退出请求。
-                self._window_transitions.cancel()
-            else:
-                event.ignore()
-                return
+        if self._closed:
+            event.accept()
+            return
         cfg = load_convert_config()
         lrw = getattr(self, "live_record_win", None)
         act = self._live_activity()
@@ -1149,10 +1140,6 @@ class MainWindow(QMainWindow):
             if lrw is not None:
                 lrw.stop_and_package(self)
         self._quitting = True
-        if (not self._close_animation_done
-                and self._window_transitions.dismiss(self._finish_animated_close, kind="quit")):
-            event.ignore()
-            return
         self._closed = True
         self.page_preloader.stop()
         if self.performance_monitor is not None:
@@ -1173,16 +1160,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, app.quit)
 
     def _hide_to_tray(self):
-        def hide():
-            self.hide()
-            self._notify_background()
-
-        if not self._window_transitions.dismiss(hide):
-            hide()
-
-    def _finish_animated_close(self):
-        self._close_animation_done = True
-        self.close()
+        self.hide()
+        self._notify_background()
 
     def _live_activity(self):
         """直播录制的录制 / 监控状态；窗口没打开时返回 None。"""
@@ -1335,7 +1314,15 @@ class MainWindow(QMainWindow):
             handles.raise_all()
         transitions = getattr(self, "_window_transitions", None)
         if transitions is not None and not event.spontaneous():
-            transitions.appear()
+            transitions.prepare_show()
+
+    def nativeEvent(self, event_type, message):
+        transitions = getattr(self, "_window_transitions", None)
+        if transitions is not None:
+            handled, result = transitions.native_event(message)
+            if handled:
+                return True, result
+        return super().nativeEvent(event_type, message)
 
     def toggle_max_restore(self):
         """最大化 / 还原（顶部栏标题按钮与双击顶栏共用）。"""

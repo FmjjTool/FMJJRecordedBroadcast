@@ -112,6 +112,8 @@ class WindowTransitions(QObject):
     def restore(self):
         if self.window.isVisible() and self.prepare_show():
             self._api.show(int(self.window.winId()), _SW_RESTORE)
+        elif self.window.isMaximized():
+            self.window.showMaximized()
         else:
             self.window.showNormal()
 
@@ -133,8 +135,8 @@ class WindowTransitions(QObject):
             return False, 0
         # 保留 WS_CAPTION/WS_THICKFRAME 给 DWM，但不显示第二套系统标题栏。
         # 最大化时客户区取实际工作区，防止系统缩放边框遮住顶栏或任务栏。
-        if self._api.is_zoomed(msg.hwnd) and not self.window.isFullScreen():
-            monitor = self._api.monitor_from_window(msg.hwnd, 2)
+        if self._api.is_zoomed(msg.hWnd) and not self.window.isFullScreen():
+            monitor = self._api.monitor_from_window(msg.hWnd, 2)
             info = _MONITORINFO()
             info.cbSize = ctypes.sizeof(info)
             if self._api.monitor_info(monitor, ctypes.byref(info)):
