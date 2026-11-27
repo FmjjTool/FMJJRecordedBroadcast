@@ -667,4 +667,15 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-picture-preview { display: block; width: 100%; height: 200px; object-fit: contain; background: var(--panel-2); border-radius: 6px; margin-bottom: 8px; }
 .music-picture-description { overflow-wrap: anywhere; margin: 8px 0; }
 .music-picture-item .toolbar { margin-bottom: 0; }
+.music-match-panel { margin-bottom: 12px; }
+.music-match-panel > .row-title { margin-bottom: 8px; }
+.music-match-panel > .muted { margin-bottom: 12px; }
+.music-match-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 8px; max-height: 240px; overflow: auto; margin-bottom: 12px; }
+.music-match-files .check { min-width: 0; }
+.music-match-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 8px 16px; margin-bottom: 12px; }
+.music-match-field { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.music-match-field > span { min-width: 48px; }
+.music-match-field .select { min-width: 120px; max-width: 100%; }
+.music-match-changes { white-space: normal; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.music-match-columns { justify-content: flex-end; margin-top: 8px; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }

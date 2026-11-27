@@ -11265,6 +11265,41 @@ function renderMusicTag(root) {
       var editorHost = h('div');
       var jobHost = h('div');
       var tableHost = h('div');
+      var matchHost = h('div');
+      var matchPanel = null;
+      var matchBusy = false;
+      var scanBusy = false;
+      var matchButton = h('button', { class: 'btn', type: 'button' }, '自动匹配');
+
+      function prepareMatch() {
+        if (!canLeaveEditor()) return false;
+        ++editorVersion;
+        editorHost.replaceChildren();
+        selected = '';
+        canLeaveEditor = function () { return true; };
+        renderFiles();
+        return true;
+      }
+      matchButton.addEventListener('click', function () {
+        if (matchBusy) return;
+        if (!matchPanel) matchPanel = window.createMusicMatchPanel(matchHost, {
+          h: h, api: api, post: post, watchJob: watchJob, toast: toast,
+          cycleSort: cycleSort, sortRows: sortRows,
+          getFiles: function () { return files; }, canStart: prepareMatch,
+          onBusy: function (value) {
+            matchBusy = value;
+            addFileBtn.disabled = addFolderBtn.disabled = value || scanBusy;
+            matchButton.disabled = value || scanBusy;
+          },
+          onSaved: function (result) {
+            (result.rows || []).forEach(function (row) {
+              if (row.fields) mergeFiles([Object.assign({ rel: row.rel }, row.fields)]);
+            });
+            renderFiles();
+          }
+        });
+        matchHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
 
       var relInput = h('input', {
         class: 'input', type: 'text', placeholder: '相对音乐目录的路径，留空 = 目录本身',
@@ -11282,18 +11317,22 @@ function renderMusicTag(root) {
       }
 
       function scan(folder) {
+        if (scanBusy || matchBusy) return;
+        scanBusy = true;
         addFileBtn.disabled = true;
         addFolderBtn.disabled = true;
+        matchButton.disabled = true;
         post('/api/tools/music-tag/scan', { path: relInput.value, folder: folder })
           .then(function (result) {
             mergeFiles(result.files || []);
+            if (matchPanel) matchPanel.refreshFiles();
             renderFiles();
             toast('已加入 ' + (result.files || []).length + ' 个文件', 'success');
           }).catch(function (error) {
             toast('扫描失败：' + error.message, 'error');
           }).then(function () {
-            addFileBtn.disabled = false;
-            addFolderBtn.disabled = false;
+            scanBusy = false;
+            addFileBtn.disabled = addFolderBtn.disabled = matchButton.disabled = matchBusy;
           });
       }
       addFileBtn.addEventListener('click', function () { scan(false); });
@@ -11318,6 +11357,7 @@ function renderMusicTag(root) {
           tr.appendChild(h('td', null, row.year || '-'));
           tr.appendChild(h('td', null, row.genre || '-'));
           tr.addEventListener('click', function () {
+            if (matchBusy) { toast('自动匹配任务尚未结束，请稍后编辑标签', 'info'); return; }
             if (selected === row.rel || !canLeaveEditor()) return;
             selected = row.rel;
             renderFiles();
@@ -11772,7 +11812,9 @@ function renderMusicTag(root) {
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '音乐文件'),
+        h('div', { class: 'toolbar' }, matchButton),
         tableHost));
+      root.appendChild(matchHost);
       root.appendChild(editorHost);
       root.appendChild(jobHost);
 

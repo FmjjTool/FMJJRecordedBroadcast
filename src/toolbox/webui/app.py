@@ -571,6 +571,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: music_tag.detail(req.q("rel", "")))
     server.get("/api/music-tag/history",
                lambda req: music_tag.history(req.q("rel", "")))
+    server.get("/api/music-tag/match/options", lambda req: music_tag.match_options())
+    server.post("/api/tools/music-tag/match/preview",
+                lambda req: music_tag.start_match_preview(dict(req.json or {})))
+    server.post("/api/tools/music-tag/match/apply",
+                lambda req: music_tag.start_match_apply(dict(req.json or {})))
     server.get("/api/music-tag/pictures",
                lambda req: music_tag.pictures(req.q("rel", "")))
 
