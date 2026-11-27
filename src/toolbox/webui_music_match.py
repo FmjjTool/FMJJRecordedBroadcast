@@ -218,8 +218,9 @@ def _replace_sidecar(target, data, expected, root):
         os.fsync(dest.fileno())
     if _file_state(backup)[-1] != expected[-1]:
         raise _PlanError("原文件安全副本校验失败，已停止覆盖")
-    descriptor, temporary = tempfile.mkstemp(prefix=".fmjj-auto-", suffix=".tmp", dir=target.parent)
+    temporary = None
     try:
+        descriptor, temporary = tempfile.mkstemp(prefix=".fmjj-auto-", suffix=".tmp", dir=target.parent)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             stream.flush()
@@ -231,8 +232,12 @@ def _replace_sidecar(target, data, expected, root):
         os.replace(temporary, target)
         if _file_state(target)[-1] != hashlib.sha256(data).hexdigest():
             raise _PlanError("同名文件写入校验失败；原始安全副本已保留")
+    except _PlanError:
+        raise
+    except Exception:
+        raise _PlanError("同名文件写入失败；原始安全副本已保留") from None
     finally:
-        if os.path.lexists(temporary):
+        if temporary and os.path.lexists(temporary):
             os.unlink(temporary)
     return backup.name
 
