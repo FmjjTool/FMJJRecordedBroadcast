@@ -3,7 +3,7 @@
 
 界面结构对齐参考项目「江湖录播」（D:/PythonApps/Python版全量/ui/main_window.py）：
   两行工具栏（添加主播 / 批量导入 / 批量修改 / 开启监控录制 / 一键停止 /
-            立即检测 / 录制设置 / 推送设置 / 更多）
+            立即检测 / 录制设置 / 推送设置 / FLV・TS 修复 / 写时间码 / 目录 / 状态）
   + 顶部详情条 + 主播表格（状态着色、勾选列、双击切换监控/录制）
   + 下方运行日志（QSplitter 可拖）+ 状态栏
   + 右键菜单（检测、重新录制、独立设置、备注、复制与删除）
@@ -365,9 +365,14 @@ class PlatformPane(QWidget):
         bar2.setSpacing(6)
         self._tbtn(bar2, "录制设置", self.on_settings)
         self._tbtn(bar2, "推送设置", self.on_push_settings)
-        self.btn_more = self._tbtn(bar2, "更多", None, "更多录制操作")
-        self.btn_more.setProperty("menuButton", True)
-        self.btn_more.setMenu(self.win._build_more_menu(self))
+        self._tbtn(bar2, "FLV / TS 修复", self.on_repair_flv,
+                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
+        self._tbtn(bar2, "写时间码", self.on_timecode,
+                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
+        self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
+        self._tbtn(bar2, "清除状态", self.on_clear_states,
+                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
+                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
         bar2.addStretch(1)
         bt_dm = self._tbtn(bar2, "弹幕姬",
                            self.win._open_danmaku_window,
@@ -2118,7 +2123,7 @@ class LiveRecordWindow(QMainWindow):
             if any(a.monitoring for a in pane.manager.anchors):
                 pane.manager.start_monitor()
 
-    # ---------- 更多操作与快捷键 ----------
+    # ---------- 快捷键 ----------
     def _act(self, text, slot, shortcut=None, tip=None):
         a = QAction(text, self)
         a.triggered.connect(lambda _c=False: slot())
@@ -2127,26 +2132,6 @@ class LiveRecordWindow(QMainWindow):
         if tip:
             a.setStatusTip(tip)
         return a
-
-    def _build_more_menu(self, pane):
-        """低频工具与无独立按钮的主播操作收纳在工具栏「更多」中。"""
-        menu = QMenu(self)
-        add = menu.addAction
-        add(self._act("FLV / TS 修复…", pane.on_repair_flv))
-        add(self._act("写时间码…", pane.on_timecode))
-        add(self._act("打开录制目录", lambda: _open_dir(pane.manager.out_dir())))
-        add(self._act(
-            "清除本页状态…", pane.on_clear_states,
-            tip="清空当前平台的运行状态与日志；主播与设置保留"))
-        menu.addSeparator()
-        add(self._act("打开记录数据文件夹", pane.on_open_record_dir))
-        add(self._act("运行日志…", pane.on_show_log))
-        menu.addSeparator()
-        add(self._act("播放直播源", pane.on_preview_stream))
-        add(self._act("开始录制", pane.on_start_record))
-        add(self._act("停止录制", pane.on_stop_record))
-        add(self._act("移动至序号…", pane.on_move_to_index))
-        return menu
 
     def _install_shortcuts(self):
         """顶部菜单移除后，保留原有常用键盘操作。"""
