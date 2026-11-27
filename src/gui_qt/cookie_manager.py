@@ -1370,7 +1370,7 @@ class CookieManagerDialog(QDialog):
                                             alts.append(prev)
                                     jar[n] = val
                             # 只读取当前页面/框架：完整 storage_state 会临时开页，
-                            # 扫码跨域期间每 6 秒调用会反复切走正在操作的标签页。
+                            # 扫码跨域期间不应每 6 秒触发这类辅助页面导航。
                             if plat == "tcdoc" and poll_i % 4 == 0:
                                 try:
                                     from toolbox.tcdoc.session import capture_login_state

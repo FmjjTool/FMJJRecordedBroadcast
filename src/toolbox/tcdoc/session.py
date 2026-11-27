@@ -147,7 +147,7 @@ def capture_login_state(context, previous: dict | None = None, *, cookies=None) 
     """被动采集登录窗内存状态，不开新页、不导航、不读取或写入已存凭据。
 
     Playwright 的完整 storage_state 会为已访问但不在当前顶层页的来源创建
-    临时页面。扫码跨域期间反复调用会切走用户正在操作的页。这里只读现有
+    临时页面。扫码跨域期间无需反复开关这些辅助页面。这里只读现有
     腾讯域页面/框架，暂时跳转或框架销毁时沿用本窗口上次成功的来源快照。
     """
     def allowed_origin(value):
