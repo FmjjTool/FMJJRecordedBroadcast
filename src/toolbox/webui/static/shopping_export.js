@@ -243,12 +243,14 @@
         options.watchJob(options.jobHost, response.job, function (job) {
           var result = job.result || {};
           notice.textContent = result.message || result.summary || 'Excel 已生成，点击「下载结果」保存。';
-          if (taobao) { showBatchResult(result); if (options.onExported) options.onExported(); }
         }, {
           cancelable: true, indeterminate: true, clearPollErrorOnSuccess: true,
           onSettled: function (job) {
             exporting = false; options.setBusy(false);
-            if (taobao && job.result) showBatchResult(job.result);
+            if (taobao && job.result) {
+              showBatchResult(job.result);
+              if (job.result.succeeded && options.onExported) options.onExported();
+            }
             if (job.status === 'error') {
               notice.textContent = '导出失败：' + (job.error || '请重试');
             }
