@@ -1,13 +1,15 @@
-"""WebUI 依赖组件状态（L3，只读）。
+"""Qt-free dependency status and installation use cases for global settings.
 
-判定口径与桌面端「依赖与可选组件」一致；本模块只做检测，
-组件随软件整体安装 / 卸载，不提供单独卸载或安装入口。
+Python installation delegates to the same controlled installer as desktop.
+Local inference downloads/removals remain owned by optional_runtime and use
+the existing webui_local_llm actions; this module only exposes their status.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import sys
 
 
 def _douyin_sign() -> tuple[bool, str]:
@@ -88,10 +90,50 @@ _CHECKS = [
     ("clip_model", "图识别模型", "以图搜图的视觉编码器", _clip_model),
 ]
 
+_PYTHON_DEPENDENCIES = (
+    ("PySide6", "桌面 GUI 框架（Qt for Python）", False),
+    ("requests", "HTTP 请求库", False),
+    ("PIL", "图片处理", False),
+    ("bs4", "HTML 解析", False),
+    ("lxml", "HTML / XML 解析", False),
+    ("httpx", "HTTP 请求库", False),
+    ("openpyxl", "Excel 表格导入导出", False),
+    ("mutagen", "音乐标签读写", False),
+    ("pyzipper", "可选：证书记录的 AES-256 ZIP 加密导出，不装不影响其他功能", True),
+    ("websocket", "直播弹幕长连接", False),
+    ("playwright", "登录 / 采集浏览器驱动", False),
+)
+
+
+def prepare_install(key: str) -> str:
+    key = str(key or "")
+    if key not in {row[0] for row in _PYTHON_DEPENDENCIES}:
+        raise ValueError("所选依赖不支持安装，请刷新列表")
+    if getattr(sys, "frozen", False):
+        raise ValueError("未内置，请重装软件")
+    return key
+
+
+def install(key: str, *, on_progress=None, is_cancelled=None) -> dict:
+    from toolbox import dependency_installer
+
+    return dependency_installer.install_dependency(
+        prepare_install(key), progress=on_progress, cancel=is_cancelled)
+
 
 def dependency_status() -> dict:
     """逐项检测依赖可用性（只读）。"""
+    from toolbox import dependency_installer
+    from toolbox.livestream_summary import optional_runtime
+
     items = []
+    for key, usage, optional in _PYTHON_DEPENDENCIES:
+        snapshot = dependency_installer.dependency_status(key)
+        installed = bool(snapshot.get("installed"))
+        items.append({"key": key, "name": snapshot.get("name") or key,
+                      "usage": usage, "optional": optional, "ok": installed,
+                      "detail": snapshot.get("version") or snapshot.get("reason") or "未安装",
+                      "can_install": bool(snapshot.get("supported")) and not installed})
     for key, name, usage, check in _CHECKS:
         try:
             ok, detail = check()
@@ -99,9 +141,22 @@ def dependency_status() -> dict:
             ok, detail = False, f"检测异常: {str(exc)[:40]}"
         items.append({"key": key, "name": name, "usage": usage,
                       "ok": bool(ok), "detail": detail})
+    local = optional_runtime.status()
+    for key, name, kind, ready, detail in (
+        ("local_llm_runtime", "本地总结模块", "runtime",
+         any(row.get("installed") for row in local.get("runtimes", ())),
+         "CPU / GPU 模块独立下载，标准版与 FULL 版均不内置"),
+        ("local_llm_model", "本地总结模型", "model", bool(local.get("models")),
+         "GGUF 模型与模块分别准备，可下载或导入"),
+    ):
+        items.append({"key": key, "name": name, "usage": detail,
+                      "ok": ready, "optional": True,
+                      "detail": "已就绪" if ready else "未下载",
+                      "local_llm_kind": kind})
     return {
         "items": items,
         "ready": sum(1 for item in items if item["ok"]),
         "total": len(items),
-        "note": "只读检测；组件随软件整体安装 / 卸载，Web 端不提供单独安装或卸载。",
+        "note": "源码运行时可安装缺失的 Python 依赖；打包版缺失内置组件请重装软件。"
+                "本地总结模块和模型可分别下载、卸载。",
     }

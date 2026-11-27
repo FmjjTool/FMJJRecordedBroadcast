@@ -12,7 +12,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QComboBox, QCompleter, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QMessageBox, QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QMenu, QMessageBox, QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from gui_qt import theme
@@ -162,6 +162,7 @@ class LocalLlmComponentsPanel(QWidget):
         self._operation_error = ""
         self._icons = []
         self._actions = []
+        self._dependency_shortcuts = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -252,23 +253,89 @@ class LocalLlmComponentsPanel(QWidget):
     def is_busy(self):
         return self._cancel is not None
 
+    def add_dependency_shortcuts(self, layout, key):
+        """Expose the same managed actions beside a dependency status row."""
+        runtime = key == "local_llm_runtime"
+        prefix = "localLlmRuntime" if runtime else "localLlmModel"
+        for removing, text, suffix in ((False, "下载", "Download"),
+                                        (True, "卸载", "Remove")):
+            button = QPushButton(text)
+            button.setObjectName(prefix + suffix)
+            button.setProperty("variant", "secondary")
+            button.setProperty("menuButton", True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip("选择要" + text + "的" + ("CPU / GPU 模块" if runtime else "模型"))
+            menu = QMenu(button)
+            menu.aboutToShow.connect(
+                lambda m=menu, r=runtime, remove=removing:
+                self._populate_dependency_menu(m, r, remove))
+            button.setMenu(menu)
+            layout.addWidget(button)
+            self._dependency_shortcuts.append((button, runtime, removing))
+        self._sync_actions()
+
+    def _populate_dependency_menu(self, menu, runtime, removing):
+        menu.clear()
+        if self.is_busy() or self._busy_check():
+            menu.addAction("已有组件操作在进行中").setEnabled(False)
+            return
+        items = self._snapshot.get("runtimes" if runtime else
+                                   "models" if removing else "model_catalog", ())
+        for item in items:
+            if runtime and removing and not item.get("installed"):
+                continue
+            label = str(item.get("label") or item.get("name") or item["id"])
+            action = menu.addAction(label)
+            if removing:
+                action.setProperty("variant", "danger")
+            action.triggered.connect(
+                lambda _checked=False, value=item["id"], r=runtime, remove=removing:
+                self._run_dependency_shortcut(r, remove, value))
+        if menu.isEmpty():
+            menu.addAction("尚无可卸载的组件" if removing else "暂无可下载项，请刷新").setEnabled(False)
+
+    def _run_dependency_shortcut(self, runtime, removing, value):
+        combo = (self.runtime_combo if runtime else
+                 self.model_combo if removing else self.catalog_combo)
+        index = combo.findData(value)
+        if index < 0:
+            self.app.toast("组件列表已变化，请刷新后重试", "warning")
+            return
+        combo.setCurrentIndex(index)
+        callback = (self._remove_runtime if removing else self._install_runtime) if runtime else (
+            self._remove_model if removing else self._download_model)
+        callback()
+
     def _sync_actions(self, *_args):
         active = self.is_busy()
+        blocked = active or self._busy_check()
         supported = bool(self._snapshot.get("supported", False))
         for button in self._actions:
-            button.setEnabled(not active and supported)
-        self.refresh_button.setEnabled(not active)
+            button.setEnabled(not blocked and supported)
+        self.refresh_button.setEnabled(not blocked)
         self.stop_button.setEnabled(active and not self._cancel.is_set())
         for combo in (self.runtime_combo, self.catalog_combo, self.model_combo):
-            combo.setEnabled(not active and supported)
+            combo.setEnabled(not blocked and supported)
         selected = self.runtime_combo.currentData()
         installed = any(item.get("id") == selected and item.get("installed")
                         for item in self._snapshot.get("runtimes", ()))
-        self.remove_runtime_button.setEnabled(not active and supported and installed)
+        self.remove_runtime_button.setEnabled(not blocked and supported and installed)
         self.remove_model_button.setEnabled(
-            not active and supported and bool(self.model_combo.currentData()))
+            not blocked and supported and bool(self.model_combo.currentData()))
         self.download_button.setEnabled(
-            not active and supported and bool(self.catalog_combo.currentData()))
+            not blocked and supported and bool(self.catalog_combo.currentData()))
+        shortcuts = []
+        for button, runtime, removing in self._dependency_shortcuts:
+            # Dependency rows are rebuilt after detection; discard deleted Qt wrappers.
+            from shiboken6 import isValid
+            if not isValid(button):
+                continue
+            items = self._snapshot.get("runtimes" if runtime else
+                                       "models" if removing else "model_catalog", ())
+            available = any(item.get("installed") for item in items) if runtime and removing else bool(items)
+            button.setEnabled(not blocked and supported and available)
+            shortcuts.append((button, runtime, removing))
+        self._dependency_shortcuts = shortcuts
 
     def refresh(self):
         if self._refreshing or self.is_busy():

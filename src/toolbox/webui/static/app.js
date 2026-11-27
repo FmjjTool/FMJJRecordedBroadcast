@@ -8190,38 +8190,108 @@ function renderLivestreamSummary(root) {
         + '可在桌面端「全局设置 → 窗口过渡」关闭，切换立即保存并生效，仅影响本窗口。'
         + '此设置只作用于桌面主窗口，浏览器端仅提供说明。');
 
-      var deps = h('details', { class: 'card', style: 'margin-top:12px' });
-      deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
+      var deps = h('div', { class: 'card', style: 'margin-top:12px', 'data-dependency-settings': 'true' });
+      deps.appendChild(h('div', { class: 'row-title' }, '依赖与组件'));
       var depHost = h('div', { style: 'margin-top:8px' });
       deps.appendChild(depHost);
+      var depState = h('div', { class: 'small', role: 'status', 'aria-live': 'polite' });
+      var depJobHost = h('div');
+      deps.appendChild(depState);
+      deps.appendChild(depJobHost);
       host.appendChild(deps);
       var localLLMHost = h('div');
       host.appendChild(localLLMHost);
       window.FMJJLocalLLM.mountSettings(localLLMHost, {
         h: h, api: api, post: post, watchJob: watchJob, toast: toast
       });
-      depHost.replaceChildren(h('div', { class: 'loading' }, '正在检测依赖…'));
-      api('/api/system/deps').then(function (result) {
+      var depBusy = false, depInstallButtons = [];
+      function syncDependencyActions() {
+        depInstallButtons.forEach(function (button) { button.disabled = depBusy; });
+      }
+      function installDependency(item, button) {
+        if (depBusy) return;
+        depBusy = true;
+        syncDependencyActions();
+        depState.textContent = '正在准备安装 ' + item.name + '…';
+        depJobHost.replaceChildren(h('div', { class: 'progress is-indeterminate',
+          role: 'progressbar', 'aria-label': '安装 ' + item.name }, h('i', { style: 'width:35%' })));
+        post('/api/system/deps/install', { key: item.key }).then(function (result) {
+          watchJob(depJobHost, result.job, function (job) {
+            depState.textContent = (job.result || {}).summary || item.name + ' 已安装并通过校验';
+            toast(depState.textContent, 'success');
+          }, {
+            cancelable: true, indeterminate: true,
+            onSettled: function (job) {
+              depBusy = false;
+              syncDependencyActions();
+              if (job.status === 'done') loadDependencies();
+              else {
+                depState.textContent = job.status === 'cancelled' ? '已取消，可重新安装'
+                  : item.name + ' 安装失败：' + (job.error || '请检查网络后重试');
+                button.textContent = '重试';
+              }
+            }
+          });
+        }).catch(function (error) {
+          depBusy = false;
+          syncDependencyActions();
+          depJobHost.replaceChildren();
+          depState.textContent = item.name + ' 安装失败：' + error.message;
+          button.textContent = '重试';
+        });
+      }
+      function loadDependencies() {
+        depHost.replaceChildren(h('div', { class: 'loading' }, '正在检测依赖…'));
+        api('/api/system/deps').then(function (result) {
         depHost.replaceChildren();
+        depInstallButtons = [];
         (result.items || []).forEach(function (item) {
-          depHost.appendChild(h('div', {
+          var badge = h('span', { class: 'badge ' + (item.ok ? 'ok' : item.optional ? '' : 'warn') },
+            item.ok ? '已就绪' : item.optional ? '可选' : '未就绪');
+          var row = h('div', {
+            'data-dependency-key': item.key,
             style: 'display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;'
               + 'padding:6px 0;border-bottom:1px solid var(--border)'
           },
             h('span', { style: 'min-width:110px;font-weight:bold' }, item.name),
-            h('span', { class: 'badge ' + (item.ok ? 'ok' : 'warn') },
-              item.ok ? '已就绪' : '未就绪'),
+            badge,
             h('span', { class: 'muted small' }, item.usage || ''),
             h('span', { style: 'flex:1' }),
-            h('span', { class: 'muted small' }, item.detail || '')));
+            h('span', { class: 'muted small' }, item.detail || ''));
+          if (item.can_install) {
+            var install = h('button', { class: 'btn', type: 'button' }, '安装');
+            install.addEventListener('click', function () { installDependency(item, install); });
+            depInstallButtons.push(install);
+            row.appendChild(install);
+          }
+          if (item.local_llm_kind) {
+            var actions = h('div', { style: 'flex-basis:100%;min-width:0' });
+            row.appendChild(actions);
+            window.FMJJLocalLLM.mountQuickActions(actions, {
+              h: h, api: api, post: post, watchJob: watchJob, toast: toast,
+              onStatus: function (data) {
+                var ready = item.local_llm_kind === 'runtime'
+                  ? (data.runtimes || []).some(function (runtime) { return runtime.installed; })
+                  : Boolean((data.models || []).length);
+                badge.className = 'badge ' + (ready ? 'ok' : '');
+                badge.textContent = ready ? '已就绪' : '可选';
+              }
+            }, item.local_llm_kind);
+          }
+          depHost.appendChild(row);
         });
+        syncDependencyActions();
         depHost.appendChild(h('div', {
           class: 'muted small', style: 'margin-top:8px'
         }, result.note || ''));
       }).catch(function (error) {
+        var retry = h('button', { class: 'btn', type: 'button' }, '重试');
+        retry.addEventListener('click', loadDependencies);
         depHost.replaceChildren(h('div', { class: 'error' },
-          '依赖检测失败：' + error.message));
+          '依赖检测失败：' + error.message), retry);
       });
+      }
+      loadDependencies();
 
       host.appendChild(h('div', { class: 'muted small' }, settings.note || ''));
     }).catch(function (error) {

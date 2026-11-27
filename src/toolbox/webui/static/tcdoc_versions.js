@@ -99,7 +99,7 @@
       });
       area.replaceChildren(h('div', { class: 'small muted', style: 'margin:8px 0' },
         '只读历史 · 表头可排序 · 双击行或按 Enter 查看该行留存图片'),
-      result.total ? h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' },
+      result.total ? h('div', { class: 'table-wrap', style: 'max-height:55vh;overflow:auto' }, h('table', { class: 'db-table' },
         h('thead', null, head), body)) : h('p', { class: 'muted small' }, '此版本的工作表没有记录，可切换其他工作表'),
       pager, pictures);
       }).catch(function (error) {

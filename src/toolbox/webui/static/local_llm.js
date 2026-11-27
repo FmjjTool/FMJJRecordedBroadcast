@@ -250,5 +250,121 @@
     load();
   }
 
-  global.FMJJLocalLLM = { createOptionsForm: createOptionsForm, mountSettings: mountSettings };
+  function mountQuickActions(host, helpers, kind) {
+    var h = helpers.h, busy = false, snapshot = null, request = 0;
+    var controls = h('div', { class: 'toolbar', style: 'margin-top:8px' });
+    var stateLine = h('div', { class: 'small', role: 'status', 'aria-live': 'polite' });
+    var jobHost = h('div');
+    host.replaceChildren(controls, stateLine, jobHost);
+
+    function sync() {
+      Array.prototype.forEach.call(controls.querySelectorAll('button,select'), function (control) {
+        control.disabled = busy || !snapshot || !snapshot.supported
+          || control.dataset.available === 'false';
+      });
+    }
+    function start(action, payload, button) {
+      if (busy) return;
+      busy = true;
+      sync();
+      stateLine.textContent = '正在准备任务…';
+      jobHost.replaceChildren(h('div', {
+        class: 'progress is-indeterminate', role: 'progressbar', 'aria-label': '准备本地总结组件任务'
+      }, h('i', { style: 'width:35%' })));
+      helpers.post('/api/system/llm/' + action, payload).then(function (result) {
+        helpers.watchJob(jobHost, result.job, function (job) {
+          stateLine.textContent = (job.result || {}).summary || '已完成';
+        }, {
+          cancelable: true, indeterminate: true,
+          onSettled: function (job) {
+            busy = false;
+            sync();
+            if (job.status === 'done') {
+              helpers.toast((job.result || {}).summary || '已完成', 'success');
+              load();
+              if (helpers.onChanged) helpers.onChanged();
+            } else {
+              stateLine.textContent = job.status === 'cancelled' ? '已取消，可重新开始'
+                : '失败：' + (job.error || '请检查网络后重试');
+              if (job.status === 'error') button.textContent = '重试';
+            }
+          }
+        });
+      }).catch(function (error) {
+        busy = false;
+        sync();
+        jobHost.replaceChildren();
+        stateLine.textContent = '准备失败：' + error.message;
+        button.textContent = '重试';
+      });
+    }
+    function draw(data) {
+      snapshot = data;
+      if (helpers.onStatus) helpers.onStatus(data);
+      controls.replaceChildren();
+      var isRuntime = kind === 'runtime';
+      var choices = h('select', {
+        class: 'select grow', 'aria-label': isRuntime ? '本地总结模块' : '本地总结推荐模型',
+        style: 'min-width:140px;max-width:100%'
+      });
+      (isRuntime ? data.runtimes || [] : data.model_catalog || []).forEach(function (item) {
+        choices.appendChild(h('option', { value: item.id }, item.label + ' · '
+          + sizeText(item.download_size || item.size)));
+      });
+      var download = h('button', { class: 'btn', type: 'button' }, '下载');
+      download.dataset.available = String(choices.options.length > 0);
+      download.addEventListener('click', function () {
+        start(isRuntime ? 'install-runtime' : 'download-model',
+          isRuntime ? { backend: choices.value } : { model: choices.value }, download);
+      });
+      controls.appendChild(choices);
+      controls.appendChild(download);
+      var installed = isRuntime ? choices : h('select', {
+        class: 'select grow', 'aria-label': '本地总结已安装模型', style: 'min-width:140px;max-width:100%'
+      });
+      if (!isRuntime) {
+        (data.models || []).forEach(function (item) {
+          installed.appendChild(h('option', { value: item.id }, (item.name || item.id)
+            + ' · ' + sizeText(item.size)));
+        });
+        if (!installed.options.length) installed.appendChild(h('option', { value: '' }, '尚未安装模型'));
+        controls.appendChild(searchableModelList(h, installed, '本地总结已安装模型'));
+      }
+      var remove = h('button', { class: 'btn danger', type: 'button' }, '卸载');
+      function syncRemoval() {
+        remove.dataset.available = String(isRuntime
+          ? (data.runtimes || []).some(function (item) { return item.id === installed.value && item.installed; })
+          : Boolean(installed.value));
+        sync();
+      }
+      installed.addEventListener('change', syncRemoval);
+      remove.addEventListener('click', function () {
+        var name = installed.selectedOptions.length ? installed.selectedOptions[0].textContent : '';
+        if (global.confirm('卸载「' + name + '」？只删除本软件管理的组件副本，'
+            + (isRuntime ? '模型与配置' : '导入源文件与推理模块') + '保留，可重新下载。')) {
+          start(isRuntime ? 'remove-runtime' : 'remove-model',
+            { id: installed.value, confirmed: true }, remove);
+        }
+      });
+      controls.appendChild(remove);
+      syncRemoval();
+      if (!data.supported) stateLine.textContent = '当前系统不支持安装这些本地组件';
+    }
+    function load() {
+      var serial = ++request;
+      helpers.api('/api/system/llm').then(function (data) {
+        if (serial === request && host.isConnected) draw(data);
+      }).catch(function (error) {
+        if (serial !== request || !host.isConnected) return;
+        stateLine.textContent = '组件状态读取失败：' + error.message;
+        var retry = h('button', { class: 'btn', type: 'button' }, '重试');
+        retry.addEventListener('click', load);
+        controls.replaceChildren(retry);
+      });
+    }
+    load();
+  }
+
+  global.FMJJLocalLLM = { createOptionsForm: createOptionsForm, mountSettings: mountSettings,
+    mountQuickActions: mountQuickActions };
 }(window));

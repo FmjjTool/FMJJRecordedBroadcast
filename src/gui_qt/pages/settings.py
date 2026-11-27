@@ -9,13 +9,14 @@
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QTimeEdit, QToolButton, QVBoxLayout,
+    QMessageBox, QProgressBar, QPushButton, QScrollArea, QTimeEdit, QToolButton, QVBoxLayout,
     QWidget, QFrame,
 )
 from PySide6.QtGui import QPixmap
@@ -395,6 +396,30 @@ class GlobalSettingsPage(BasePage):
         self.dep_status.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         self.dep_status.setWordWrap(True)
         card.content_layout.addWidget(self.dep_status)
+        self._pip_key = ""
+        self._pip_cancel = None
+        self._pip_retry = None
+        self.dep_install_feedback = QWidget(self)
+        install_layout = QVBoxLayout(self.dep_install_feedback)
+        install_layout.setContentsMargins(0, 4, 0, 0)
+        install_layout.setSpacing(4)
+        self.dep_install_status = QLabel()
+        self.dep_install_status.setWordWrap(True)
+        install_layout.addWidget(self.dep_install_status)
+        install_controls = QHBoxLayout()
+        self.dep_install_progress = QProgressBar()
+        self.dep_install_progress.setFixedHeight(16)
+        self.dep_install_progress.setRange(0, 100)
+        self.dep_install_progress.setValue(0)
+        install_controls.addWidget(self.dep_install_progress, 1)
+        self.dep_install_cancel = QPushButton("取消")
+        self.dep_install_cancel.clicked.connect(self._cancel_pip_install)
+        install_controls.addWidget(self.dep_install_cancel)
+        self.dep_install_retry = QPushButton("重试")
+        self.dep_install_retry.clicked.connect(self._retry_pip_install)
+        install_controls.addWidget(self.dep_install_retry)
+        install_layout.addLayout(install_controls)
+        self.dep_install_feedback.hide()
         v.addWidget(card)
         # 骨架屏加载：检测在后台线程跑，页面打开即刻渲染灰色占位条（__init__ 末尾 on_show 已触发）
         self._dep_cache = None      # [(key, name, ok, version)] 上次检测结果
@@ -605,12 +630,25 @@ class GlobalSettingsPage(BasePage):
     def shutdown(self):
         self.on_hide()
         self.local_llm_panel.cancel()
+        self._cancel_pip_install()
 
     def has_active_tasks(self):
         return self._dep_downloading or self.local_llm_panel.is_busy()
 
     def _set_local_llm_busy(self, busy):
         self._dep_downloading = bool(busy)
+        self._sync_dependency_busy()
+
+    def _sync_dependency_busy(self):
+        busy = self._dep_downloading or self._ffmpeg_installing
+        for index in range(self.dependency_layout.count()):
+            row = self.dependency_layout.itemAt(index).widget()
+            if row is None:
+                continue
+            for button in row.findChildren(QPushButton):
+                if button not in (self.dep_install_cancel, self.dep_install_retry):
+                    button.setEnabled(not busy)
+        self.local_llm_panel._sync_actions()
 
     # ---- WebUI 独立服务 ----
     def _webui(self):
@@ -1379,7 +1417,7 @@ class GlobalSettingsPage(BasePage):
          "以图搜图的 CLIP 视觉编码器（约 85MB，仅图识别使用）",
          "https://hf-mirror.com/", True, "clip_model"),
         ("local_llm_runtime", "本地总结模块", "_check_local_llm_runtime_detail",
-         "可选 CPU / GPU 推理模块，在下方独立下载；FULL 版也不内置",
+         "可选 CPU / GPU 推理模块，可在右侧选择下载或卸载；FULL 版也不内置",
          "https://github.com/ggml-org/llama.cpp/releases", True, "local_llm"),
         ("local_llm_model", "本地总结模型", "_check_local_llm_model_detail",
          "可选 GGUF 模型，与推理模块分开准备；支持下载或导入",
@@ -1449,6 +1487,9 @@ class GlobalSettingsPage(BasePage):
     # ----- 骨架屏 -----
 
     def _clear_dep_rows(self):
+        if hasattr(self, "dep_install_feedback"):
+            self.dep_install_feedback.hide()
+            self.dep_install_feedback.setParent(self)
         while self.dependency_layout.count():
             item = self.dependency_layout.takeAt(0)
             w = item.widget()
@@ -1523,8 +1564,13 @@ class GlobalSettingsPage(BasePage):
             row.setObjectName("depRow")
             row.setStyleSheet(
                 "QFrame#depRow { background: %s; border-radius: 4px; }" % row_bg)
-            h = QHBoxLayout(row)
-            h.setContentsMargins(8, 4, 8, 4)
+            row.setProperty("dependencyKey", key)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(8, 4, 8, 4)
+            row_layout.setSpacing(4)
+            h = QHBoxLayout()
+            row_layout.addLayout(h)
+            h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(8)
             # 状态指示
             mark = QLabel(mark_text)
@@ -1571,6 +1617,8 @@ class GlobalSettingsPage(BasePage):
                     h.addWidget(hint)
                 else:
                     install_btn = self._dep_btn("安装")
+                    install_btn.setObjectName("dependencyInstall_" + key)
+                    install_btn.setProperty("variant", "primary")
                     install_btn.clicked.connect(
                         lambda _c=False, k=key, n=name, u=url:
                         self._pip_install(k, n, u))
@@ -1614,6 +1662,8 @@ class GlobalSettingsPage(BasePage):
                     h.addWidget(uninstall)
             elif action == "clip_model" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_clip_model))
+            elif action == "local_llm":
+                self.local_llm_panel.add_dependency_shortcuts(h, key)
             elif action == "proxy_core" and not ok:
                 dl_btn = self._dep_btn("下载", self._download_proxy_core)
                 dl_btn.setToolTip("自动测速选最快的加速源，支持断点续传")
@@ -1675,7 +1725,11 @@ class GlobalSettingsPage(BasePage):
                     optional_missing += 1
                 else:
                     missing += 1
+            if key == self._pip_key:
+                row_layout.addWidget(self.dep_install_feedback)
+                self.dep_install_feedback.show()
             self.dependency_layout.addWidget(row)
+        self._sync_dependency_busy()
         # 总览标签 —— 通过顶部右侧的依赖卡片对外展示
         if missing or optional_missing:
             parts = []
@@ -1989,16 +2043,15 @@ class GlobalSettingsPage(BasePage):
         """依赖行里的小按钮（高亮主色，等比缩进）。"""
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton { background: palette(bright-text); color: white;"
-            " border-radius: 3px; padding: 3px 10px; font-size: 11px; }"
-            "QPushButton:hover { background: palette(bright-text); }")
+        btn.setProperty("variant", "secondary")
+        btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
         if slot is not None:
             btn.clicked.connect(lambda _c=False: slot())
         return btn
 
     def _add_uninstall_btn(self, layout, name, detail, action, tooltip=""):
         btn = self._dep_btn("卸载")
+        btn.setProperty("variant", "danger")
         btn.setToolTip(tooltip or ("卸载 %s" % name))
         btn.clicked.connect(
             lambda _checked=False: self._confirm_and_uninstall(name, detail, action))
@@ -2280,30 +2333,77 @@ class GlobalSettingsPage(BasePage):
             self._open_browser_for_dep("FFmpeg", FFMPEG_DOWNLOAD_PAGE)
 
     def _pip_install(self, key, name, cmd):
-        """pip install 走 subprocess，后台线程不阻塞 UI；结果 toast 提示。"""
-        self.app.toast(f"开始安装 {name} ...", "info")
+        """Install into the running interpreter with persistent, cancellable feedback."""
+        from toolbox import dependency_installer
+        if getattr(sys, "frozen", False):
+            self.app.toast("未内置，请重装软件", "warning")
+            return
+        if self._dep_downloading or self._ffmpeg_installing:
+            self.app.toast("已有组件操作在进行中，请结束后重试", "warning")
+            return
+        self._pip_key = key
+        self._pip_retry = (key, name, cmd)
+        cancel = threading.Event()
+        self._pip_cancel = cancel
+        self._dep_downloading = True
+        self.dep_install_status.setText(name + "：正在连接安装源…")
+        self.dep_install_status.setProperty("role", "caption")
+        self.dep_install_progress.setRange(0, 0)
+        self.dep_install_cancel.show()
+        self.dep_install_cancel.setEnabled(True)
+        self.dep_install_retry.hide()
+        if self._dep_cache is not None:
+            self._fill_dep_rows(self._dep_cache)
+        self._sync_dependency_busy()
+        self.scroll.sync_content()
 
-        def work():
-            import subprocess
-            try:
-                p = subprocess.run(
-                    cmd.split() + ["--disable-pip-version-check", "-q"],
-                    capture_output=True, timeout=300, text=True)
-                if p.returncode == 0:
-                    return True, ""
-                return False, (p.stderr or p.stdout or "").strip()[:200]
-            except Exception as e:
-                return False, str(e)[:200]
+        def progress(percent, message):
+            post_to_main(self._set_pip_progress, percent, name + "：" + message)
 
         def done(result, err):
-            ok, msg = result
-            if err or not ok:
-                self.app.toast(f"{name} 安装失败: {msg or err}", "error")
+            self._pip_cancel = None
+            self._dep_downloading = False
+            self.dep_install_progress.setRange(0, 100)
+            self.dep_install_cancel.hide()
+            if err or not result:
+                cancelled = cancel.is_set() or isinstance(
+                    err, dependency_installer.DependencyInstallCancelled)
+                message = (name + " 安装已取消，可点击重试。" if cancelled else
+                           name + " 安装失败：" + str(err or "未返回安装结果")[:240]
+                           + "；请检查网络与安装环境后重试。")
+                self.dep_install_status.setText(message)
+                self.dep_install_progress.setValue(0)
+                self.dep_install_retry.show()
             else:
-                self.app.toast(f"{name} 安装完成", "success")
-                self._refresh_dependencies()
+                self.dep_install_progress.setValue(100)
+                self.dep_install_status.setText(
+                    name + " 已安装并通过验证，已用于当前程序环境。")
+                self.dep_install_retry.hide()
+            self._sync_dependency_busy()
+            self._refresh_dependencies()
 
-        run_bg(work, done)
+        run_bg(lambda: dependency_installer.install_dependency(
+            key, progress=progress, cancel=cancel), done, owner=self)
+
+    def _set_pip_progress(self, percent, message):
+        if self._pip_cancel is None:
+            return
+        if percent is None:
+            self.dep_install_progress.setRange(0, 0)
+        else:
+            self.dep_install_progress.setRange(0, 100)
+            self.dep_install_progress.setValue(max(0, min(100, int(percent))))
+        self.dep_install_status.setText(message)
+
+    def _cancel_pip_install(self):
+        if self._pip_cancel is not None:
+            self._pip_cancel.set()
+            self.dep_install_cancel.setEnabled(False)
+            self.dep_install_status.setText("正在取消安装，已完成的安装步骤保留…")
+
+    def _retry_pip_install(self):
+        if self._pip_retry is not None:
+            self._pip_install(*self._pip_retry)
 
     def _open_browser_for_dep(self, name, url):
         """打开依赖的官方下载页（FFmpeg 教程里的「手动安装」入口）。"""

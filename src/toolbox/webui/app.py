@@ -12,6 +12,7 @@ from toolbox.webui.services.collected import CollectedService
 from toolbox.webui.services.cover import CoverService
 from toolbox.webui.services.certificate import CertificateService
 from toolbox.webui.services.douyin_index import DouyinIndexService
+from toolbox.webui.services.dependencies import DependencyService
 from toolbox.webui.services.fangroups import FanGroupService
 from toolbox.webui.services.info_accounts import InfoAccountsService
 from toolbox.webui.services.image_sorter import ImageSorterService
@@ -46,6 +47,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     assets = AssetService(jobs)
     record = RecordService(jobs)
     modules = ModuleService()
+    dependencies = DependencyService(jobs)
     offline = OfflineService(jobs)
     tool_service = ToolService(jobs)
     tcdoc = TCDocService(jobs)
@@ -220,6 +222,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/system/theme", save_system_theme)
 
     server.get("/api/system/deps", lambda req: modules.dependencies())
+    server.post("/api/system/deps/install", lambda req: dependencies.start_install(
+        dict(req.json or {})))
     server.get("/api/system/llm", lambda req: local_llm.overview())
     server.get("/api/system/llm/sources", lambda req: local_llm.sources())
     for action in ("install-runtime", "download-model", "import-model",
