@@ -1,9 +1,9 @@
-"""本地资料站：同步小程序主源与 Web 投影，读取监控数据重建并一键起站。
+"""本地资料站：同步三个仓库，按需运行微信小程序开发工程或 Wiki 网站。
 
 页面提供仓库同步与本地 Wiki 网站启停：
-- 仓库可单独或全部更新；小程序主源只同步 / 查看源码，不在本地资料站启动
+- 仓库可单独或全部更新；小程序在微信开发者工具打开，Wiki 由网页与 API 组成
 - Wiki 网站由前端和 API 组成，启动时一起运行
-- 一键流程更新全部仓库 → 安装依赖 → 重建站点库 → 构建前端 → 启动 Wiki 网站
+- 一键 Wiki 部署更新全部三个仓库 → 安装依赖 → 重建并构建 Wiki → 启动 Wiki 网站
 - 启动后自动打开系统浏览器，也可随时点「打开网站」
 - 数据复用「腾讯文档监控」已同步的 tables.db，不重复联网拉取
 - 站点访问监控：查询 mandisa.wiki 后台统计（内部 analytics API），按日期落本地库并支持每日定时
@@ -28,7 +28,7 @@ from gui_qt.pages.base import BasePage
 from toolbox.tcdoc import config as tcdoc_cfg
 from toolbox.webwiki import (
     analytics, config as wiki_cfg, credentials as wiki_creds, deploy, gitops,
-    localimages, server,
+    localimages, projects, server,
 )
 
 
@@ -158,20 +158,20 @@ class LocalWikiPage(BasePage):
     def _build_actions_card(self):
         card, box = self._card(
             "项目同步与网站启动",
-            "小程序主源可单独更新；Wiki 网站由前端与 API 一起运行")
-        self.deploy_btn = QPushButton("更新全部仓库并启动 Wiki 网站")
+            "分别更新三个仓库；启动时可选小程序、Wiki 网站或全部项目")
+        self.deploy_btn = QPushButton("一键更新全部并部署 Wiki 网站")
         self.deploy_btn.setObjectName("wikiPrimary")
         self.deploy_btn.setMinimumHeight(40)
         self.deploy_btn.setToolTip(
-            "更新小程序主源、Wiki API 和 Wiki 网站前端 → 安装依赖 → "
-            "重建站点数据 → 构建前端 → 启动 Wiki 网站（网页 + API）")
+            "更新微信小程序主程序、Wiki API 和 Wiki 网站前端 → 安装依赖 → "
+            "重建站点数据 → 构建前端 → 启动 Wiki 网站（网页 + API）；"
+            "不会打开微信开发者工具或发布小程序")
         self.deploy_btn.clicked.connect(self._deploy)
         box.addWidget(self.deploy_btn)
         self._task_buttons.append(self.deploy_btn)
 
         scope_help = QLabel(
-            "一键流程会更新全部 3 个仓库；网站已运行时会先停止旧服务再启动。"
-            "小程序仓库只同步源码，不会在这里运行。")
+            "一键部署更新全部 3 个仓库并部署 Wiki 网站；不会打开微信开发者工具或发布小程序。")
         scope_help.setObjectName("wikiMuted")
         scope_help.setWordWrap(True)
         box.addWidget(scope_help)
@@ -180,10 +180,10 @@ class LocalWikiPage(BasePage):
         repo_row.setSpacing(8)
         repo_row.addWidget(QLabel("更新范围"))
         self.repo_scope = QComboBox()
-        self.repo_scope.setMinimumWidth(250)
+        self.repo_scope.setMinimumWidth(160)
         self.repo_scope.setSizeAdjustPolicy(
             QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.repo_scope.setMinimumContentsLength(14)
+        self.repo_scope.setMinimumContentsLength(8)
         self.repo_scope.addItem("全部仓库（3）", "all")
         for option in wiki_cfg.REPO_OPTIONS:
             label = f"{option['label']}（{option['name']}）"
@@ -199,6 +199,36 @@ class LocalWikiPage(BasePage):
         repo_row.addStretch(1)
         box.addLayout(repo_row)
         self._task_buttons.append(self.pull_btn)
+
+        start_row = QHBoxLayout()
+        start_row.setSpacing(8)
+        start_row.addWidget(QLabel("运行项目"))
+        self.start_scope = QComboBox()
+        self.start_scope.setMinimumWidth(160)
+        self.start_scope.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.start_scope.setMinimumContentsLength(8)
+        self.start_scope.addItem("微信小程序（开发者工具）", "miniapp")
+        self.start_scope.addItem("Wiki 网站（网页 + API）", "wiki")
+        self.start_scope.addItem("全部项目", "all")
+        self.start_scope.setToolTip(
+            "小程序会在微信开发者工具中打开；Wiki 网站会同时启动网页与 API；"
+            "全部项目会执行两项操作")
+        start_row.addWidget(self.start_scope)
+        self.start_selected_btn = QPushButton("运行所选项目")
+        self.start_selected_btn.setObjectName("wikiButton")
+        self.start_selected_btn.setMinimumHeight(34)
+        self.start_selected_btn.clicked.connect(self._start_selected_projects)
+        start_row.addWidget(self.start_selected_btn)
+        start_row.addStretch(1)
+        box.addLayout(start_row)
+        start_note = QLabel(
+            "小程序仅在本机开发者工具中打开，不会上传或发布；"
+            "Wiki 网站启动时会一起运行网页与 API。")
+        start_note.setObjectName("wikiMuted")
+        start_note.setWordWrap(True)
+        box.addWidget(start_note)
+        self._task_buttons.append(self.start_selected_btn)
 
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
@@ -225,7 +255,6 @@ class LocalWikiPage(BasePage):
             ("安装依赖", self._install_deps),
             ("重建站点数据", self._sync_docs),
             ("构建 Wiki 前端", self._build_frontend),
-            ("启动 Wiki 网站 + API", self._start_service),
             ("打开 Wiki 网站", self._open_site),
             ("停止 Wiki 网站 + API", self._stop_service),
             ("打开目录", self._open_dir),
@@ -233,7 +262,6 @@ class LocalWikiPage(BasePage):
         self.deps_btn = None
         self.sync_btn = None
         self.build_btn = None
-        self.start_btn = None
         self.open_btn = None
         self.stop_btn = None
         self.dir_btn = None
@@ -244,8 +272,8 @@ class LocalWikiPage(BasePage):
             btn.clicked.connect(slot)
             grid.addWidget(btn, index // 3, index % 3)
             self._task_buttons.append(btn)
-            key = ("deps", "sync", "build", "start",
-                   "open", "stop", "dir")[index]
+            key = ("deps", "sync", "build", "open",
+                   "stop", "dir")[index]
             setattr(self, f"{key}_btn", btn)
         for column in range(3):
             grid.setColumnStretch(column, 1)
@@ -595,7 +623,7 @@ class LocalWikiPage(BasePage):
             self.data_status.setText(text)
         else:
             self.data_status.setText(
-                "尚未重建（点「重建站点数据」或「更新全部仓库并启动 Wiki 网站」）")
+                "尚未重建（点「重建站点数据」或「一键更新全部并部署 Wiki 网站」）")
         self.path_label.setText(str(wiki_cfg.root_dir()))
         self._update_service_label()
         self._refresh_actions()
@@ -627,7 +655,7 @@ class LocalWikiPage(BasePage):
         self.deps_btn.setEnabled(idle and api_ok and web_ok)
         self.sync_btn.setEnabled(idle and api_ok and venv_ok)
         self.build_btn.setEnabled(idle and web_ok and node_ok)
-        self.start_btn.setEnabled(idle and venv_ok and dist_ok and not running)
+        self.start_selected_btn.setEnabled(idle)
         self.open_btn.setEnabled(idle and running)
         self.stop_btn.setEnabled(idle and running)
         self.dir_btn.setEnabled(idle)
@@ -764,6 +792,34 @@ class LocalWikiPage(BasePage):
 
         self._start_task("启动 Wiki 网站 + API", work, on_ok=after)
 
+    def _start_selected_projects(self):
+        scope = self.start_scope.currentData()
+        start_miniapp = scope in ("miniapp", "all")
+        start_wiki = scope in ("wiki", "all")
+        root = wiki_cfg.root_dir()
+        if start_wiki and self.service.root != root:
+            self.service = server.SiteService(root)
+
+        def work(log):
+            return projects.start_selected(scope, root, log, service=self.service)
+
+        def after(_result):
+            if start_wiki and self.auto_open.isChecked():
+                server.open_site(self.service.url)
+            self._update_service_label()
+            self._refresh_actions()
+
+        def failed(err):
+            if (start_wiki and self.auto_open.isChecked()
+                    and isinstance(err, projects.ProjectStartError)
+                    and "Wiki 网站（网页 + API）" in err.completed
+                    and self.service.running):
+                server.open_site(self.service.url)
+            return False
+
+        title = "运行所选项目" if scope != "all" else "运行全部项目"
+        self._start_task(title, work, on_ok=after, on_error=failed)
+
     def _open_site(self):
         if not self.service.running:
             QMessageBox.information(
@@ -796,7 +852,7 @@ class LocalWikiPage(BasePage):
             self._update_service_label()
             self._refresh_actions()
 
-        self._start_task("更新全部仓库并启动 Wiki 网站",
+            self._start_task("一键更新全部并部署 Wiki 网站",
                          lambda log: self._deploy_with_retry(root, token, log),
                          on_ok=after, on_error=self._deploy_failed)
 

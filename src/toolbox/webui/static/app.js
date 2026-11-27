@@ -3330,7 +3330,7 @@ function renderLivestreamSummary(root) {
 
       var wikiJobHost = h('div', { style: 'margin-bottom:12px' });
       var deployBtn = h('button', { class: 'btn primary', type: 'button' },
-        '更新全部仓库并启动 Wiki 网站');
+        '一键更新全部并部署 Wiki 网站');
       var repoSelect = h('select', {
         class: 'select',
         title: '单独更新只同步代码，不构建或启动服务'
@@ -3348,8 +3348,15 @@ function renderLivestreamSummary(root) {
       pullBtn.disabled = !data.github.logged_in;
       var rebuildBtn = h('button', { class: 'btn', type: 'button' },
         '重建站点数据');
-      var startBtn = h('button', { class: 'btn', type: 'button' },
-        '启动 Wiki 网站 + API');
+      var projectSelect = h('select', { class: 'select' });
+      (data.project_options || []).forEach(function (project) {
+        projectSelect.appendChild(h('option', {
+          value: project.value,
+          title: project.description || ''
+        }, project.label));
+      });
+      var startProjectBtn = h('button', { class: 'btn', type: 'button' },
+        '运行所选项目');
       var stopBtn = h('button', { class: 'btn', type: 'button' },
         '停止 Wiki 网站 + API');
       var collectBtn = h('button', { class: 'btn', type: 'button' },
@@ -3358,7 +3365,7 @@ function renderLivestreamSummary(root) {
         '打开站点');
       var wikiBusy = false;
 
-      function wikiAction(button, url, body, confirmText, extraControls) {
+      function wikiAction(button, url, body, confirmText, extraControls, cancelable) {
         if (wikiBusy) return;
         if (confirmText && !window.confirm(confirmText)) return;
         wikiBusy = true;
@@ -3383,7 +3390,7 @@ function renderLivestreamSummary(root) {
             toast(outcome.summary || '已完成', 'success');
             renderLocalWiki(root);
           }, {
-            cancelable: true,
+            cancelable: cancelable !== false,
             onSettled: function (job) {
               wikiBusy = false;
               unlock();
@@ -3409,18 +3416,20 @@ function renderLivestreamSummary(root) {
       });
       deployBtn.addEventListener('click', function () {
         wikiAction(deployBtn, '/api/tools/localwiki/deploy', { confirmed: true },
-          '一键部署会：更新小程序主源、Wiki API、Wiki 网站前端 3 个仓库 → '
+          '一键部署会：更新微信小程序主程序、Wiki API、Wiki 网站前端 3 个仓库 → '
           + '安装 Python 与 Node 依赖 → 重建站点数据 → 构建前端 → '
-          + '启动 Wiki 网站（网页 + API）。小程序主源只同步源码，不会在这里运行。'
+          + '启动 Wiki 网站（网页 + API）。不会打开微信开发者工具或发布小程序。'
           + '需要桌面端已登录 GitHub。确认继续？');
+      });
+      startProjectBtn.addEventListener('click', function () {
+        wikiAction(startProjectBtn, '/api/tools/localwiki/projects/start', {
+          scope: projectSelect.value
+        }, '', [projectSelect], false);
       });
       rebuildBtn.addEventListener('click', function () {
         wikiAction(rebuildBtn, '/api/tools/localwiki/rebuild',
           { confirmed: true },
           '将重新读取本地腾讯文档快照并重建站点数据库、重新构建前端。确认继续？');
-      });
-      startBtn.addEventListener('click', function () {
-        wikiAction(startBtn, '/api/tools/localwiki/service/start', {});
       });
       stopBtn.addEventListener('click', function () {
         if (!window.confirm('停止本地站点服务？WebUI 本身不受影响。')) return;
@@ -3461,9 +3470,11 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           h('span', { class: 'muted small' }, '更新范围'), repoSelect, pullBtn),
         h('div', { class: 'muted small', style: 'margin-bottom:8px' },
-          data.note || '小程序主源只同步源码；Wiki 网站需同时启动网页与 API。'),
+          data.note || '可选启动小程序、Wiki 网站或全部项目；小程序仅在开发者工具打开。'),
+        h('div', { class: 'toolbar', style: 'margin-bottom:8px' },
+          h('span', { class: 'muted small' }, '运行项目'), projectSelect, startProjectBtn),
         h('div', { class: 'toolbar' },
-          deployBtn, rebuildBtn, startBtn, stopBtn, collectBtn, openSiteBtn,
+          deployBtn, rebuildBtn, stopBtn, collectBtn, openSiteBtn,
           h('span', { class: 'muted small' }, '改端口仍在桌面端')),
         wikiJobHost));
 

@@ -1,7 +1,7 @@
 """WebUI 资料站：仓库同步、站点启停、访问统计与源文档链接。
 
-可执行：一键部署并启动（拉取私有仓库 → 装依赖 → 重建站点数据 → 构建前端 → 启动）、
-重建站点数据、启动 / 停止服务、采集今日统计、保存后台密码。
+可执行：运行微信小程序开发工程、启动 Wiki 网站或两者；一键更新全部仓库并部署 Wiki、
+重建站点数据、停止 Wiki 网站、采集今日统计、保存后台密码。
 GitHub 登录态、后台密码都复用桌面端已保存的凭据，不在页面回显。
 """
 
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+
+from toolbox.webwiki import projects as wiki_projects
 
 _SERVICE = None
 _LOCK = threading.Lock()
@@ -119,6 +121,7 @@ def overview() -> dict:
         "github": {"logged_in": logged_in},
         "repos": repos,
         "repo_options": list(wiki_cfg.REPO_OPTIONS),
+        "project_options": list(wiki_projects.PROJECT_OPTIONS),
         "data": {
             "exists": bool(data.get("exists")),
             "mtime": _ts(data.get("mtime")),
@@ -165,12 +168,12 @@ def overview() -> dict:
         },
         "docs": docs,
         "has_password": bool(analytics.has_password()),
-        "note": "小程序主源只同步源码；Wiki 网站由网页 + API 组成，需一起启动。",
+        "note": "微信小程序主程序与 Wiki 网站是两个独立项目；可分别运行或运行全部。",
     }
 
 
 def deploy(payload: dict, on_log=None, is_cancelled=None) -> dict:
-    """一键部署并启动：更新三仓库 → 装依赖 → 重建 / 构建 → 启动网页 + API。"""
+    """一键部署 Wiki：更新三仓库 → 装依赖 → 重建 / 构建 → 启动网页 + API。"""
     analytics, wiki_cfg, wiki_creds, deploy_mod, _gitops, _images, server = \
         _webwiki()
     log = on_log or (lambda _msg: None)
@@ -240,6 +243,17 @@ def start_service() -> dict:
     svc = _service()
     url = svc.start(lambda msg: None)
     return {"url": url, "status": svc.status(), "summary": "服务已启动：" + url}
+
+
+def start_projects(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """在本机开发者工具打开小程序，启动 Wiki 网站，或执行两项。"""
+    _analytics, wiki_cfg, _creds, _deploy, _gitops, _images, _server = _webwiki()
+    if is_cancelled is not None and is_cancelled():
+        raise ValueError("运行项目已取消")
+    summary = wiki_projects.start_selected(
+        payload.get("scope"), wiki_cfg.root_dir(),
+        on_log or (lambda _msg: None), service=_service())
+    return {"summary": summary}
 
 
 def stop_service() -> dict:

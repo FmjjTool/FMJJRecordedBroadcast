@@ -26,6 +26,10 @@ class LocalWikiService:
         return self._submit("wiki_repo_pull", payload,
                             webui_localwiki.pull_repositories)
 
+    def start_projects(self, payload: dict) -> dict:
+        return self._submit("wiki_projects_start", dict(payload),
+                            webui_localwiki.start_projects)
+
     def start_rebuild(self, payload: dict) -> dict:
         payload = dict(payload)
         if not payload.get("confirmed"):

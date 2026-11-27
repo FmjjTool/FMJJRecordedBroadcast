@@ -236,7 +236,7 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
 
 def deploy_all(root: Path | None = None, token: str = "", log=print,
                progress=None, cancel=None) -> Path:
-    """一键部署：更新小程序主源、Wiki API 与网页前端 → 装依赖 → 重建并构建。
+    """一键部署 Wiki：更新三仓库 → 装依赖 → 重建并构建 Wiki 网页。
 
     progress(step, total, label) 用于界面进度；cancel() 返回真时在步骤之间停止。
     """

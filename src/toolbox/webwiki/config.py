@@ -29,7 +29,7 @@ REPO_URLS = {
     "webwiki-api": "https://github.com/FmjjTool/webwiki-api.git",
 }
 
-# 小程序是资料内容主源；Web 版只是本地只读投影。两个 Web 仓库仍使用 main。
+# 微信小程序与 Wiki 网站是独立项目；各自仓库按固定分支更新。
 REPO_BRANCHES = {
     "mandisa-miniprogram": "master",
     "webwiki": "main",
@@ -38,8 +38,8 @@ REPO_BRANCHES = {
 
 # 仓库同步和可运行的网站服务是两个不同范围；此映射供桌面与 WebUI 共用。
 REPO_OPTIONS = (
-    {"name": "mandisa-miniprogram", "label": "小程序主源",
-     "description": "仅同步和查看源码，不在本地资料站启动"},
+    {"name": "mandisa-miniprogram", "label": "微信小程序主程序",
+     "description": "独立的小程序项目，可在微信开发者工具中打开"},
     {"name": "webwiki-api", "label": "Wiki API",
      "description": "本地 Wiki 网站的数据接口"},
     {"name": "webwiki", "label": "Wiki 网站前端",
@@ -72,7 +72,7 @@ def api_dir(root: Path | None = None) -> Path:
 
 
 def miniapp_dir(root: Path | None = None) -> Path:
-    """小程序主源仓库目录；仅用于版本同步与源码查看，不参与 Web 构建。"""
+    """微信小程序主程序仓库目录；由微信开发者工具打开，不参与 Wiki 构建。"""
     return Path(root or root_dir()) / "mandisa-miniprogram"
 
 

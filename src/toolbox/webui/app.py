@@ -456,6 +456,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return localwiki.start_repo_pull(dict(req.json or {}))
     server.post("/api/tools/localwiki/repositories/pull", start_wiki_repo_pull)
 
+    def start_wiki_projects(req):
+        return localwiki.start_projects(dict(req.json or {}))
+    server.post("/api/tools/localwiki/projects/start", start_wiki_projects)
+
     def start_wiki_rebuild(req):
         return localwiki.start_rebuild(dict(req.json or {}))
     server.post("/api/tools/localwiki/rebuild", start_wiki_rebuild)
