@@ -31,6 +31,7 @@ from gui_qt import common, table_sort
 from gui_qt.common import icon_btn_style, post_to_main, run_bg
 from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
+from gui_qt.row_widgets import ElidedLabel
 from gui_qt.theme import color as theme_color
 from toolbox.replay_bundle import (
     merge_replay_zips, parse_replay_file, remove_tmp_dir, write_replay_zip,
@@ -702,9 +703,9 @@ class DouyinDanmakuPage(BasePage):
         self.video_title = QLabel("回放", styleSheet="font-weight: bold;")
         self.video_title.setToolTip("拖入 zip 回放包，弹幕与视频同步")
         head.addWidget(self.video_title)
-        head.addStretch(1)
-        self.video_status_lbl = QLabel("", styleSheet="color: palette(placeholder-text); font-size: 11px;")
-        head.addWidget(self.video_status_lbl)
+        self.video_status_lbl = ElidedLabel()
+        self.video_status_lbl.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        head.addWidget(self.video_status_lbl, 1)
         vv.addLayout(head)
 
         self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「导入回放包」")
@@ -791,6 +792,8 @@ class DouyinDanmakuPage(BasePage):
         search_row.addWidget(self.search_count)
         v.addLayout(search_row)
         self.chat_gift_box = QTextBrowser()
+        self.chat_gift_box.setMinimumHeight(self.chat_gift_box.minimumSizeHint().height())
+        self.chat_gift_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.chat_gift_box.setOpenExternalLinks(False)
         self.chat_gift_box.setOpenLinks(False)
         self.chat_gift_box.anchorClicked.connect(self._on_chat_anchor)
