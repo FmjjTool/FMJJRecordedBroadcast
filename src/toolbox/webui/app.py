@@ -570,10 +570,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: music_tag.detail(req.q("rel", "")))
     server.get("/api/music-tag/history",
                lambda req: music_tag.history(req.q("rel", "")))
+    server.get("/api/music-tag/encoding-profiles",
+               lambda req: music_tag.encoding_profiles())
+    server.post("/api/music-tag/encoding-preview",
+                lambda req: music_tag.encoding_preview(dict(req.json or {})))
 
     def start_tag_write(req):
         return music_tag.start_write(dict(req.json or {}))
     server.post("/api/tools/music-tag/write", start_tag_write)
+
+    server.post("/api/tools/music-tag/cover/extract",
+                lambda req: music_tag.start_extract_cover(dict(req.json or {})))
 
     def start_tag_lyric(req):
         return music_tag.start_lyric_search(dict(req.json or {}))

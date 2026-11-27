@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import sqlite3
 import time
+from pathlib import Path
 
 MAX_RECORDS_PER_FILE = 5
 
@@ -104,6 +106,62 @@ def history(filepath: str) -> list[dict]:
             item[field] = row[i] or ""
         out.append(item)
     return out
+
+
+def read_recent(db_path, *, filepath: str | None = None,
+                limit: int = 60) -> list[dict]:
+    """Read tag snapshots without initializing or modifying the history store.
+
+    Storage owner remains this module's ``record``/``clear`` writer and the
+    existing table schema is unchanged. WebUI and desktop callers share this
+    read-only path; a missing database or table is treated as an empty history.
+    """
+    path = Path(db_path)
+    if not path.is_file():
+        return []
+
+    limit = max(1, min(60, int(limit)))
+    uri = path.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=3)
+    try:
+        conn.row_factory = sqlite3.Row
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            ("tag_history",),
+        ).fetchone()
+        if not has_table:
+            return []
+
+        columns = ("serial", "filepath", "createtime") + _SNAPSHOT_FIELDS
+        select = ", ".join(columns)
+        if filepath is None:
+            rows = conn.execute(
+                f"SELECT {select} FROM tag_history ORDER BY serial DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        else:
+            if os.name == "nt":
+                def canonical_path(value):
+                    return ntpath.normcase(ntpath.normpath(str(value or "")))
+
+                conn.create_function("canonical_path", 1, canonical_path,
+                                     deterministic=True)
+                key = canonical_path(filepath)
+                rows = conn.execute(
+                    f"SELECT {select} FROM tag_history "
+                    "WHERE canonical_path(filepath)=? "
+                    "ORDER BY serial DESC LIMIT ?",
+                    (key, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT {select} FROM tag_history WHERE filepath=? "
+                    "ORDER BY serial DESC LIMIT ?",
+                    (str(filepath), limit),
+                ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def clear(filepath: str = ""):

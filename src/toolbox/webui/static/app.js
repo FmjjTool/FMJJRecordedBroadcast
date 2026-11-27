@@ -415,7 +415,7 @@
         ['shopping', '购物解析', '淘宝 / 抖音 / B站小店产物'],
         ['music_playlist', '歌单', '本地预览与执行报告'],
         ['music_download', '下载', '本地音乐文件列表'],
-        ['music_tag', '标签', '标签快照与历史'],
+        ['music_tag', '标签', '标签编辑、封面与编码修复'],
         ['assets', '资产库', '资源归档与本地文件'],
         ['editor', '视频操作', '转换 / 合并 / 切割 / 压缩 / 检测'],
         ['rename', '命名投稿', '标准命名与版权标签'],
@@ -10110,7 +10110,7 @@ function renderLivestreamSummary(root) {
         id: 'shopping-input',
         placeholder: '店铺 / 商品链接或分享文案；搜索闲鱼时输入关键词，如「封茗囧菌 周边」'
       });
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '搜索并解析');
+      var btn = h('button', { class: 'btn primary', type: 'button', id: 'shopping-search-parse' }, '搜索并解析');
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
@@ -10368,7 +10368,8 @@ function renderLivestreamSummary(root) {
         var text = input.value.trim();
         var isXianyuLink = /(?:https?:\/\/)?(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?:\/\/2\.taobao\.com\/item|https?:\/\/h5\.m\.taobao\.com\/app\/idleFish-F2e\//i.test(text);
         if (platformPicker.selected().indexOf('xianyu') !== -1 && !isXianyuLink &&
-            !/(?:taobao\.com|tmall\.com|tb\.cn|douyin\.com|jinritemai\.com|b23\.tv|bilibili\.com)/i.test(text)) {
+            !/(?:taobao\.com|tmall\.com|tb\.cn|douyin\.com|jinritemai\.com|b23\.tv|bilibili\.com)/i.test(text) &&
+            !/^\d{3,}$/.test(text)) {
           runShoppingJob('/api/tools/shopping/xianyu/search', {
             platforms: platformPicker.selected(), text: text, limit: 30
           }, '搜索并解析闲鱼', showResult);
@@ -11285,12 +11286,17 @@ function renderMusicTag(root) {
             lyrics.value = fields.lyrics || '';
             var lyricHost = h('div');
             var historyHost = h('div');
+            var encodingHost = h('div');
             var saveBtn = h('button', { class: 'btn primary', type: 'button' },
               '写入标签');
             var lyricBtn = h('button', { class: 'btn', type: 'button' },
               '抓取歌词');
             var historyBtn = h('button', { class: 'btn', type: 'button' },
               '标签历史');
+            var coverBtn = h('button', { class: 'btn', type: 'button' },
+              '提取封面');
+            var encodingBtn = h('button', { class: 'btn', type: 'button' },
+              '编码修复');
             var busy = false;
             var persistedFields = Object.assign({}, fields);
 
@@ -11361,6 +11367,115 @@ function renderMusicTag(root) {
                 .catch(function (error) {
                   setError(historyHost, error, function () { historyBtn.click(); });
                 }).then(function () { historyBtn.disabled = false; });
+            });
+
+            encodingBtn.addEventListener('click', function () {
+              if (busy) return;
+              var fieldSelect = h('select', { class: 'select' });
+              var encodingOptions = h('datalist', { id: 'music-tag-encoding-options' });
+              var encodingSelect = h('input', {
+                class: 'input', type: 'text', list: 'music-tag-encoding-options',
+                placeholder: '输入或选择编码'
+              });
+              var previewText = h('textarea', {
+                class: 'textarea', rows: '6', readonly: '',
+                placeholder: '选择字段和编码后预览结果'
+              });
+              var previewBtn = h('button', { class: 'btn', type: 'button', disabled: true }, '预览');
+              var loadBtn = h('button', { class: 'btn primary', type: 'button', disabled: '' },
+                '载入编辑器');
+              var panel = h('div', { class: 'card', style: 'margin-top:8px' },
+                h('div', { class: 'toolbar' },
+                  h('label', null, h('span', { class: 'muted small' }, '字段'), fieldSelect),
+                  h('label', null, h('span', { class: 'muted small' }, '编码'), encodingSelect),
+                  previewBtn, loadBtn), encodingOptions, previewText);
+              encodingHost.replaceChildren(panel);
+              lyricHost.replaceChildren();
+              var previewSequence = 0;
+              function previewEncoding() {
+                if (busy) return;
+                var sequence = ++previewSequence;
+                previewBtn.disabled = true;
+                loadBtn.disabled = true;
+                previewText.value = '正在生成编码预览…';
+                post('/api/music-tag/encoding-preview', {
+                  rel: row.rel, field: fieldSelect.value,
+                  encoding: encodingSelect.value,
+                  current: inputs[fieldSelect.value].value
+                }).then(function (result) {
+                  if (sequence !== previewSequence) return;
+                  previewText.value = '原值：' + (result.current || '')
+                    + '\n\n预览：' + (result.preview || '');
+                  loadBtn.disabled = !result.changed;
+                  loadBtn.onclick = function () {
+                    if (busy) return;
+                    if (inputs[result.field].value !== result.current
+                        && !window.confirm('当前字段已修改，载入预览将替换该字段。继续？')) return;
+                    inputs[result.field].value = result.preview;
+                    toast('已载入编辑器，请检查后手动写入', 'success');
+                  };
+                }).catch(function (error) {
+                  if (sequence !== previewSequence) return;
+                  previewText.value = '编码预览失败：' + error.message;
+                }).then(function () {
+                  if (sequence === previewSequence) previewBtn.disabled = false;
+                });
+              }
+              previewBtn.addEventListener('click', previewEncoding);
+              fieldSelect.addEventListener('change', previewEncoding);
+              encodingSelect.addEventListener('change', previewEncoding);
+              api('/api/music-tag/encoding-profiles').then(function (data) {
+                (data.fields || []).forEach(function (field) {
+                  fieldSelect.appendChild(h('option', { value: field.name }, field.label));
+                });
+                (data.profiles || []).forEach(function (encoding) {
+                  encodingOptions.appendChild(h('option', { value: encoding }));
+                });
+                if (!encodingOptions.options.length) {
+                  throw new Error('没有可用的编码方式，请刷新页面重试');
+                }
+                encodingSelect.value = data.profiles[0];
+                previewBtn.disabled = false;
+                if (inputs[fieldSelect.value] && inputs[fieldSelect.value].value) {
+                  previewEncoding();
+                } else {
+                  previewText.value = '所选字段为空，请更换字段或先填写标签。';
+                }
+              }).catch(function (error) {
+                previewText.value = '编码预览失败：' + error.message;
+              });
+            });
+
+            coverBtn.addEventListener('click', function () {
+              if (busy) return;
+              if (!window.confirm('提取「' + row.name + '」的内嵌封面？\n\n'
+                  + '图片写入同一音乐目录；同名图片已存在时会跳过，不会覆盖。')) return;
+              busy = true;
+              coverBtn.disabled = true;
+              coverBtn.textContent = '提取中…';
+              post('/api/tools/music-tag/cover/extract', {
+                rel: row.rel, confirmed: true
+              }).then(function (result) {
+                watchJob(jobHost, result.job, function () {}, {
+                  cancelable: true,
+                  onSettled: function (job) {
+                    busy = false;
+                    coverBtn.disabled = false;
+                    coverBtn.textContent = '提取封面';
+                    if (job.status === 'error') {
+                      toast('提取封面失败：' + (job.error || '请检查图片和目标目录'), 'error');
+                    }
+                  },
+                  onPollError: function (_error, retry) {
+                    setTimeout(retry, 1000);
+                  }
+                });
+              }).catch(function (error) {
+                busy = false;
+                coverBtn.disabled = false;
+                coverBtn.textContent = '提取封面';
+                toast('提取封面失败：' + error.message, 'error');
+              });
             });
 
             saveBtn.addEventListener('click', function () {
@@ -11494,10 +11609,10 @@ function renderMusicTag(root) {
                   '歌词'),
                 lyrics,
                 h('div', { class: 'toolbar', style: 'margin-top:8px' },
-                  saveBtn, lyricBtn, historyBtn,
+                  lyricBtn, coverBtn, historyBtn, encodingBtn, saveBtn,
                   h('span', { class: 'muted small' },
                     '写入前会自动记录标签历史。')),
-                lyricHost, historyHost));
+                lyricHost, historyHost, encodingHost));
             editorHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }).catch(function (error) {
             setError(editorHost, error, function () { openEditor(row); });

@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from toolbox.config_manager import (get_config_dir, get_music_download_dir,
+from toolbox.config_manager import (get_config_dir_readonly, get_music_download_dir,
                                     load_convert_config)
 
 _AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".ape", ".wv",
@@ -37,6 +37,8 @@ FIELDS = {
     "lyrics": {"type": "str", "default": "", "label": "歌词"},
 }
 _FIELDS = tuple(FIELDS)
+ENCODING_FIELDS = ("title", "artist", "album", "albumartist", "genre",
+                   "composer", "lyricist", "comment")
 
 
 def _field_schema() -> list[dict]:
@@ -52,23 +54,14 @@ def _ts(value) -> str:
 
 
 def _history() -> list[dict]:
-    path = Path(get_config_dir()) / "music_tag_history.db"
-    if not path.is_file():
-        return []
+    from music import tag_history
+
     try:
-        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True,
-                               timeout=3)
-        conn.row_factory = sqlite3.Row
-    except sqlite3.Error:
-        return []
-    try:
-        rows = conn.execute(
-            "SELECT createtime, filepath, title, artist, album FROM tag_history"
-            " ORDER BY serial DESC LIMIT ?", (_MAX_HISTORY,)).fetchall()
-    except sqlite3.Error:
-        rows = []
-    finally:
-        conn.close()
+        rows = tag_history.read_recent(
+            Path(get_config_dir_readonly()) / "music_tag_history.db",
+            limit=_MAX_HISTORY)
+    except (OSError, sqlite3.Error) as exc:
+        raise ValueError("读取标签历史失败，请稍后重试") from exc
     result = []
     for row in rows:
         result.append({
@@ -223,32 +216,16 @@ def detail(payload: dict) -> dict:
 
 def history(payload: dict, limit: int = 5) -> dict:
     """读取单个音乐文件的完整标签历史快照，只读、不初始化或改写历史库。"""
+    from music import tag_history
+
     path = _resolve(payload.get("rel") or "")
     limit = max(1, min(5, int(limit)))
-    db_path = Path(get_config_dir()) / "music_tag_history.db"
-    if not db_path.is_file():
-        return {"rel": path.relative_to(_root()).as_posix(), "rows": [], "total": 0}
     try:
-        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True,
-                               timeout=3)
-        conn.row_factory = sqlite3.Row
-    except sqlite3.Error as exc:
+        rows = tag_history.read_recent(
+            Path(get_config_dir_readonly()) / "music_tag_history.db",
+            filepath=str(path), limit=limit)
+    except (OSError, sqlite3.Error) as exc:
         raise ValueError("读取标签历史失败，请稍后重试") from exc
-    try:
-        has_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            ("tag_history",)).fetchone()
-        if not has_table:
-            rows = []
-        else:
-            columns = ", ".join(("createtime",) + _FIELDS)
-            rows = conn.execute(
-                f"SELECT {columns} FROM tag_history WHERE filepath=? "
-                "ORDER BY serial DESC LIMIT ?", (str(path), limit)).fetchall()
-    except sqlite3.Error as exc:
-        raise ValueError("读取标签历史失败，请稍后重试") from exc
-    finally:
-        conn.close()
     result = []
     for row in rows:
         item = {"time": _ts(row["createtime"])}
@@ -257,6 +234,97 @@ def history(payload: dict, limit: int = 5) -> dict:
     return {"rel": path.relative_to(_root()).as_posix(),
             "rows": result, "total": len(result),
             "field_schema": _field_schema()}
+
+
+def encoding_preview(payload: dict) -> dict:
+    """Preview a shared encoding repair without writing the audio file."""
+    from music import tags_io
+
+    if not isinstance(payload, dict) or set(payload) - {"rel", "field", "encoding", "current"}:
+        raise ValueError("编码预览失败：参数无效，请重新选择音乐文件")
+    path = _resolve(payload.get("rel") or "")
+    field = str(payload.get("field") or "")
+    if field not in ENCODING_FIELDS:
+        raise ValueError("编码预览失败：字段不受支持，请选择可修复的标签")
+    encoding = str(payload.get("encoding") or "")
+    if encoding not in tags_io.ENCODING_PROFILES:
+        raise ValueError("编码预览失败：编码方式不受支持，请重新选择")
+    try:
+        current = payload.get("current")
+        if current is None:
+            current = (tags_io.load_tags(str(path)) or {}).get(field) or ""
+        if not isinstance(current, str) or len(current) > 65536:
+            raise ValueError("标签文本过长或格式无效")
+        result = tags_io.decode_field_value(str(path), field, encoding, current)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("编码预览失败：标签无法按所选编码读取，请更换编码后重试") from exc
+    return {"rel": path.relative_to(_root()).as_posix(), "field": field,
+            "encoding": encoding, "current": current, "preview": str(result),
+            "changed": str(result) != current}
+
+
+def encoding_profiles() -> dict:
+    from music import tags_io
+
+    return {"profiles": list(tags_io.ENCODING_PROFILES),
+            "fields": [{"name": key, "label": FIELDS[key]["label"]}
+                       for key in ENCODING_FIELDS]}
+
+
+def extract_cover(payload: dict, *, is_cancelled=lambda: False,
+                  on_progress=lambda message, progress: None) -> dict:
+    """Export the stored front cover next to one audio file, without changing tags."""
+    from music.tags_io import load_cover
+    from toolbox.file_output import create_bytes
+
+    if not isinstance(payload, dict) or set(payload) - {"rel", "confirmed"}:
+        raise ValueError("提取封面失败：参数无效，请重新选择音乐文件")
+    if payload.get("confirmed") is not True:
+        raise ValueError("请先确认提取所选文件的封面")
+    path = _resolve(payload.get("rel") or "")
+    root = _root()
+    rel = path.relative_to(root).as_posix()
+    if is_cancelled():
+        raise InterruptedError("已取消提取封面")
+    on_progress("读取内嵌封面", 0.2)
+    cover = load_cover(str(path))
+    if not cover:
+        return {"rel": rel, "extracted": False, "reason": "no_cover",
+                "summary": "已跳过：该文件没有可提取的内嵌封面"}
+    data, mime = cover
+    extensions = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+                  "image/gif": ".gif", "image/webp": ".webp", "image/bmp": ".bmp",
+                  "image/tiff": ".tiff"}
+    extension = extensions.get(str(mime).lower())
+    if not extension:
+        raise ValueError("提取封面失败：图片格式不受支持，请在桌面端检查封面")
+    if not isinstance(data, bytes) or not data or len(data) > 20 * 1024 * 1024:
+        raise ValueError("提取封面失败：图片为空或超过 20 MB，请在桌面端检查封面")
+    signatures = {
+        "image/jpeg": lambda blob: blob.startswith(b"\xff\xd8\xff"),
+        "image/jpg": lambda blob: blob.startswith(b"\xff\xd8\xff"),
+        "image/png": lambda blob: blob.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/gif": lambda blob: blob.startswith((b"GIF87a", b"GIF89a")),
+        "image/webp": lambda blob: (blob.startswith(b"RIFF") and blob[8:12] == b"WEBP"),
+        "image/bmp": lambda blob: blob.startswith(b"BM"),
+        "image/tiff": lambda blob: blob.startswith((b"II*\x00", b"MM\x00*")),
+    }
+    if not signatures[str(mime).lower()](data):
+        raise ValueError("提取封面失败：图片数据与格式不匹配，请在桌面端检查封面")
+    if is_cancelled():
+        raise InterruptedError("已取消提取封面")
+    on_progress("导出封面图片", 0.7)
+    try:
+        target = create_bytes(path.with_suffix(extension), data, root=root,
+                              max_bytes=20 * 1024 * 1024)
+    except FileExistsError:
+        return {"rel": rel, "extracted": False, "reason": "exists",
+                "summary": "已跳过：同名封面图片已存在，请先检查现有图片"}
+    except (OSError, ValueError) as exc:
+        raise ValueError("提取封面失败：目标目录不可写或路径已变化，请检查后重试") from exc
+    return {"rel": rel, "extracted": True,
+            "filename": target.name, "size": len(data),
+            "summary": "已提取封面：" + target.name}
 
 
 def write(payload: dict) -> dict:
