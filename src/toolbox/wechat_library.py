@@ -154,7 +154,9 @@ def collect_links(text, on_progress=None, on_log=None, is_cancelled=None):
             break
         except Exception as exc:
             failed += 1
-            key, _ = store.upsert_article({'url': url, 'title': '待重试文章'})
+            key = store.article_id(url)
+            if store.get_article(key) is None:
+                store.upsert_article({'url': url, 'title': '待重试文章'})
             store.set_status(key, 'failed', safe_error(exc))
             _log(on_log, f'[{n}/{len(urls)}] {safe_error(exc)}')
         try:
@@ -207,11 +209,14 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
                     _check(is_cancelled)
                     if str(record.get('biz') or '') != biz:
                         raise WechatUserError('返回的公众号与本次目标不一致，已停止同步')
-                    if store.has_article(record['url']):
+                    if store.has_metadata(record['url']):
                         stopped_at_existing = mode == 'latest'
                         if stopped_at_existing:
                             break
                         continue
+                    record = dict(record)
+                    if not record.get('account'):
+                        record['account'] = account.get('name') or ''
                     store.upsert_article(record)
                     added += 1
                 pages += 1

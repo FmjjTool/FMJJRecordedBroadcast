@@ -166,6 +166,10 @@ def upsert_article(record, path=None):
         existed = conn.execute('SELECT 1 FROM articles WHERE id=?', (key,)).fetchone() is not None
         conn.execute('INSERT INTO articles(id,biz,account,title,url,publish_time,author,status,error,updated_at)'
                      ' VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                     "status=CASE WHEN articles.biz='' AND excluded.biz!='' AND articles.status='failed' "
+                     "THEN 'archived' ELSE articles.status END,"
+                     "error=CASE WHEN articles.biz='' AND excluded.biz!='' AND articles.status='failed' "
+                     "THEN '' ELSE articles.error END,"
                      "biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE articles.biz END,"
                      "account=CASE WHEN excluded.account!='' THEN excluded.account ELSE articles.account END,"
                      "title=CASE WHEN excluded.title!='' THEN excluded.title ELSE articles.title END,"
@@ -194,6 +198,12 @@ def get_article(key, path=None):
 
 def has_article(url, path=None):
     return get_article(article_id(url), path) is not None
+
+
+def has_metadata(url, path=None):
+    """抓取失败的占位记录不能作为历史增量同步的停止边界。"""
+    row = get_article(article_id(url), path)
+    return bool(row and row.get('biz'))
 
 
 def set_cursor(biz, cursor, done=False, path=None, touch_sync=True):
