@@ -78,7 +78,16 @@ def _public_url(value):
         query = [(key, val) for key, val in parse_qsl(source.query, keep_blank_values=True,
                                                     max_num_fields=1000)
                  if key.casefold() in _PUBLIC_QUERY and len(val) <= 200]
-        return urlunsplit((source.scheme, host, source.path, urlencode(query), ""))
+        fragment = ""
+        if (source.hostname.lower() in ("www.kugou.com", "kugou.com")
+                and source.path.rstrip("/") == "/song"):
+            # Kugou song pages use a public song hash as their fragment route.
+            # Keep only that identity, never other fragment parameters.
+            hashes = [val for key, val in parse_qsl(source.fragment, max_num_fields=1000)
+                      if key == "hash"]
+            if len(hashes) == 1 and re.fullmatch(r"[a-fA-F0-9]{32}", hashes[0]):
+                fragment = "hash=" + hashes[0]
+        return urlunsplit((source.scheme, host, source.path, urlencode(query), fragment))
     except (ValueError, UnicodeError):
         return "[已移除链接]"
 

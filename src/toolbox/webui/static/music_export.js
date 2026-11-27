@@ -38,6 +38,7 @@
         }, {
           cancelable: true,
           indeterminate: true,
+          clearPollErrorOnSuccess: true,
           onSettled: function (job) {
             options.setBusy(false);
             if (job.status === 'error') failed(job.error || '请检查所选歌曲后重试');

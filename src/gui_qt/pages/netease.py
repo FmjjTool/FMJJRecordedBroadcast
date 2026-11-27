@@ -392,7 +392,9 @@ class NeteasePage(BasePage):
         self.selection_action_buttons = []
         for label, mode in (("全选", "all"), ("反选", "invert"),
                             ("□ 全不选", "none")):
-            button = QPushButton(label, clicked=lambda _checked=False, value=mode: self._sel(value))
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, value=mode: self._sel(value))
             self.selection_action_buttons.append(button)
             bottom.addWidget(button)
         self.fallback_check = QCheckBox("自动换源")
@@ -484,6 +486,7 @@ class NeteasePage(BasePage):
         checkbox.hide()
         self.results = [row]
         self.check_boxes = [checkbox]
+        # 单曲只有一个结果，直接自动选中并隐藏批量选择操作。
         for button in self.selection_action_buttons:
             button.hide()
 

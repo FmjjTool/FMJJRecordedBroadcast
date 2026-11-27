@@ -350,6 +350,7 @@
     function tick() {
       if (!box.isConnected) return;
       api('/api/jobs/' + jobId).then(function (job) {
+        if (options.clearPollErrorOnSuccess) link.replaceChildren();
         status.textContent = job.status === 'done' ? '已完成' : (job.status === 'error' ? '失败' : (job.status === 'cancelled' ? '已取消' : (job.message || '运行中')));
         var indeterminate = options.indeterminate && job.progress == null;
         bar.classList.toggle('is-indeterminate', !!indeterminate);
@@ -11079,10 +11080,10 @@ function renderLivestreamSummary(root) {
         });
         body.appendChild(h('tr', null,
           h('td', null, box),
-          h('td', null, h('span', { class: 'badge' }, item.row.platform_name)),
+          h('td', { title: item.row.platform_name }, h('span', { class: 'badge' }, item.row.platform_name)),
           h('td', { class: 'ellipsis', title: item.row.name }, item.row.name),
-          h('td', { class: 'ellipsis' }, item.row.singer || '-'),
-          h('td', { class: 'ellipsis' }, item.row.album || '-'),
+          h('td', { class: 'ellipsis', title: item.row.singer || '' }, item.row.singer || '-'),
+          h('td', { class: 'ellipsis', title: item.row.album || '' }, item.row.album || '-'),
           h('td', { class: 'num' }, item.row.duration_text || '-')));
       });
       var allBtn = h('button', { class: 'btn small', type: 'button' }, '全选');
@@ -11097,7 +11098,8 @@ function renderLivestreamSummary(root) {
       });
       var headers = h('tr', null, h('th', null));
       columns.forEach(function (column) {
-        var header = h('th', { scope: 'col', tabindex: '0' }, column.label
+        var header = h('th', { scope: 'col', tabindex: '0',
+          'aria-sort': searchOrder.order === column.key ? (searchOrder.asc ? 'ascending' : 'descending') : 'none' }, column.label
           + (searchOrder.order === column.key ? (searchOrder.asc ? ' ↑' : ' ↓') : ''));
         var sort = function () { cycleSort(searchOrder, column.key); renderRows(); };
         header.addEventListener('click', sort);
@@ -11156,6 +11158,7 @@ function renderLivestreamSummary(root) {
             }
             syncSelection();
           },
+          clearPollErrorOnSuccess: true,
           onPollError: function (_error, retry) { setTimeout(retry, 1000); }
         });
       }).catch(function (error) {
@@ -11221,6 +11224,7 @@ function renderLivestreamSummary(root) {
               toast('下载失败：' + (job.error || '未知错误'), 'error');
             }
           },
+          clearPollErrorOnSuccess: true,
           onPollError: function (_error, retry) { setTimeout(retry, 1000); }
         });
       }).catch(function (error) {
