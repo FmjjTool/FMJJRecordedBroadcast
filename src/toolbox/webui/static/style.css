@@ -682,6 +682,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-match-table th { cursor: pointer; }
 .music-match-table th:first-child { width: 40px; cursor: default; }
 .music-match-table th:nth-child(2) { width: 22%; }
-.music-match-table th:nth-child(3) { width: 66px; }
+.music-match-table th:nth-child(3) { width: 78px; }
+.music-match-table td.ellipsis { white-space: normal; overflow-wrap: anywhere; }
 .music-match-columns { justify-content: flex-end; margin-top: 8px; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }
