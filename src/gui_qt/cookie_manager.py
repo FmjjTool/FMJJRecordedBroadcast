@@ -2120,6 +2120,9 @@ class _WechatReadingSessionDialog(QDialog):
         layout.addWidget(self.feedback)
         layout.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.setLayoutDirection(Qt.RightToLeft)
+        for button in buttons.buttons():
+            button.setLayoutDirection(Qt.LeftToRight)
         buttons.button(QDialogButtonBox.Ok).setText("使用本次阅读信息")
         buttons.button(QDialogButtonBox.Ok).setProperty("variant", "primary")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
