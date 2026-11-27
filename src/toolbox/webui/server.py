@@ -42,6 +42,7 @@ _STATIC = {
     "/music_resolve.js": ("music_resolve.js", "text/javascript; charset=utf-8"),
     "/shopping_export.js": ("shopping_export.js", "text/javascript; charset=utf-8"),
     "/video_comments.js": ("video_comments.js", "text/javascript; charset=utf-8"),
+    "/wechat_library.js": ("wechat_library.js", "text/javascript; charset=utf-8"),
     "/tcdoc_versions.js": ("tcdoc_versions.js", "text/javascript; charset=utf-8"),
     "/tcdoc_mapping.js": ("tcdoc_mapping.js", "text/javascript; charset=utf-8"),
     "/performance_reports.js": ("performance_reports.js", "text/javascript; charset=utf-8"),

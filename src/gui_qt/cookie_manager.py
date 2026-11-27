@@ -17,7 +17,7 @@ import time
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
+    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
     QTabWidget, QVBoxLayout, QWidget,
 )
@@ -369,6 +369,10 @@ class CookieManagerDialog(QDialog):
             self.tabs.setCurrentIndex(initial_tab)
         self._refresh_pw_status()
         self._reload()
+        self._wechat_timer = QTimer(self)
+        self._wechat_timer.setInterval(1000)
+        self._wechat_timer.timeout.connect(self._refresh_wechat_session_status)
+        self._wechat_timer.start()
         self._fit_to_screen(*self._want_size)
 
     def _fit_to_screen(self, want_w: int, want_h: int):
@@ -429,6 +433,51 @@ class CookieManagerDialog(QDialog):
 
     def _open_github_account(self):
         _GitHubTokenDialog(self).exec()
+
+    def _open_wechat_session(self):
+        if _WechatReadingSessionDialog(self).exec() == QDialog.Accepted:
+            self._refresh_wechat_session_status()
+            self._notify()
+
+    def _clear_wechat_session(self):
+        from wechat_session import clear_session
+        clear_session()
+        self._refresh_wechat_session_status()
+        self._notify()
+
+    def _refresh_wechat_session_status(self):
+        label = getattr(self, "_wechat_status", None)
+        if label is None:
+            return
+        from wechat_session import session_status
+        status = session_status()
+        if status["ready"]:
+            minutes = (status["remaining_seconds"] + 59) // 60
+            label.setText(f"阅读信息已提供 · 本地约剩 {minutes} 分钟")
+        else:
+            label.setText("临时阅读未就绪")
+        self._wechat_clear.setEnabled(status["ready"])
+
+    def _add_wechat_session_row(self):
+        # 独立于长期登录记录列表，绝不进入 auth 的保存/清除/探测路径。
+        widget = QWidget()
+        row = QHBoxLayout(widget)
+        row.setContentsMargins(8, 2, 8, 2)
+        row.setSpacing(6)
+        row.addWidget(QLabel("微信公众号"))
+        self._wechat_status = QLabel()
+        self._wechat_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._wechat_status.setToolTip("阅读会话仅驻留内存；过期、清除或账号使用关闭后立即不可用。")
+        row.addWidget(self._wechat_status, 1)
+        enter = QPushButton("输入阅读信息")
+        enter.clicked.connect(self._open_wechat_session)
+        row.addWidget(enter)
+        self._wechat_clear = QPushButton("清除")
+        self._wechat_clear.setProperty("variant", "danger")
+        self._wechat_clear.clicked.connect(self._clear_wechat_session)
+        row.addWidget(self._wechat_clear)
+        self.container_layout.addWidget(widget)
+        self._refresh_wechat_session_status()
 
     def _refresh_pw_status(self):
         """浏览器环境状态：Playwright 库 + 系统 Edge/Chrome + 本地采集引擎（只读检测）。"""
@@ -509,6 +558,8 @@ class CookieManagerDialog(QDialog):
             w.setProperty("platform", plat)
             w.setStyleSheet("QWidget { background: #ffffff; border-radius: 6px; }")
             self.container_layout.addWidget(w)
+
+        self._add_wechat_session_row()
 
         # 自动检测只在两处发生：进入软件时（main_window 启动后台跑一遍全量）与
         # 单个平台刚登录时（保存/扫码后已用 forget_platform_login 作废该平台缓存）。
@@ -2039,6 +2090,63 @@ class _TcdocOpenApiDialog(QDialog):
             QMessageBox.warning(self, "清除失败", str(exc))
             return
         self._fill()
+
+
+class _WechatReadingSessionDialog(QDialog):
+    """统一入口内的一次性输入；不预填、不持久化、不主动获取。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("微信公众号阅读信息")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        hint = QLabel(
+            "粘贴本人已登录的微信文章完整请求地址。普通分享链接只用于单篇文章，"
+            "不能用于历史列表。阅读信息仅在内存中保留最多 10 分钟或至软件退出；"
+            "平台可能提前判定失效。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addWidget(QLabel("文章请求地址"))
+        self.address = QLineEdit()
+        self.address.setEchoMode(QLineEdit.Password)
+        self.address.setMaxLength(32768)
+        self.address.setPlaceholderText("https://mp.weixin.qq.com/s?...")
+        self.address.setClearButtonEnabled(True)
+        layout.addWidget(self.address)
+        self.feedback = QLabel("")
+        self.feedback.setWordWrap(True)
+        self.feedback.setProperty("role", "caption")
+        layout.addWidget(self.feedback)
+        layout.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("使用本次阅读信息")
+        buttons.button(QDialogButtonBox.Ok).setProperty("variant", "primary")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self._use_session)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.finished.connect(lambda _result: self.address.clear())
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        max_w = max(1, available.width() - 30) if available else 720
+        max_h = max(1, available.height() - 40) if available else 520
+        self.setMinimumSize(min(420, max_w), min(300, max_h))
+        self.setMaximumSize(max_w, max_h)
+        self.resize(min(720, max_w), min(360, max_h))
+
+    def _use_session(self):
+        from wechat_session import SessionInputError, set_session_from_url
+        try:
+            set_session_from_url(self.address.text())
+        except SessionInputError as exc:
+            self.feedback.setText(str(exc))
+            return
+        except Exception:
+            self.feedback.setText("阅读信息暂不可用，请稍后重试")
+            return
+        self.address.clear()
+        self.accept()
 
 
 class _GitHubTokenDialog(QDialog):

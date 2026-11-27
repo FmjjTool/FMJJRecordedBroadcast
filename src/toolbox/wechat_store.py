@@ -110,6 +110,7 @@ def _write(path=None):
                 raise ValueError('资料库版本不兼容，请使用对应版本软件')
             conn.execute('PRAGMA journal_mode=WAL')
             with conn:
+                conn.execute('BEGIN IMMEDIATE')
                 conn.execute('CREATE TABLE IF NOT EXISTS accounts ('
                              'biz TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT \'\','
                              'remark TEXT NOT NULL DEFAULT \'\',avatar TEXT NOT NULL DEFAULT \'\','
@@ -139,9 +140,9 @@ def save_account(biz, name='', remark=None, avatar='', path=None):
     with _write(path) as conn:
         conn.execute('INSERT INTO accounts(biz,name,remark,avatar) VALUES(?,?,?,?) '
                      'ON CONFLICT(biz) DO UPDATE SET '
-                     'name=CASE WHEN excluded.name!='' THEN excluded.name ELSE accounts.name END,'
+                     "name=CASE WHEN excluded.name!='' THEN excluded.name ELSE accounts.name END,"
                      'remark=CASE WHEN ? IS NULL THEN accounts.remark ELSE excluded.remark END,'
-                     'avatar=CASE WHEN excluded.avatar!='' THEN excluded.avatar ELSE accounts.avatar END',
+                     "avatar=CASE WHEN excluded.avatar!='' THEN excluded.avatar ELSE accounts.avatar END",
                      (biz, name, clean_text(remark, 500), avatar, remark))
     return get_account(biz, path)
 
@@ -165,11 +166,11 @@ def upsert_article(record, path=None):
         existed = conn.execute('SELECT 1 FROM articles WHERE id=?', (key,)).fetchone() is not None
         conn.execute('INSERT INTO articles(id,biz,account,title,url,publish_time,author,status,error,updated_at)'
                      ' VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
-                     'biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE articles.biz END,'
-                     'account=CASE WHEN excluded.account!='' THEN excluded.account ELSE articles.account END,'
-                     'title=CASE WHEN excluded.title!='' THEN excluded.title ELSE articles.title END,'
-                     'publish_time=CASE WHEN excluded.publish_time!='' THEN excluded.publish_time ELSE articles.publish_time END,'
-                     'author=CASE WHEN excluded.author!='' THEN excluded.author ELSE articles.author END,'
+                     "biz=CASE WHEN excluded.biz!='' THEN excluded.biz ELSE articles.biz END,"
+                     "account=CASE WHEN excluded.account!='' THEN excluded.account ELSE articles.account END,"
+                     "title=CASE WHEN excluded.title!='' THEN excluded.title ELSE articles.title END,"
+                     "publish_time=CASE WHEN excluded.publish_time!='' THEN excluded.publish_time ELSE articles.publish_time END,"
+                     "author=CASE WHEN excluded.author!='' THEN excluded.author ELSE articles.author END,"
                      'updated_at=excluded.updated_at',
                      (key, biz, clean_text(record.get('account'), 160), clean_text(record.get('title'), 500),
                       url, clean_text(record.get('publish_time'), 32), clean_text(record.get('author'), 160),
@@ -202,6 +203,11 @@ def set_cursor(biz, cursor, done=False, path=None, touch_sync=True):
                      (max(0, int(cursor)), bool(done), bool(touch_sync), now_text(), validate_biz(biz)))
 
 
+def touch_sync(biz, path=None):
+    with _write(path) as conn:
+        conn.execute('UPDATE accounts SET last_sync=? WHERE biz=?', (now_text(), validate_biz(biz)))
+
+
 def _page(offset, limit):
     offset, limit = int(offset), int(limit)
     if offset < 0 or limit < 1 or limit > 200:
@@ -215,15 +221,15 @@ def _order(sort, order, allowed, default):
     if sort not in allowed or order.lower() not in ('asc', 'desc'):
         raise ValueError('排序参数无效')
     col = allowed[sort]
-    return f'({col} IS NULL OR {col}='') ASC, {col} COLLATE NOCASE {order.upper()}, r.id ASC' if col.startswith('r.') else (
-        f'({col} IS NULL OR {col}='') ASC, {col} COLLATE NOCASE {order.upper()}, a.biz ASC')
+    tie = 'r.id' if col.startswith('r.') else 'a.biz'
+    return f"({col} IS NULL OR {col}='') ASC, {col} COLLATE NOCASE {order.upper()}, {tie} ASC"
 
 
 def list_accounts(keyword='', sort='', order='', offset=0, limit=200, path=None):
     offset, limit = _page(offset, limit)
     order_sql = _order(sort, order, ACCOUNT_SORTS, 'a.name COLLATE NOCASE ASC,a.biz ASC')
-    pattern = '%' + str(keyword).replace('\', '\\').replace('%', '\%').replace('_', '\_') + '%'
-    where = " WHERE (a.name LIKE ? ESCAPE '\' OR a.biz LIKE ? ESCAPE '\' OR a.remark LIKE ? ESCAPE '\')"
+    pattern = '%' + str(keyword).replace('!', '!!').replace('%', '!%').replace('_', '!_') + '%'
+    where = " WHERE (a.name LIKE ? ESCAPE '!' OR a.biz LIKE ? ESCAPE '!' OR a.remark LIKE ? ESCAPE '!')"
     args = (pattern, pattern, pattern)
     with _read(path) as conn:
         if not conn:
@@ -241,8 +247,8 @@ def _article_filter(biz='', keyword='', date_from='', date_to='', status='', **_
         clauses.append('r.biz=?')
         args.append(validate_biz(biz))
     if keyword:
-        clauses.append("(r.title LIKE ? ESCAPE '\' OR r.account LIKE ? ESCAPE '\')")
-        pattern = '%' + str(keyword).replace('\', '\\').replace('%', '\%').replace('_', '\_') + '%'
+        clauses.append("(r.title LIKE ? ESCAPE '!' OR r.account LIKE ? ESCAPE '!')")
+        pattern = '%' + str(keyword).replace('!', '!!').replace('%', '!%').replace('_', '!_') + '%'
         args.extend((pattern, pattern))
     for value in (date_from, date_to):
         if value:

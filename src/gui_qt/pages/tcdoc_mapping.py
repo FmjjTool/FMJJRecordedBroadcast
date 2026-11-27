@@ -540,7 +540,7 @@ class TcDocMappingPanel(QWidget):
                 self.log(f"[错误] {err}")
                 receipt = getattr(err, "receipt", None)
                 if receipt and receipt_callback:
-                    receipt_callback(receipt)
+                    receipt_callback({**receipt, "error": str(err)})
                 if action == "写入":
                     self._invalidate_preview("本次写入已停止，请重新对比云端后核对结果")
                 QMessageBox.warning(
@@ -1236,6 +1236,9 @@ class TcDocMappingPanel(QWidget):
                   receipt_callback=record_result)
 
     def _record_history(self, result: dict, sheet_id: str, *, doc=None, sheet=None) -> None:
+        if not (result.get("added") or result.get("updated")
+                or result.get("unknown_record_outcome")):
+            return
         try:
             from toolbox.tcdoc import push_history
         except Exception:  # noqa: BLE001 - 历史不可用不影响写入结果
@@ -1245,10 +1248,16 @@ class TcDocMappingPanel(QWidget):
                           if item.get("sheetID") == sheet_id), {})
         if doc is None:
             doc = self.doc or {}
+        status = ("需核对" if not result.get("verified") else
+                  "已取消" if result.get("cancelled") else
+                  "部分完成" if result.get("error") else "成功")
         push_history.record(
             tab_name=str(sheet.get("title") or ""), tab_id=str(sheet_id or ""),
             doc_key=str(doc.get("key") or ""), profile="mapping",
-            source="映射回写", status="成功" if result.get("verified") else "需核对",
+            source="映射回写", status=status,
             added=int(result.get("added") or 0),
+            record_ids=result.get("record_ids") or [],
+            failed=int(bool(result.get("error") and not result.get("cancelled"))),
             note=f"更新 {int(result.get('updated') or 0)} 条；"
-                 f"记录：{'、'.join(result.get('record_ids') or [])}")
+                 f"已核对 {len(result.get('row_nos') or [])} 行；"
+                 f"{result.get('error') or ''}")

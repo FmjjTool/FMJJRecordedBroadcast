@@ -232,10 +232,14 @@ class WebUILauncher:
                 flags |= subprocess.CREATE_NEW_PROCESS_GROUP
         handle = open(log_path, "ab", buffering=0)
         try:
+            # 临时阅读会话仍由桌面内存唯一持有；子进程只得到只读本机能力。
+            from wechat_session import webui_environment
+            child_env = os.environ.copy()
+            child_env.update(webui_environment())
             return subprocess.Popen(
                 command, cwd=str(root), stdin=subprocess.DEVNULL,
                 stdout=handle, stderr=subprocess.STDOUT,
-                creationflags=flags, close_fds=True)
+                creationflags=flags, close_fds=True, env=child_env)
         finally:
             handle.close()
 

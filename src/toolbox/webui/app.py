@@ -37,6 +37,7 @@ from toolbox.webui.services.tcdoc import TCDocService
 from toolbox.webui.services.tools import ToolService
 from toolbox.webui.services.trackers import TrackerService
 from toolbox.webui.services.weibo_chaohua import WeiboChaohuaService
+from toolbox.webui.services.wechat import WechatService
 from version import APP_VERSION
 
 
@@ -59,6 +60,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     chaohua = WeiboChaohuaService(jobs)
     info_accounts = InfoAccountsService(jobs)
     artifacts = ArtifactService(jobs)
+    wechat = WechatService(jobs)
     netdisk = NetdiskService(jobs)
     publish = PublishService(jobs)
     shopping = ShoppingService(jobs)
@@ -355,6 +357,25 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_wechat_parse(req):
         return artifacts.start_wechat(dict(req.json or {}))
     server.post("/api/tools/artifacts/wechat", start_wechat_parse)
+
+    server.get("/api/wechat/schema", lambda req: wechat.schema())
+
+    def wechat_query(req):
+        return {key: values[0] for key, values in req.query.items() if values}
+
+    server.get("/api/wechat/accounts", lambda req: wechat.accounts(wechat_query(req)))
+    server.get("/api/wechat/articles", lambda req: wechat.articles(wechat_query(req)))
+    server.post("/api/wechat/accounts/save", lambda req: wechat.save_account(req.json))
+    server.post("/api/wechat/collect", lambda req: wechat.start("collect", req.json))
+    server.post("/api/wechat/sync", lambda req: wechat.start("sync", req.json))
+    server.post("/api/wechat/export", lambda req: wechat.start("export", req.json))
+    server.post("/api/wechat/retry", lambda req: wechat.start("retry", req.json))
+
+    def export_wechat_index(req):
+        return AttachmentResponse(wechat.index_csv(req.json),
+                                  "wechat-articles.csv", "text/csv; charset=utf-8")
+
+    server.post("/api/wechat/index", export_wechat_index)
 
     def bili_emote_search(req):
         return artifacts.bili_emote_search(dict(req.json or {}))
