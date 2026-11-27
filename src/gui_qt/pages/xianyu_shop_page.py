@@ -25,6 +25,10 @@ class XianyuShopPage(BasePage):
         self._busy = False
         self._drawing = False
         self._cancel = threading.Event()
+        self._search_keyword = ""
+        self._search_page = 0
+        self._search_pages = {}
+        self._retry_action = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -61,7 +65,7 @@ class XianyuShopPage(BasePage):
         self.table.hide()
 
         actions = QHBoxLayout()
-        self.all_btn = QPushButton("全选")
+        self.all_btn = QPushButton("本页全选")
         self.all_btn.clicked.connect(lambda: self._set_checks(True))
         self.clear_btn = QPushButton("清除勾选")
         self.clear_btn.clicked.connect(lambda: self._set_checks(False))
@@ -74,8 +78,25 @@ class XianyuShopPage(BasePage):
         self.save_btn.clicked.connect(self._save)
         for button in (self.all_btn, self.clear_btn):
             actions.addWidget(button)
+        self.selection_label = QLabel()
+        actions.addWidget(self.selection_label)
         actions.addStretch(1)
         body.addLayout(actions)
+        self.pagination = QFrame()
+        paging = QHBoxLayout(self.pagination)
+        paging.setContentsMargins(0, 0, 0, 0)
+        paging.setSpacing(8)
+        paging.addStretch(1)
+        self.first_btn = QPushButton("首页")
+        self.first_btn.clicked.connect(lambda: self._go_page(1))
+        self.previous_btn = QPushButton("上一页")
+        self.previous_btn.clicked.connect(lambda: self._go_page(self._search_page - 1))
+        self.page_label = QLabel()
+        self.next_btn = QPushButton("下一页")
+        self.next_btn.clicked.connect(lambda: self._go_page(self._search_page + 1))
+        for widget in (self.first_btn, self.previous_btn, self.page_label, self.next_btn):
+            paging.addWidget(widget)
+        body.addWidget(self.pagination)
         output_actions = QHBoxLayout()
         output_actions.addWidget(self.local_btn)
         output_actions.addWidget(self.open_btn)
@@ -88,6 +109,9 @@ class XianyuShopPage(BasePage):
         self.status_label = QLabel("搜索与解析仅读取；勾选后保存到「闲鱼商品」目录")
         self.status_label.setWordWrap(True)
         feedback.addWidget(self.status_label, 1)
+        self.retry_btn = QPushButton("重试")
+        self.retry_btn.clicked.connect(self._retry)
+        feedback.addWidget(self.retry_btn)
         self.cancel_btn = QPushButton("停止")
         self.cancel_btn.clicked.connect(self._stop)
         feedback.addWidget(self.cancel_btn)
@@ -113,18 +137,49 @@ class XianyuShopPage(BasePage):
         return self.submit_text(text)
 
     def submit_search(self, text):
+        text = str(text or "").strip()
         self._start(lambda: xianyu_shopping.search(text, on_log=self._log,
-                                                 is_cancelled=self._cancel.is_set))
+                                                 is_cancelled=self._cancel.is_set, page=1),
+                    search=(text, 1, True))
 
-    def _start(self, operation, *, saving=False):
+    def _go_page(self, page):
+        if self._busy or not self._search_page or page < 1:
+            return
+        if page in self._search_pages:
+            self._show_search_page(page)
+            return
+        current = self._search_pages[self._search_page]
+        if page != self._search_page + 1 or not current.get("has_more"):
+            return
+        keyword = self._search_keyword
+        self._start(lambda: xianyu_shopping.search(keyword, on_log=self._log,
+                                                 is_cancelled=self._cancel.is_set, page=page),
+                    search=(keyword, page, False))
+
+    def _show_search_page(self, page):
+        result = self._search_pages[page]
+        self._search_page = page
+        self._rows = result["items"]
+        self.status_label.setText(result.get("summary", "已读取缓存商品"))
+        self._retry_action = None
+        self._draw()
+
+    def _retry(self):
+        if not self._busy and self._retry_action:
+            self._retry_action()
+
+    def _start(self, operation, *, saving=False, search=None):
         if self._busy:
             return
         self._cancel.clear()
+        self._retry_action = None
         self._busy = True
         self.parse_btn.setEnabled(False)  # 合并页监听此状态，锁定平台与输入操作。
         self.progress.setRange(0, 0)
         self.progress.show()
-        self.status_label.setText("正在抓取闲鱼商品资料" if not saving else "正在保存闲鱼商品资料与图片")
+        self.status_label.setText(
+            "正在保存闲鱼商品资料与图片" if saving else
+            (f"正在抓取闲鱼第 {search[1]} 页商品" if search else "正在抓取闲鱼商品资料"))
         self._sync_actions()
 
         def done(result, error):
@@ -134,19 +189,32 @@ class XianyuShopPage(BasePage):
             self._sync_actions()
             if error:
                 self.status_label.setText(error)
+                self._retry_action = lambda: self._start(operation, saving=saving, search=search)
+                self._sync_actions()
                 return
             self.status_label.setText(result.get("summary", "已完成"))
             if saving:
                 completed = {row["item_id"] for row in result.get("items", []) if row.get("saved")}
                 self._checks.difference_update(completed)
-                for row in self._rows:
+                for row in self._known_rows():
                     if row["item_id"] in completed:
                         row["saved"] = True
                 errors = result.get("failures", [])
                 if errors:
                     self.status_label.setText(result["summary"] + "；" + errors[0]["error"])
                 self._draw()
+            elif search is not None:
+                keyword, page, reset = search
+                if reset:
+                    self._search_pages.clear()
+                    self._checks.clear()
+                self._search_keyword = keyword
+                self._search_pages[page] = dict(result, items=list(result.get("items", [])))
+                self._show_search_page(page)
             else:
+                self._search_keyword = ""
+                self._search_page = 0
+                self._search_pages.clear()
                 self._rows = list(result.get("items", []))
                 self._checks.clear()
                 self._draw()
@@ -176,14 +244,35 @@ class XianyuShopPage(BasePage):
         row = item.data(Qt.UserRole)
         if row:
             if item.checkState() == Qt.Checked:
-                self._checks.add(row["item_id"])
+                if row["item_id"] not in self._checks and len(self._checks) >= 30:
+                    self._drawing = True
+                    try:
+                        item.setCheckState(Qt.Unchecked)
+                    finally:
+                        self._drawing = False
+                    self.status_label.setText("每次最多勾选30件，可先入库后继续勾选")
+                else:
+                    self._checks.add(row["item_id"])
             else:
                 self._checks.discard(row["item_id"])
         self._sync_actions()
 
     def _set_checks(self, checked):
-        self._checks = {row["item_id"] for row in self._rows} if checked else set()
+        if checked:
+            ids = [row["item_id"] for row in self._rows if row["item_id"] not in self._checks]
+            available = max(0, 30 - len(self._checks))
+            self._checks.update(ids[:available])
+            if len(ids) > available:
+                self.status_label.setText("每次最多勾选30件，可先入库后继续勾选")
+        else:
+            self._checks.clear()
         self._draw()
+
+    def _known_rows(self):
+        """当前搜索的全部已访问页；只用于展示状态和跨页勾选。"""
+        if self._search_page:
+            return [row for result in self._search_pages.values() for row in result["items"]]
+        return self._rows
 
     def _sort_changed(self, *_):
         self._draw()
@@ -226,14 +315,25 @@ class XianyuShopPage(BasePage):
     def _sync_actions(self):
         self.save_btn.setEnabled(not self._busy and bool(self._checks))
         self.save_btn.setText(f"入库并下载 {len(self._checks)} 件" if self._checks else "入库并下载")
-        for button in (self.all_btn, self.clear_btn):
-            button.setEnabled(not self._busy and bool(self._rows))
+        self.selection_label.setText(f"已勾选 {len(self._checks)} 件" if self._checks else "")
+        self.all_btn.setEnabled(not self._busy and bool(self._rows))
+        self.clear_btn.setEnabled(not self._busy and bool(self._checks))
+        self.input_edit.setEnabled(not self._busy)
         self.local_btn.setEnabled(not self._busy)
         self.open_btn.setEnabled(not self._busy and bool(self._current()))
         self.cancel_btn.setEnabled(self._busy and not self._cancel.is_set())
+        self.retry_btn.setVisible(bool(self._retry_action))
+        self.retry_btn.setEnabled(not self._busy)
+        self.pagination.setVisible(bool(self._search_page))
+        self.first_btn.setEnabled(not self._busy and self._search_page > 1)
+        self.previous_btn.setEnabled(not self._busy and self._search_page > 1)
+        current = self._search_pages.get(self._search_page, {})
+        self.next_btn.setEnabled(not self._busy and bool(current.get("has_more")))
+        self.page_label.setText(f"第 {self._search_page} 页 · 本页 {len(self._rows)} 件")
 
     def _save(self):
-        items = [{"item_id": row["item_id"]} for row in self._rows if row["item_id"] in self._checks]
+        items = [{"item_id": item_id} for item_id in dict.fromkeys(
+            row["item_id"] for row in self._known_rows() if row["item_id"] in self._checks)]
         if self._busy or not items:
             return
         confirm = QMessageBox(self)
@@ -241,10 +341,12 @@ class XianyuShopPage(BasePage):
         confirm.setText(f"将 {len(items)} 件闲鱼商品保存到本地资料库？")
         confirm.setInformativeText("将读取商品详情并下载图片到「闲鱼商品」目录；已完整保存的商品会跳过。")
         cancel = confirm.addButton("取消", QMessageBox.RejectRole)
-        save = confirm.addButton("入库并下载", QMessageBox.AcceptRole)
+        confirm.addButton("入库并下载", QMessageBox.AcceptRole)
         confirm.setDefaultButton(cancel)
+        confirm.setEscapeButton(cancel)
         confirm.exec()
-        if confirm.clickedButton() is save:
+        clicked = confirm.clickedButton()
+        if clicked is not None and confirm.buttonRole(clicked) == QMessageBox.ButtonRole.AcceptRole:
             self._start(lambda: xianyu_shopping.save_items(items, on_log=self._log,
                                                           is_cancelled=self._cancel.is_set()), saving=True)
 

@@ -10120,7 +10120,23 @@ function renderLivestreamSummary(root) {
       var selected = new Set();
       var rowBoxes = [];
       var selectionButtons = [];
+      var pageButtons = [];
+      var searchState = null;
       var resultSort = { order: '', asc: true };
+      function allXianyuRows() {
+        if (!searchState) return xianyuRows;
+        var rows = new Map();
+        Object.keys(searchState.pages).forEach(function (number) {
+          searchState.pages[number].items.forEach(function (item) { rows.set(String(item.item_id), item); });
+        });
+        return Array.from(rows.values());
+      }
+      function eachXianyuRow(visit) {
+        if (!searchState) { xianyuRows.forEach(visit); return; }
+        Object.keys(searchState.pages).forEach(function (number) {
+          searchState.pages[number].items.forEach(visit);
+        });
+      }
       function sync() {
         var platforms = platformPicker ? platformPicker.selected() : [];
         var hasSelection = platforms.length;
@@ -10129,9 +10145,10 @@ function renderLivestreamSummary(root) {
         btn.textContent = running ? '搜索并解析中…' : '搜索并解析';
         input.disabled = running;
         if (saveBtn) saveBtn.disabled = running || !hasXianyu || !selected.size;
-        if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' / ' + xianyuRows.length + ' 件';
+        if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' 件 · 本页 ' + xianyuRows.length + ' 件';
         rowBoxes.forEach(function (entry) { entry.disabled = running || !hasXianyu; });
         selectionButtons.forEach(function (button) { button.disabled = running || !hasXianyu; });
+        pageButtons.forEach(function (entry) { entry.button.disabled = running || !hasXianyu || !entry.available; });
         if (platformPicker) {
           platformPicker.setBusy(running);
           platformHint.textContent = hasSelection
@@ -10151,6 +10168,7 @@ function renderLivestreamSummary(root) {
 
       function runShoppingJob(path, payload, action, done) {
         running = true;
+        jobHost.replaceChildren(h('div', { class: 'muted small', role: 'status' }, action + '任务提交中…'));
         sync();
         post(path, payload).then(function (result) {
           watchJob(jobHost, result.job, function (job) {
@@ -10183,18 +10201,17 @@ function renderLivestreamSummary(root) {
         selectionButtons = [];
         saveBtn = null;
         selectionCount = null;
+        pageButtons = [];
         toast(outcome.summary || '已完成',
           outcome.failures && outcome.failures.length ? 'warning' : 'success');
         if (outcome.platform === 'xianyu') {
-          xianyuRows = items.map(function (item) {
-            var match = String(item.price || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/);
-            var price = match ? Number(match[0]) : null;
-            return Object.assign({}, item, {
-              _price: price !== null && Number.isFinite(price) ? price : null
-            });
-          });
+          searchState = outcome.kind === 'search'
+            ? { keyword: outcome.keyword, page: outcome.page, pages: {} } : null;
+          xianyuRows = priceRows(items);
+          if (searchState) searchState.pages[outcome.page] = Object.assign({}, outcome, { items: xianyuRows });
           drawXianyuResults();
         } else {
+          searchState = null;
           xianyuRows = [];
           if (!items.length) {
             resultHost.replaceChildren(empty('没有解析到商品，请检查链接后重试。'));
@@ -10220,13 +10237,52 @@ function renderLivestreamSummary(root) {
         reload();
       }
 
+      function priceRows(items) {
+        return items.map(function (item) {
+          var match = String(item.price || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+          var price = match ? Number(match[0]) : null;
+          return Object.assign({}, item, { _price: price !== null && Number.isFinite(price) ? price : null });
+        });
+      }
+
+      function goXianyuPage(number) {
+        if (running || !searchState || !platformPicker || platformPicker.selected().indexOf('xianyu') === -1) return;
+        function display(outcome) {
+          searchState.pages[number] = outcome;
+          searchState.page = number;
+          xianyuRows = outcome.items;
+          drawXianyuResults();
+        }
+        if (searchState.pages[number]) { display(searchState.pages[number]); return; }
+        runShoppingJob('/api/tools/shopping/xianyu/search', {
+          platforms: platformPicker.selected(), text: searchState.keyword, limit: 30, page: number
+        }, '抓取闲鱼第 ' + number + ' 页', function (outcome) {
+          display(Object.assign({}, outcome, { items: priceRows(outcome.items || []) }));
+        });
+      }
+
+      function xianyuPager() {
+        pageButtons = [];
+        if (!searchState) return h('span');
+        var current = searchState.pages[searchState.page];
+        function button(label, number, available) {
+          var control = h('button', { class: 'btn mini', type: 'button',
+            onclick: function () { goXianyuPage(number); } }, label);
+          pageButtons.push({ button: control, available: available });
+          return control;
+        }
+        return h('div', { class: 'toolbar', style: 'margin-top:8px', 'aria-label': '闲鱼搜索分页' },
+          h('span', { class: 'muted small' }, '跨页保留勾选，每次最多入库 30 件'),
+          h('span', { style: 'flex:1' }),
+          button('首页', 1, searchState.page > 1),
+          button('上一页', searchState.page - 1, searchState.page > 1),
+          h('span', { 'aria-live': 'polite' }, '第 ' + searchState.page + ' 页'),
+          button('下一页', searchState.page + 1, !!current.has_more));
+      }
+
       function drawXianyuResults() {
         rowBoxes = [];
         selectionButtons = [];
-        if (!xianyuRows.length) {
-          resultHost.replaceChildren(empty('闲鱼没有匹配商品，可换关键词重新搜索。'));
-          return;
-        }
         var columns = [
           { label: '选择', width: 48 }, { key: 'title', label: '商品', width: 300 },
           { key: '_price', label: '价格', width: 85 },
@@ -10286,7 +10342,10 @@ function renderLivestreamSummary(root) {
             var box = h('input', { type: 'checkbox', 'aria-label': '勾选 ' + (item.title || '商品') });
             box.checked = selected.has(key);
             box.addEventListener('change', function () {
-              if (box.checked) selected.add(key); else selected.delete(key);
+              if (box.checked && selected.size >= 30 && !selected.has(key)) {
+                box.checked = false;
+                toast('每次最多勾选 30 件，可先入库后继续勾选', 'warning');
+              } else if (box.checked) selected.add(key); else selected.delete(key);
               sync();
             });
             rowBoxes.push(box);
@@ -10303,25 +10362,30 @@ function renderLivestreamSummary(root) {
           setWidths(widths);
         }
         var allBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
-          xianyuRows.forEach(function (item) { selected.add(String(item.item_id || item.url)); });
+          xianyuRows.forEach(function (item) {
+            if (selected.size < 30) selected.add(String(item.item_id || item.url));
+          });
+          if (xianyuRows.some(function (item) { return !selected.has(String(item.item_id || item.url)); })) {
+            toast('每次最多勾选 30 件，可先入库后继续勾选', 'warning');
+          }
           drawTable(); sync();
-        } }, '全选');
+        } }, '本页全选');
         var clearBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
           selected.clear(); drawTable(); sync();
-        } }, '清除');
+        } }, '清除勾选');
         selectionButtons = [allBtn, clearBtn];
         selectionCount = h('span', { class: 'muted small' });
         saveBtn = h('button', { class: 'btn primary', type: 'button' }, '入库并下载');
         saveBtn.addEventListener('click', function () {
           if (running || saveBtn.disabled) return;
-          var items = xianyuRows.filter(function (item) { return selected.has(String(item.item_id || item.url)); });
+          var items = allXianyuRows().filter(function (item) { return selected.has(String(item.item_id || item.url)); });
           if (!window.confirm('入库并下载 ' + items.length + ' 件闲鱼商品？\n\n将保存商品资料与图片到「闲鱼商品」目录；相同商品按编号去重。')) return;
           runShoppingJob('/api/tools/shopping/xianyu/save', {
             platforms: platformPicker.selected(),
             items: items.map(function (item) { return { item_id: item.item_id || '', url: item.url || '' }; })
           }, '入库下载', function (outcome) {
             (outcome.items || []).forEach(function (saved) {
-              xianyuRows.forEach(function (item) {
+              eachXianyuRow(function (item) {
                 if (item.item_id === saved.item_id && saved.saved !== false) {
                   item.saved = true;
                   selected.delete(String(item.item_id || item.url));
@@ -10329,7 +10393,9 @@ function renderLivestreamSummary(root) {
               });
             });
             drawTable();
-            toast(outcome.summary || '已保存到闲鱼商品目录', outcome.failed || outcome.cancelled ? 'warning' : 'success');
+            var failure = (outcome.failures || [])[0];
+            toast((outcome.summary || '已保存到闲鱼商品目录') + (failure ? '；' + failure.error : ''),
+              outcome.failed || outcome.cancelled ? 'warning' : 'success');
             state.shopping.tab = 'xianyu';
             tabs.querySelectorAll('.tab').forEach(function (button, index) { button.classList.toggle('active', TABS[index][0] === 'xianyu'); });
             reload();
@@ -10352,13 +10418,16 @@ function renderLivestreamSummary(root) {
           menu.addEventListener('focusout', function (focusEvent) { if (!menu.contains(focusEvent.relatedTarget)) menu.remove(); });
         });
         drawTable();
-        tableHost.appendChild(h('div', { class: 'table-wrap' }, table));
+        tableHost.appendChild(xianyuRows.length
+          ? h('div', { class: 'table-wrap' }, table)
+          : empty('本页没有匹配商品，可返回上一页或更换关键词重新搜索。'));
         resultHost.replaceChildren(
           h('div', { class: 'row-title' }, '闲鱼商品 · ' + xianyuRows.length + ' 件'), tableHost,
           h('div', { class: 'toolbar', style: 'margin-top:8px' }, allBtn, clearBtn, selectionCount,
             h('span', { style: 'flex:1' }),
             h('button', { class: 'btn mini', type: 'button', onclick: fitWidths }, '自适应'),
-            h('button', { class: 'btn mini', type: 'button', onclick: resetWidths }, '重置'), saveBtn));
+            h('button', { class: 'btn mini', type: 'button', onclick: resetWidths }, '重置'), saveBtn),
+          xianyuPager());
         sync();
       }
 
@@ -10371,7 +10440,7 @@ function renderLivestreamSummary(root) {
             !/(?:taobao\.com|tmall\.com|tb\.cn|douyin\.com|jinritemai\.com|b23\.tv|bilibili\.com)/i.test(text) &&
             !/^\d{3,}$/.test(text)) {
           runShoppingJob('/api/tools/shopping/xianyu/search', {
-            platforms: platformPicker.selected(), text: text, limit: 30
+            platforms: platformPicker.selected(), text: text, limit: 30, page: 1
           }, '搜索并解析闲鱼', showResult);
           return;
         }

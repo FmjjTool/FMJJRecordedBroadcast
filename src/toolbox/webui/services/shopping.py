@@ -37,6 +37,7 @@ class ShoppingService:
         return {"job": job.id}
 
     def start_xianyu_search(self, payload: dict) -> dict:
+        """每次提交一个已校验的搜索页；失败与取消不推进客户端页码。"""
         if self.jobs is None:
             raise ValueError("任务服务不可用")
         payload = webui_shopping.prepare_xianyu_search(payload)
@@ -44,7 +45,7 @@ class ShoppingService:
             "shopping_xianyu_search",
             lambda task: self._run_xianyu(
                 task, webui_shopping.search_xianyu, payload))
-        return {"job": job.id}
+        return {"job": job.id, "page": payload["page"]}
 
     def start_xianyu_save(self, payload: dict) -> dict:
         if self.jobs is None:

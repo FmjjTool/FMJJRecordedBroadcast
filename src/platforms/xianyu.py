@@ -1,8 +1,9 @@
 """闲鱼只读适配器，协议依据 goofish.com 官方 PC 搜索与商品页面。
 
-能力矩阵：关键词搜索首批最多 30 件 / 商品详情；有当前有效登录态时直接
+能力矩阵：关键词搜索每页最多 30 件、最多 50 页 / 商品详情；有当前有效登录态时直接
 使用认证临时浏览器，否则匿名公开页 HTTP → 匿名临时浏览器。
-不翻页、不登录、不保存会话；各分支遇访问限制或限流立即停止，不换身份重试。
+翻页复用官网首个搜索请求与官方 mtop 客户端，不改签名后的请求、不保存会话。
+不登录；各分支遇访问限制或限流立即停止，不换身份重试。
 平台要求登录或人工验证时明确停止，不绕过验证。无时间线/追踪/交易能力。
 响应字段参考官方 xy-site/0.0.188 的 p_search-index.js、p_item-index.js。
 适配器不写资料库、不依赖 Qt，凭据由调用方的统一管理层快照注入。
@@ -19,6 +20,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 
 MAX_ITEMS = 30
+MAX_SEARCH_PAGES = 50  # 官网 PC 搜索同样把 numFound / 30 的页数限制为 50。
 MAX_BODY = 2 * 1024 * 1024
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
@@ -197,6 +199,52 @@ def parse_search(payload, limit=MAX_ITEMS) -> list[dict]:
     return rows
 
 
+def validate_search_page(page):
+    """分页值必须为整数；避免 bool、字符串与浮点值被隐式转换。"""
+    if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= MAX_SEARCH_PAGES:
+        raise ValueError(f"搜索页码须为 1 至 {MAX_SEARCH_PAGES} 的整数")
+    return page
+
+
+def parse_search_page(payload, *, page=1, limit=MAX_ITEMS):
+    """官网 numFound 是结果总量；未知总量时不伪造总页数。"""
+    page = validate_search_page(page)
+    data = _data(payload)
+    if "pageNumber" in data and str(data["pageNumber"]) != str(page):
+        raise ParseChanged("闲鱼返回了其他页商品，请重试当前页")
+    items = parse_search(payload, limit)
+    source = data["resultList"]
+    result = {"items": items, "page": page, "max_pages": MAX_SEARCH_PAGES,
+              "has_more": bool(source) and len(source) >= MAX_ITEMS and page < MAX_SEARCH_PAGES}
+    info = data.get("resultInfo")
+    controls = info.get("searchResControlFields") if isinstance(info, dict) else None
+    if isinstance(controls, dict) and "numFound" in controls:
+        count = controls["numFound"]
+        if (isinstance(count, bool) or not isinstance(count, (int, str))
+                or not re.fullmatch(r"\d{1,12}", str(count))):
+            raise ParseChanged("闲鱼搜索总量格式已变化，请稍后重试")
+        pages = min(MAX_SEARCH_PAGES, (int(count) + MAX_ITEMS - 1) // MAX_ITEMS)
+        result["total_pages"] = max(1, pages)
+        result["has_more"] = bool(source) and page < pages
+    return result
+
+
+def _search_request_data(request):
+    """只读取官网搜索请求中的业务 data；签名与请求头不复制、不输出。"""
+    if request is None:
+        return None
+    values = parse_qs(urlsplit(request.url).query)
+    post = request.post_data
+    if post:
+        values.update(parse_qs(post))
+    raw = values.get("data", [None])[0]
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else None
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def parse_detail(payload, expected_id: str) -> dict:
     data = _data(payload)
     data = data.get("itemDetailDO", data)
@@ -255,9 +303,11 @@ def _public_payload(url, parser, cancel):
     return None
 
 
-def _browser_payload(url, api, parser, cookie, cancel):
+def _browser_payload(url, api, parser, cookie, cancel, *, search_page_number=1):
     check_cancel(cancel)
     result, errors = [], []
+    first_search_request = []
+    first_search_ids = set()
     try:
         from playwright.sync_api import TimeoutError as BrowserTimeoutError, sync_playwright
         from toolbox.browser import launch
@@ -279,6 +329,8 @@ def _browser_payload(url, api, parser, cookie, cancel):
                     host = (urlsplit(response.url).hostname or "").lower()
                     if not (host == "goofish.com" or host.endswith(".goofish.com")) or api not in response.url:
                         return
+                    if errors and not isinstance(errors[-1], TicketRequired):
+                        return  # 已拒绝/限流/结构错误时，不接受随后到达的响应继续任务。
                     try:
                         if response.status == 429:
                             raise RateLimited("闲鱼请求过于频繁，请稍后再试")
@@ -295,6 +347,25 @@ def _browser_payload(url, api, parser, cookie, cancel):
                         payload = json.loads(raw)
                         if _is_search_bootstrap(payload, api):
                             return
+                        if search_page_number > 1:
+                            # 先检查访问限制，再区分页码；首批不能冒充目标页。
+                            _data(payload)
+                            request_data = _search_request_data(response.request)
+                            if (not request_data or str(request_data.get("pageNumber"))
+                                    not in {"1", str(search_page_number)}):
+                                return
+                            keyword = parse_qs(urlsplit(url).query).get("q", [""])[0]
+                            if request_data.get("keyword") != keyword:
+                                return
+                            if str(request_data["pageNumber"]) == "1":
+                                first_items = parse_search(payload)  # 首批结构正确后才允许翻页。
+                                if not first_search_request:
+                                    first_search_request.append(request_data)
+                                    first_search_ids.update(item["item_id"] for item in first_items)
+                                return
+                            target_ids = {item["item_id"] for item in parse_search(payload)}
+                            if first_search_ids and target_ids == first_search_ids:
+                                raise ParseChanged("闲鱼翻页未返回新一页商品，请重试当前页")
                         result.append(parser(payload))
                     except XianyuError as exc:
                         errors.append(exc)
@@ -308,14 +379,35 @@ def _browser_payload(url, api, parser, cookie, cancel):
                     # 页面导航超时不能丢弃此前已收到的有效商品响应。
                     if errors and not result:
                         raise errors[-1]
-                    if not result:
+                    if not result and not first_search_request:
                         raise NetworkError("闲鱼页面连接超时，请检查网络后重试") from exc
                 deadline = time.monotonic() + 18
+                page_requested = False
                 # 首个请求可能只建立内存游客票据，官网随后自动重试；不自行刷新登录态。
                 while not result and time.monotonic() < deadline:
                     check_cancel(cancel)
                     if errors and not isinstance(errors[-1], TicketRequired):
                         raise errors[-1]
+                    if first_search_request and not page_requested:
+                        # 复用官网首个请求的全部筛选字段；官方客户端在改页后重新签名。
+                        # 不拦截/改写已签名的请求，也不创建第二套票据或登录流程。
+                        data = dict(first_search_request[0])
+                        data.update(pageNumber=search_page_number, rowsPerPage=MAX_ITEMS)
+                        errors.clear()
+                        started = page.evaluate("""data => {
+                            if (!window.lib || !window.lib.mtop ||
+                                typeof window.lib.mtop.request !== 'function') return false;
+                            window.lib.mtop.request({api: 'mtop.taobao.idlemtopsearch.pc.search',
+                                v: '1.0', data: data, type: 'POST', appKey: '34839810',
+                                accountSite: 'xianyu', dataType: 'json', timeout: 20000,
+                                needLoginPC: false, showErrorToast: false, needLogin: false,
+                                sessionOption: 'AutoLoginOnly', ecode: 0}).catch(() => {});
+                            return true;
+                        }""", data)
+                        if not started:
+                            raise ParseChanged("闲鱼翻页功能暂时不可用，请重新搜索后重试")
+                        page_requested = True
+                        deadline = time.monotonic() + 18
                     page.wait_for_timeout(200)
                 if result:
                     return result[0]
@@ -337,7 +429,7 @@ def _browser_payload(url, api, parser, cookie, cancel):
         raise NetworkError("闲鱼连接失败，请检查网络与全局设置中的采集引擎后重试") from exc
 
 
-def _fetch(url, api, parser, credential, on_log, is_cancelled):
+def _fetch(url, api, parser, credential, on_log, is_cancelled, *, search_page_number=1):
     check_cancel(is_cancelled)
     # 先选定本次任务身份；已有登录态不再先发游客请求，避免游客403提前终止。
     cookie = credential() if credential else ""
@@ -345,7 +437,15 @@ def _fetch(url, api, parser, credential, on_log, is_cancelled):
     if cookie:
         if on_log:
             on_log("使用当前闲鱼登录态只读请求")
+        if search_page_number > 1:
+            return _browser_payload(url, api, parser, cookie, is_cancelled,
+                                    search_page_number=search_page_number)
         return _browser_payload(url, api, parser, cookie, is_cancelled)
+    if search_page_number > 1:
+        if on_log:
+            on_log("读取闲鱼临时页面并翻页")
+        return _browser_payload(url, api, parser, "", is_cancelled,
+                                search_page_number=search_page_number)
     if on_log:
         on_log("读取闲鱼公开页面")
     try:
@@ -366,6 +466,20 @@ def search(keyword, limit=MAX_ITEMS, *, credential=None, on_log=None, is_cancell
     return _fetch("https://www.goofish.com/search?q=" + quote(keyword),
                   "mtop.taobao.idlemtopsearch.pc.search", lambda data: parse_search(data, limit),
                   credential, on_log, is_cancelled)
+
+
+def search_page(keyword, limit=MAX_ITEMS, *, page=1, credential=None,
+                on_log=None, is_cancelled=None):
+    page = validate_search_page(page)
+    keyword = str(keyword or "").strip()
+    if not keyword or len(keyword) > 100 or "http://" in keyword or "https://" in keyword:
+        raise ValueError("请输入 1–100 字的闲鱼搜索关键词，商品链接请使用解析")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_ITEMS:
+        raise ValueError("搜索数量须为 1 至 30 件")
+    return _fetch("https://www.goofish.com/search?q=" + quote(keyword),
+                  "mtop.taobao.idlemtopsearch.pc.search",
+                  lambda data: parse_search_page(data, page=page, limit=limit),
+                  credential, on_log, is_cancelled, search_page_number=page)
 
 
 def fetch_item(text, *, credential=None, on_log=None, is_cancelled=None):

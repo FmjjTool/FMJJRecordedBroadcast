@@ -526,6 +526,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/shopping/parse", start_shopping_parse)
 
     def search_xianyu_shopping(req):
+        """JSON page 默认为 1，由购物用例校验平台允许的页码范围。"""
         return shopping.start_xianyu_search(dict(req.json or {}))
     server.post("/api/tools/shopping/xianyu/search", search_xianyu_shopping)
 

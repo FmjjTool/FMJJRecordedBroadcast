@@ -73,6 +73,7 @@ def _require_xianyu(payload: dict) -> None:
 
 
 def prepare_xianyu_search(payload: dict) -> dict:
+    from platforms.xianyu import validate_search_page
     _require_xianyu(payload)
     text = payload.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -82,7 +83,8 @@ def prepare_xianyu_search(payload: dict) -> dict:
     limit = payload.get("limit", 30)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
         raise ValueError("搜索数量须为 1 至 30 件")
-    return {"text": text.strip(), "limit": limit}
+    page = validate_search_page(payload.get("page", 1))
+    return {"text": text.strip(), "limit": limit, "page": page}
 
 
 def search_xianyu(payload: dict, on_log=None, is_cancelled=None) -> dict:

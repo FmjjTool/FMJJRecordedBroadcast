@@ -56,17 +56,21 @@ def _row(item):
                 "image_count": len(item.get("images") or [])}
 
 
-def search(text, limit=30, on_log=None, is_cancelled=None):
+def search(text, limit=30, on_log=None, is_cancelled=None, *, page=1):
+    page = xianyu.validate_search_page(page)
     try:
         limit = int(limit)
     except (ValueError, TypeError) as exc:
         raise ValueError("搜索数量须为 1–30") from exc
     if not 1 <= limit <= xianyu.MAX_ITEMS:
         raise ValueError("搜索数量须为 1–30")
-    items = xianyu.search(text, limit, credential=_TaskCredential(),
-                          on_log=on_log, is_cancelled=is_cancelled)
-    return {"platform": "xianyu", "kind": "search", "items": [_row(item) for item in items],
-            "total": len(items), "summary": f"闲鱼搜索已完成：{len(items)} 件商品（首批最多 30 件）"}
+    keyword = str(text or "").strip()
+    result = xianyu.search_page(keyword, limit, page=page, credential=_TaskCredential(),
+                               on_log=on_log, is_cancelled=is_cancelled)
+    items = result["items"]
+    return result | {"platform": "xianyu", "kind": "search", "keyword": keyword,
+                     "items": [_row(item) for item in items], "total": len(items),
+                     "summary": f"闲鱼搜索已完成：第 {page} 页 · {len(items)} 件商品"}
 
 
 def parse(text, on_log=None, is_cancelled=None):

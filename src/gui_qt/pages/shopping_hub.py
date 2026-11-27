@@ -135,7 +135,7 @@ class ShoppingHubPage(BasePage):
             self._set_hint("请输入 1–100 字的闲鱼关键词，或粘贴完整商品链接", warn=True)
             return
         self.stack.setCurrentIndex(_TAB_INDEX["xianyu"])
-        self._set_hint("搜索并解析闲鱼首批商品，勾选后可入库并下载图片")
+        self._set_hint("搜索闲鱼商品，可翻页浏览并跨页勾选入库下载")
         self.xianyu_page.submit_search(keyword)
         self._sync_platform_controls()
 
@@ -191,6 +191,7 @@ class ShoppingHubPage(BasePage):
             selected = self._selected_platforms()
             busy = any(self._panel_busy(page) for page in self._panels.values())
             self.parse_btn.setEnabled(not busy and bool(selected))
+            self.input_edit.setReadOnly(busy)
             for check in self.platform_checks.values():
                 check.setEnabled(not busy)
             for key, page in self._panels.items():
