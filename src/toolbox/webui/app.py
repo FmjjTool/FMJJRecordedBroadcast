@@ -816,9 +816,18 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     server.post("/api/tcdoc/collect", start_collect)
     server.post("/api/tcdoc/sync", start_sync)
-    server.get("/api/tcdoc/table-rows", lambda req: tcdoc.table_rows(
-        req.q("doc_key"), req.q("tab_id"), req.q_int("page", 1, 1),
-        req.q_int("page_size", 50, 1, 200)))
+    def tcdoc_table_rows(req):
+        newest = req.q("newest", "1").lower()
+        if newest not in ("0", "1", "false", "true"):
+            raise ValueError("显示顺序无效，请重新选择")
+        return tcdoc.table_rows(
+            req.q("doc_key"), req.q("tab_id"), req.q_int("page", 1, 1),
+            req.q_int("page_size", 200, 1, 200), newest in ("1", "true"),
+            req.q("sort_column"), req.q("direction"))
+
+    server.get("/api/tcdoc/table-rows", tcdoc_table_rows)
+    server.get("/api/tcdoc/recent-changes", lambda req: tcdoc.recent_changes(
+        req.q("doc_key"), req.q_int("limit", 60, 1, 60)))
     server.get("/api/tcdoc/snapshots", lambda req: tcdoc.snapshots(
         req.q("doc_key"), req.q_int("limit", 500, 1, 5000)))
     server.get("/api/tcdoc/revisions", lambda req: tcdoc.revisions(

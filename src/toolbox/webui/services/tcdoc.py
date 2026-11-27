@@ -75,23 +75,15 @@ class TCDocService:
         }
 
     def table_rows(self, doc_key: str, tab_id: str, page: int,
-                   page_size: int) -> dict:
-        if not doc_key or not tab_id:
-            raise ValueError("缺少文档或子表")
-        db_path = config.tables_db_path()
-        if not db_path.exists():
-            raise ValueError("暂无表格同步数据")
-        page = max(1, int(page))
-        page_size = max(1, min(200, int(page_size)))
-        sheets = {item["tab_id"] for item in tables.sheets_of(doc_key)}
-        if tab_id not in sheets:
-            raise ValueError("子表不存在")
-        rows, total = tables.rows_page(
-            doc_key, tab_id, offset=(page - 1) * page_size, limit=page_size)
-        pages = max(1, (int(total) + page_size - 1) // page_size)
-        return {"doc_key": doc_key, "tab_id": tab_id, "rows": rows,
-                "total": int(total), "page": page, "page_size": page_size,
-                "pages": pages}
+                   page_size: int, newest_first: bool = True,
+                   sort_column: str = "", direction: str = "") -> dict:
+        from toolbox import webui_tcdoc_tables
+        return webui_tcdoc_tables.table_rows(
+            doc_key, tab_id, page, page_size, newest_first, sort_column, direction)
+
+    def recent_changes(self, doc_key: str, limit: int = 60) -> dict:
+        from toolbox import webui_tcdoc_tables
+        return webui_tcdoc_tables.recent_changes(doc_key, limit)
 
     def snapshots(self, doc_key: str, limit: int = 500) -> dict:
         """采集明细（本地每次采集的成功 / 失败记录）。"""

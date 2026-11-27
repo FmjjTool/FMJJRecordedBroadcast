@@ -1,33 +1,34 @@
 """腾讯文档页 · 字段映射回写面板（官方 OpenAPI）。
 
 把本地 CSV / Excel / JSON 的列映射到当前腾讯文档的智能表字段，
-按主键预览差异，再批量新增 / 更新；不会删除记录。
+按匹配列预览差异，只新增 / 更新明确勾选的行；不会删除记录。
 官方 OpenAPI 的三个 ID 由统一管理入口维护，本面板只读取，不保存凭据。
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QFrame, QGroupBox,
+    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt import table_sort
+from gui_qt import table_columns, table_sort
 from gui_qt.common import post_to_main, run_bg
-from toolbox.tcdoc import openapi
+from toolbox.tcdoc import mapping_workflow as workflow, openapi
 
 FIELD_TYPES = openapi.FIELD_TYPES
 SUPPORTED_TYPES = openapi.SUPPORTED_TYPES
 
-_MISSING_CREDENTIALS = "未配置官方 OpenAPI 凭证，无法连接文档；请配置后重试"
+_MISSING_CREDENTIALS = "需要登录，无法连接文档；请登录后重试"
 
 
 class TcDocMappingPanel(QWidget):
@@ -50,6 +51,11 @@ class TcDocMappingPanel(QWidget):
         self.local_path = ""
         self.mapping: dict[str, str] = {}
         self.actions: list[dict] = []
+        self._selected_rows: set[int] = set()
+        self._local_page = self._diff_page = 1
+        self._page_size = 200
+        self._revision = 0
+        self._cancel = threading.Event()
         self._busy = False
         self._closed = False
         self._buttons: list[QPushButton] = []
@@ -61,8 +67,8 @@ class TcDocMappingPanel(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         toolbar = QFrame()
         toolbar.setProperty("variant", "toolbar")
@@ -74,7 +80,7 @@ class TcDocMappingPanel(QWidget):
         self.doc_label.setProperty("role", "caption")
         bar.addWidget(self.doc_label, 1)
         self.connect_btn = QPushButton("连接当前文档")
-        self.connect_btn.setToolTip("用官方 OpenAPI 连接当前文档，只列出允许回写的子表")
+        self.connect_btn.setToolTip("读取当前文档，只列出官方动态与直播记录")
         self.connect_btn.clicked.connect(self.on_connect)
         bar.addWidget(self.connect_btn)
         self.refresh_btn = QPushButton("刷新字段")
@@ -86,6 +92,31 @@ class TcDocMappingPanel(QWidget):
         self.conn_status.setProperty("role", "caption")
         bar.addWidget(self.conn_status)
         layout.addWidget(toolbar)
+        target_bar = QHBoxLayout()
+        target_bar.addWidget(QLabel("目标子表"))
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.setMinimumWidth(140)
+        self.sheet_combo.setMinimumContentsLength(10)
+        self.sheet_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.sheet_combo.currentIndexChanged.connect(self.on_sheet_changed)
+        target_bar.addWidget(self.sheet_combo, 1)
+        target_bar.addWidget(QLabel("匹配列"))
+        self.key_combo = QComboBox()
+        self.key_combo.setMinimumWidth(140)
+        self.key_combo.setMinimumContentsLength(10)
+        self.key_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.key_combo.setToolTip("用于判断同一条记录，优先选择唯一链接或编号；重复值会提示核对")
+        self.key_combo.currentIndexChanged.connect(
+            lambda *_: self._invalidate_preview("匹配列已修改，请重新对比云端"))
+        target_bar.addWidget(self.key_combo, 1)
+        self.mapping_btn = QPushButton("字段匹配…")
+        self.mapping_btn.clicked.connect(self._show_mapping)
+        target_bar.addWidget(self.mapping_btn)
+        self.preview_btn = QPushButton("对比云端")
+        self.preview_btn.setProperty("variant", "primary")
+        self.preview_btn.clicked.connect(self.on_preview)
+        target_bar.addWidget(self.preview_btn)
+        layout.addLayout(target_bar)
 
         self.busy_bar = QProgressBar()
         self.busy_bar.setRange(0, 0)
@@ -93,19 +124,27 @@ class TcDocMappingPanel(QWidget):
         self.busy_bar.setFixedHeight(6)
         self.busy_bar.setVisible(False)
         layout.addWidget(self.busy_bar)
+        self.cancel_btn = QPushButton("取消任务")
+        self.cancel_btn.clicked.connect(self._cancel.set)
+        self.cancel_btn.setVisible(False)
+        layout.addWidget(self.cancel_btn, alignment=Qt.AlignRight)
 
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self._build_left_panel())
         split.addWidget(self._build_right_panel())
-        split.setSizes([600, 660])
+        split.setChildrenCollapsible(False)
+        split.setSizes([480, 700])
         layout.addWidget(split, 1)
 
         self._buttons.extend([
             self.connect_btn, self.refresh_btn, self.pick_btn, self.auto_btn,
             self.clear_map_btn, self.load_map_btn, self.save_map_btn,
             self.remote_refresh_btn, self.preview_btn, self.execute_btn,
+            self.mapping_btn, self.local_prev_btn, self.local_next_btn,
+            self.diff_prev_btn, self.diff_next_btn, self.clear_selection_btn,
         ])
-        self._controls.extend([self.sheet_combo, self.key_combo, self.remote_limit_combo])
+        self._controls.extend([self.sheet_combo, self.key_combo, self.remote_limit_combo,
+                               self.diff_filter])
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -113,39 +152,41 @@ class TcDocMappingPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        local_box = QGroupBox("本地数据（CSV / Excel / JSON）")
+        local_box = QGroupBox("本地表格")
         local_layout = QVBoxLayout(local_box)
         row = QHBoxLayout()
-        self.local_label = QLabel("尚未选择文件（选择后这里显示本地预览）")
+        self.local_label = QLabel("尚未导入，选择 CSV / Excel / JSON 文件")
+        self.local_label.setWordWrap(True)
         self.local_label.setProperty("role", "caption")
-        self.pick_btn = QPushButton("选择文件")
+        self.pick_btn = QPushButton("导入文件")
         self.pick_btn.clicked.connect(self._pick_file)
         row.addWidget(self.local_label, 1)
         row.addWidget(self.pick_btn)
         local_layout.addLayout(row)
         self.local_table = self._make_table([])
-        self._local_sorter = table_sort.install(self.local_table, skip_columns=())
+        self._local_sorter = table_sort.install_callback(
+            self.local_table, self._sort_local, skip_columns=(), tri_state=True)
         local_layout.addWidget(self.local_table, 1)
+        local_footer = QHBoxLayout()
+        self.local_page_label = QLabel("第 1 / 1 页 · 共 0 条")
+        self.local_prev_btn = QPushButton("上一页")
+        self.local_next_btn = QPushButton("下一页")
+        self.local_prev_btn.clicked.connect(lambda: self._move_local(-1))
+        self.local_next_btn.clicked.connect(lambda: self._move_local(1))
+        local_footer.addWidget(self.local_page_label, 1)
+        local_footer.addWidget(self.local_prev_btn)
+        local_footer.addWidget(self.local_next_btn)
+        local_layout.addLayout(local_footer)
+        layout.addWidget(local_box, 1)
 
-        mapping_box = QGroupBox("字段映射（本地列 → 腾讯字段）")
+        self.mapping_dialog = QDialog(self)
+        self.mapping_dialog.setWindowTitle("字段匹配")
+        self.mapping_dialog.resize(900, 640)
+        self.mapping_dialog.setMinimumSize(420, 300)
+        self.mapping_dialog.setModal(False)
+        dialog_layout = QVBoxLayout(self.mapping_dialog)
+        mapping_box = QGroupBox("本地列 → 云端字段")
         mapping_layout = QVBoxLayout(mapping_box)
-        top = QHBoxLayout()
-        top.addWidget(QLabel("子表"))
-        self.sheet_combo = QComboBox()
-        self.sheet_combo.setMinimumWidth(220)
-        self.sheet_combo.setSizeAdjustPolicy(
-            QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.sheet_combo.setMinimumContentsLength(10)
-        self.sheet_combo.currentIndexChanged.connect(self.on_sheet_changed)
-        top.addWidget(self.sheet_combo, 1)
-        top.addWidget(QLabel("主键"))
-        self.key_combo = QComboBox()
-        self.key_combo.setMinimumWidth(150)
-        self.key_combo.setSizeAdjustPolicy(
-            QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.key_combo.setMinimumContentsLength(8)
-        top.addWidget(self.key_combo)
-        mapping_layout.addLayout(top)
         self.map_hint = QLabel(
             "选择本地 CSV / Excel / JSON 后，这里会按列生成本地 → 腾讯字段的映射行。")
         self.map_hint.setProperty("role", "caption")
@@ -153,6 +194,8 @@ class TcDocMappingPanel(QWidget):
         mapping_layout.addWidget(self.map_hint)
         self.map_table = self._make_table(["本地列", "腾讯字段", "类型", "示例值"])
         self.map_table.setMinimumHeight(220)
+        self._map_sorter = table_sort.install_callback(
+            self.map_table, self._sort_mapping, skip_columns=(1,), tri_state=True)
         mapping_layout.addWidget(self.map_table, 1)
         buttons = QHBoxLayout()
         self.auto_btn = QPushButton("自动同名匹配")
@@ -169,11 +212,10 @@ class TcDocMappingPanel(QWidget):
         buttons.addStretch(1)
         mapping_layout.addLayout(buttons)
 
-        left_split = QSplitter(Qt.Vertical)
-        left_split.addWidget(local_box)
-        left_split.addWidget(mapping_box)
-        left_split.setSizes([220, 500])
-        layout.addWidget(left_split, 1)
+        dialog_layout.addWidget(mapping_box, 1)
+        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box.rejected.connect(self.mapping_dialog.hide)
+        dialog_layout.addWidget(close_box)
         return panel
 
     def _build_right_panel(self) -> QWidget:
@@ -188,8 +230,7 @@ class TcDocMappingPanel(QWidget):
         remote_layout = QVBoxLayout(remote_page)
         remote_layout.setContentsMargins(6, 6, 6, 6)
         remote_layout.setSpacing(6)
-        hint = QLabel("只读预览腾讯文档里的实际记录；本地数据请在左侧选择文件。"
-                      "左右滚动可查看全部字段。")
+        hint = QLabel("云端记录只读；导入本地文件后点击「对比云端」识别差异。")
         hint.setProperty("role", "caption")
         hint.setWordWrap(True)
         remote_layout.addWidget(hint)
@@ -211,39 +252,81 @@ class TcDocMappingPanel(QWidget):
         remote_bar.addWidget(self.remote_refresh_btn)
         remote_layout.addLayout(remote_bar)
         self.remote_table = self._make_table([])
-        self._remote_sorter = table_sort.install(self.remote_table, skip_columns=())
+        self._remote_sorter = table_sort.install_callback(
+            self.remote_table, self._sort_remote, skip_columns=(), tri_state=True)
         remote_layout.addWidget(self.remote_table, 1)
 
         diff_page = QWidget()
         diff_layout = QVBoxLayout(diff_page)
         diff_layout.setContentsMargins(6, 6, 6, 6)
         diff_layout.setSpacing(6)
-        self.summary_label = QLabel("尚未生成预览")
+        self.summary_label = QLabel("尚未对比，导入文件后点击「对比云端」")
+        self.summary_label.setWordWrap(True)
         font = self.summary_label.font()
         font.setBold(True)
         self.summary_label.setFont(font)
         diff_layout.addWidget(self.summary_label)
-        self.diff_table = self._make_table(["行号", "操作", "主键", "说明"])
-        self._diff_sorter = table_sort.install(self.diff_table, skip_columns=())
-        diff_layout.addWidget(self.diff_table, 1)
+        filter_bar = QHBoxLayout()
+        filter_bar.addWidget(QLabel("显示"))
+        self.diff_filter = QComboBox()
+        for text, value in (("差异行", "diff"), ("仅新增", "新增"),
+                            ("仅更新", "更新"), ("错误行", "错误"),
+                            ("全部", "all")):
+            self.diff_filter.addItem(text, value)
+        self.diff_filter.setMinimumWidth(100)
+        self.diff_filter.currentIndexChanged.connect(self._filter_diff)
+        filter_bar.addWidget(self.diff_filter)
+        self.selection_label = QLabel("已勾选 0 条")
+        filter_bar.addWidget(self.selection_label, 1)
+        self.clear_selection_btn = QPushButton("取消勾选")
+        self.clear_selection_btn.clicked.connect(self._clear_selection)
+        filter_bar.addWidget(self.clear_selection_btn)
+        diff_layout.addLayout(filter_bar)
+        self.diff_table = self._make_table(["", "行号", "操作", "匹配值", "说明"])
+        self._diff_sorter = table_sort.install_callback(
+            self.diff_table, self._sort_diff, skip_columns=(0,), tri_state=True)
+        self.diff_table.itemChanged.connect(self._on_diff_checked)
+        self.diff_table.itemSelectionChanged.connect(self._show_diff_detail)
+        diff_layout.addWidget(self.diff_table, 3)
+        self.detail_label = QLabel("点一行查看本地值与云端值")
+        self.detail_label.setProperty("role", "caption")
+        diff_layout.addWidget(self.detail_label)
+        self.detail_table = self._make_table(["字段", "本地值", "云端值"])
+        self._detail_sorter = table_sort.install_callback(
+            self.detail_table, self._sort_detail, skip_columns=(), tri_state=True)
+        diff_layout.addWidget(self.detail_table, 2)
+        pagination = QHBoxLayout()
+        self.diff_page_label = QLabel("第 1 / 1 页 · 共 0 条")
+        self.diff_prev_btn = QPushButton("上一页")
+        self.diff_next_btn = QPushButton("下一页")
+        self.diff_prev_btn.clicked.connect(lambda: self._move_diff(-1))
+        self.diff_next_btn.clicked.connect(lambda: self._move_diff(1))
+        pagination.addWidget(self.diff_page_label, 1)
+        pagination.addWidget(self.diff_prev_btn)
+        pagination.addWidget(self.diff_next_btn)
+        diff_layout.addLayout(pagination)
         row = QHBoxLayout()
-        self.preview_btn = QPushButton("生成预览")
-        self.preview_btn.clicked.connect(self.on_preview)
-        self.execute_btn = QPushButton("执行写入")
+        self.execute_btn = QPushButton("写入勾选 0 条")
         self.execute_btn.setProperty("variant", "primary")
         self.execute_btn.setEnabled(False)
         self.execute_btn.clicked.connect(self.on_execute)
         row.addStretch(1)
-        row.addWidget(self.preview_btn)
         row.addWidget(self.execute_btn)
         diff_layout.addLayout(row)
 
+        content_tabs.setObjectName("mappingContentTabs")
+        content_tabs.setStyleSheet(
+            "QTabWidget#mappingContentTabs::pane { border: 0px; }"
+            "QTabWidget#mappingContentTabs QTabBar::tab { background: transparent;"
+            "border: 0px; border-bottom: 2px solid transparent; padding: 4px 10px; }"
+            "QTabWidget#mappingContentTabs QTabBar::tab:selected {"
+            "border-bottom-color: palette(highlight); color: palette(link); }")
+        content_tabs.addTab(diff_page, "差异记录")
         content_tabs.addTab(remote_page, "只读表格")
-        content_tabs.addTab(diff_page, "差异预览")
         self.content_tabs = content_tabs
 
-        log_box = QGroupBox("日志")
-        log_layout = QVBoxLayout(log_box)
+        log_page = QWidget()
+        log_layout = QVBoxLayout(log_page)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(3000)
@@ -252,11 +335,8 @@ class TcDocMappingPanel(QWidget):
         clear_btn.clicked.connect(self.log_view.clear)
         log_layout.addWidget(clear_btn, alignment=Qt.AlignRight)
 
-        right_split = QSplitter(Qt.Vertical)
-        right_split.addWidget(content_tabs)
-        right_split.addWidget(log_box)
-        right_split.setSizes([500, 220])
-        layout.addWidget(right_split, 1)
+        content_tabs.addTab(log_page, "任务日志")
+        layout.addWidget(content_tabs, 1)
         return panel
 
     def _make_table(self, headers: list[str]) -> QTableWidget:
@@ -271,6 +351,100 @@ class TcDocMappingPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
         return table
+
+    def _show_mapping(self) -> None:
+        self.mapping_dialog.show()
+        self.mapping_dialog.raise_()
+        self.mapping_dialog.activateWindow()
+
+    def _invalidate_preview(self, message: str) -> None:
+        self._revision += 1
+        self.actions = []
+        self._selected_rows.clear()
+        self._diff_page = 1
+        self.summary_label.setText(message)
+        self._render_diff()
+
+    def _update_selection(self) -> None:
+        count = len(self._writable_actions())
+        self.selection_label.setText(f"已勾选 {count} 条")
+        self.execute_btn.setText(f"写入勾选 {count} 条")
+        self.execute_btn.setEnabled(bool(count) and not self._busy)
+
+    def _on_diff_checked(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0:
+            return
+        row_no = item.data(Qt.UserRole)
+        if row_no is None:
+            return
+        if item.checkState() == Qt.Checked:
+            self._selected_rows.add(int(row_no))
+        else:
+            self._selected_rows.discard(int(row_no))
+        self._update_selection()
+
+    def _clear_selection(self) -> None:
+        self._selected_rows.clear()
+        self._render_diff()
+
+    @staticmethod
+    def _ordered(records, sorter, getter):
+        if sorter.col < 0:
+            return list(records)
+        from toolbox.table_sort_keys import sort_key, sort_records
+        return sort_records(records, lambda item: sort_key(getter(item, sorter.col)),
+                            ascending=sorter.ascending)
+
+    def _sort_local(self, *_args) -> None:
+        self._local_page = 1
+        self._render_local_table()
+
+    def _move_local(self, offset: int) -> None:
+        self._local_page += offset
+        self._render_local_table()
+
+    def _sort_diff(self, *_args) -> None:
+        self._diff_page = 1
+        self._render_diff()
+
+    def _filter_diff(self, *_args) -> None:
+        self._diff_page = 1
+        self._render_diff()
+
+    def _move_diff(self, offset: int) -> None:
+        self._diff_page += offset
+        self._render_diff()
+
+    def _sort_mapping(self, *_args) -> None:
+        self._rebuild_mapping_table()
+
+    def _sort_remote(self, *_args) -> None:
+        self._render_remote()
+
+    def _sort_detail(self, *_args) -> None:
+        self._show_diff_detail()
+
+    def _show_diff_detail(self) -> None:
+        item = self.diff_table.item(self.diff_table.currentRow(), 0)
+        row_no = item.data(Qt.UserRole) if item else None
+        action = next((a for a in self.actions if a.get("row_no") == row_no), None)
+        self.detail_table.setRowCount(0)
+        if action is None:
+            self.detail_label.setText("点一行查看本地值与云端值")
+            return
+        self.detail_label.setText(
+            f"本地第 {row_no} 行 · {action.get('op', '')} · {action.get('message', '')}")
+        changes = self._ordered(action.get("changes") or [], self._detail_sorter,
+                                lambda change, col: change.get(
+                                    ("field", "local", "remote")[col], ""))
+        self.detail_table.setRowCount(len(changes))
+        for row, change in enumerate(changes):
+            for col, key in enumerate(("field", "local", "remote")):
+                full = str(change.get(key) or "")
+                cell = QTableWidgetItem(full.replace("\n", " ")[:300])
+                cell.setToolTip(full)
+                self.detail_table.setItem(row, col, cell)
+        table_columns.fit_table_columns(self.detail_table)
 
     # ==================== 文档 / 任务状态 ====================
 
