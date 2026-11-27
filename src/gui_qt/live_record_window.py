@@ -2,9 +2,8 @@
 """直播录制 · 二级界面（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）。
 
 界面结构对齐参考项目「江湖录播」（D:/PythonApps/Python版全量/ui/main_window.py）：
-  菜单栏（文件 / 主播 / 工具 / 设置 / 帮助）
-  + 工具栏（添加主播 / 批量导入 / 批量修改 / 开启监控录制 / 一键停止 /
-            立即检测 / 录制设置 / 推送设置 / FLV / TS 修复 / 写时间码 / 打开录制目录）
+  两行工具栏（添加主播 / 批量导入 / 批量修改 / 开启监控录制 / 一键停止 /
+            立即检测 / 录制设置 / 推送设置 / 更多）
   + 顶部详情条 + 主播表格（状态着色、勾选列、双击切换监控/录制）
   + 下方运行日志（QSplitter 可拖）+ 状态栏
   + 右键菜单（检测、重新录制、独立设置、备注、复制与删除）
@@ -348,15 +347,15 @@ class PlatformPane(QWidget):
         # ---- 工具栏（分两行：上排主播与监控，下排设置与工具）----
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
+        self._tbtn(bar, "添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
         self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
         self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
         self.btn_batch.clicked.connect(self._on_batch_menu)
         bar.addSpacing(10)
-        self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
+        self.btn_mon = self._tbtn(bar, "开启监控录制", self.on_toggle_monitor,
                                   "按间隔检测开播，开播即自动录制")
         self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
-        self._tbtn(bar, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
+        self._tbtn(bar, "立即检测", self.on_check_now, "立刻检测所有监控中的主播")
         bar.addStretch(1)
         self._tbtn(bar, "全选", lambda: self._check_all(True))
         self._tbtn(bar, "取消", lambda: self._check_all(False))
@@ -366,14 +365,9 @@ class PlatformPane(QWidget):
         bar2.setSpacing(6)
         self._tbtn(bar2, "录制设置", self.on_settings)
         self._tbtn(bar2, "推送设置", self.on_push_settings)
-        self._tbtn(bar2, "FLV / TS 修复", self.on_repair_flv,
-                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
-        self._tbtn(bar2, "写时间码", self.on_timecode,
-                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
-        self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
-        self._tbtn(bar2, "清除状态", self.on_clear_states,
-                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
-                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
+        self.btn_more = self._tbtn(bar2, "更多", None, "更多录制操作")
+        self.btn_more.setProperty("menuButton", True)
+        self.btn_more.setMenu(self.win._build_more_menu(self))
         bar2.addStretch(1)
         bt_dm = self._tbtn(bar2, "弹幕姬",
                            self.win._open_danmaku_window,
@@ -2047,7 +2041,7 @@ class LiveRecordWindow(QMainWindow):
         self.app = app
         self.embedded = bool(embedded)
         if self.embedded:
-            # 内嵌到主界面页面栈：当普通子控件用，菜单栏仍显示在页面顶部
+            # 内嵌到主界面页面栈：当普通子控件使用
             self.setWindowFlags(Qt.Widget)
         self.state = LR.load_state() or {}
         # 记下启动时是否真读到配置：读空时不允许把空主播列表写回磁盘（见 save_state）
@@ -2101,7 +2095,7 @@ class LiveRecordWindow(QMainWindow):
         sb.addWidget(self.status_label, 1)
         self.setStatusBar(sb)
 
-        self._build_menus()
+        self._install_shortcuts()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -2124,7 +2118,7 @@ class LiveRecordWindow(QMainWindow):
             if any(a.monitoring for a in pane.manager.anchors):
                 pane.manager.start_monitor()
 
-    # ---------- 菜单 ----------
+    # ---------- 更多操作与快捷键 ----------
     def _act(self, text, slot, shortcut=None, tip=None):
         a = QAction(text, self)
         a.triggered.connect(lambda _c=False: slot())
@@ -2134,82 +2128,41 @@ class LiveRecordWindow(QMainWindow):
             a.setStatusTip(tip)
         return a
 
-    def _build_menus(self):
-        mb = self.menuBar()
+    def _build_more_menu(self, pane):
+        """低频工具与无独立按钮的主播操作收纳在工具栏「更多」中。"""
+        menu = QMenu(self)
+        add = menu.addAction
+        add(self._act("FLV / TS 修复…", pane.on_repair_flv))
+        add(self._act("写时间码…", pane.on_timecode))
+        add(self._act("打开录制目录", lambda: _open_dir(pane.manager.out_dir())))
+        add(self._act(
+            "清除本页状态…", pane.on_clear_states,
+            tip="清空当前平台的运行状态与日志；主播与设置保留"))
+        menu.addSeparator()
+        add(self._act("打开记录数据文件夹", pane.on_open_record_dir))
+        add(self._act("运行日志…", pane.on_show_log))
+        menu.addSeparator()
+        add(self._act("播放直播源", pane.on_preview_stream))
+        add(self._act("开始录制", pane.on_start_record))
+        add(self._act("停止录制", pane.on_stop_record))
+        add(self._act("移动至序号…", pane.on_move_to_index))
+        return menu
 
-        m = mb.addMenu("文件(&F)")
-        m.addAction(self._act("添加主播…", lambda: self.pane.on_add(), "Ctrl+N"))
-        m.addAction(self._act("批量导入…", lambda: self.pane.on_batch(), "Ctrl+I"))
-        m.addSeparator()
-        m.addAction(self._act("打开录制目录",
-                              lambda: _open_dir(self.pane.manager.out_dir())))
-        m.addAction(self._act("打开记录数据文件夹", lambda: self.pane.on_open_record_dir()))
-        m.addSeparator()
-        if self.embedded and self.app is not None:
-            # 内嵌在页面栈里：退出＝退出整个软件，交给主窗口统一收尾
-            m.addAction(self._act("退出软件", self.app.close, "Ctrl+Q"))
-        else:
-            m.addAction(self._act("退出", self.close, "Ctrl+Q"))
-
-        m = mb.addMenu("主播(&A)")
-        m.addAction(self._act("加入监控", lambda: self.pane._set_flag("monitoring", True)))
-        m.addAction(self._act("退出监控", lambda: self.pane._set_flag("monitoring", False)))
-        m.addSeparator()
-        m.addAction(self._act("加入录制", lambda: self.pane._set_flag("_want_record", True)))
-        m.addAction(self._act("退出录制", lambda: self.pane._set_flag("_want_record", False)))
-        m.addSeparator()
-        m.addAction(self._act("立即检测开播", lambda: self.pane.on_check_now(), "F6"))
-        m.addAction(self._act("播放直播源", lambda: self.pane.on_preview_stream()))
-        m.addAction(self._act("开始录制", lambda: self.pane.on_start_record()))
-        m.addAction(self._act("停止录制", lambda: self.pane.on_stop_record()))
-        m.addAction(self._act("一键停止全部录制", lambda: self.pane.on_stop_all(), "F9"))
-        m.addSeparator()
-        m.addAction(self._act("独立设置…", lambda: self.pane.on_anchor_settings()))
-        m.addAction(self._act("已录时间归零（重新录制）",
-                              lambda: self.pane.on_reset_elapsed(True)))
-        m.addAction(self._act("移动至序号…", lambda: self.pane.on_move_to_index()))
-        m.addAction(self._act("修改备注…", lambda: self.pane.on_edit_remark()))
-        m.addSeparator()
-        m.addAction(self._act("删除选中", lambda: self.pane.on_delete(), "Del"))
-
-        m = mb.addMenu("工具(&T)")
-        m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
-        m.addAction(self._act("推送设置…", lambda: self.pane.on_push_settings()))
-        m.addAction(self._act("FLV / TS 修复…", lambda: self.pane.on_repair_flv()))
-        m.addAction(self._act("写时间码…", lambda: self.pane.on_timecode()))
-        m.addSeparator()
-        m.addAction(self._act("清除本页状态…", lambda: self.pane.on_clear_states(),
-                              tip="清空当前平台的运行状态与日志；主播与设置保留"))
-        m.addSeparator()
-        m.addAction(self._act("复制直播源", lambda: self.pane.on_copy_stream()))
-        m.addAction(self._act("复制直播网址", lambda: self.pane.on_copy_url()))
-        m.addAction(self._act("运行日志…", lambda: self.pane.on_show_log()))
-        m.addSeparator()
-        m.addAction(self._act(
-            "弹幕姬…", self._open_danmaku_window,
-            tip="打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT"))
-
-        m = mb.addMenu("设置(&S)")
-        m.addAction(self._act("录制设置…", lambda: self.pane.on_settings()))
-        m.addAction(self._act("推送设置…", lambda: self.pane.on_push_settings()))
-        m.addSeparator()
-        for key in LR.PLATFORMS:
-            m.addAction(self._act(
-                "切换平台：%s" % LR.PLATFORMS[key]["name"],
-                lambda _c=False, k=key: self.switch_platform(k)))
-
-        m = mb.addMenu("帮助(&H)")
-        m.addAction(self._act("关于", self._show_about))
-
-    def _show_about(self):
-        QMessageBox.information(
-            self, "关于",
-            "直播录制 · 多平台（抖音 / B站 / 快手 / 微博 / 小红书 / 网易云）\n\n"
-            "界面与交互参考：江湖录播（DY直播数据分析）\n"
-            "录制特性参考：BililiveRecorder 2.20.0\n"
-            "（断线续传 / 分段 / 断流重连 / 弹幕录制 / 封面 / 标题过滤 / FLV 修复 / 写时间码）\n"
-            "快手 / 微博 / 小红书 / 网易云取流来自页面自身接口，"
-            "视频统一由 ffmpeg 转封装为 TS")
+    def _install_shortcuts(self):
+        """顶部菜单移除后，保留原有常用键盘操作。"""
+        close = self.app.close if self.embedded and self.app is not None else self.close
+        shortcuts = (
+            ("添加主播", "Ctrl+N", lambda: self.pane.on_add()),
+            ("批量导入", "Ctrl+I", lambda: self.pane.on_batch()),
+            ("退出", "Ctrl+Q", close),
+            ("立即检测开播", "F6", lambda: self.pane.on_check_now()),
+            ("一键停止全部录制", "F9", lambda: self.pane.on_stop_all()),
+            ("删除选中", "Del", lambda: self.pane.on_delete()),
+        )
+        for text, shortcut, slot in shortcuts:
+            action = self._act(text, slot, shortcut)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            self.addAction(action)
 
     def _open_danmaku_window(self):
         """打开弹幕姬窗口（抖音 / B站两个页签）。"""
