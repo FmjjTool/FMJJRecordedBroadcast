@@ -21,6 +21,8 @@ class TCDocService:
     def __init__(self, jobs):
         self.jobs = jobs
         self._lock = threading.Lock()
+        from toolbox.webui_tcdoc_mapping import MappingSessions
+        self._mapping = MappingSessions()
 
     def overview(self, doc_key: str = "") -> dict:
         docs = config.load_docs()
@@ -187,6 +189,41 @@ class TCDocService:
 
     def writeback_preview(self, tab: str, days: int, limit: int) -> dict:
         return _write_module().preview(tab, days, limit)
+
+    def mapping_import(self, payload: dict) -> dict:
+        return self._mapping.import_table(payload)
+
+    def mapping_rows(self, session: str, page: int, mode: str, sort_column: str,
+                     direction: str, preview: str) -> dict:
+        return self._mapping.page(session, page, mode, sort_column, direction, preview)
+
+    def start_mapping(self, operation: str, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        sid = str(payload.get("session") or "")
+        reservation = self._mapping.reserve(payload) if operation == "apply" else None
+
+        def run(job):
+            cancelled = lambda: bool(job.cancel_requested)
+            if operation == "schema":
+                result = self._mapping.schema(sid, str(payload.get("tab") or ""), job.log, cancelled)
+            elif operation == "compare":
+                result = self._mapping.compare(payload, job.log, cancelled)
+            elif operation == "apply":
+                result = self._mapping.execute(reservation, job.log, cancelled)
+            else:
+                raise ValueError("表格操作无效")
+            if result.get("cancelled") and not result.get("row_nos"):
+                raise JobCancelled()
+            return result
+
+        try:
+            job = self.jobs.submit("tcdoc_mapping_" + operation, run)
+        except Exception:
+            if reservation is not None:
+                self._mapping.release(sid)
+            raise
+        return {"job": job.id}
 
     def start_writeback_upload(self, payload: dict) -> dict:
         if self.jobs is None:

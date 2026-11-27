@@ -40,7 +40,8 @@
     migrate: { order: '', asc: true, selected: new Set(), mode: 'copy' },
     subtitle: { order: '', asc: true, selected: new Set(), formats: new Set() },
     tasks: { order: '', asc: true },
-    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, writeTab: 'official', writeDays: 30, writeKey: '',
+    tcdoc: { docKey: '', tab: 'sync', rowsTab: '', rowsPage: 1, rowsNewest: true,
+      rowsSort: { order: '', asc: true }, writeTab: 'official', writeDays: 30, writeKey: '',
       bridge: { docKey: '', tabId: '', days: 30, accounts: 'default', dupMode: 'skip' } }
   };
   var routes = {
@@ -10115,6 +10116,8 @@ function renderLivestreamSummary(root) {
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
+      var exporting = false;
+      var resultView = null;
       var saveBtn = null;
       var selectionCount = null;
       var xianyuRows = [];
@@ -10143,8 +10146,9 @@ function renderLivestreamSummary(root) {
         var hasSelection = platforms.length;
         var hasXianyu = platforms.indexOf('xianyu') !== -1;
         btn.disabled = running || !hasSelection;
-        btn.textContent = running ? '搜索并解析中…' : '搜索并解析';
+        btn.textContent = running && !exporting ? '搜索并解析中…' : '搜索并解析';
         input.disabled = running;
+        if (resultView) resultView.sync();
         if (saveBtn) saveBtn.disabled = running || !hasXianyu || !selected.size;
         if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' 件 · 本页 ' + xianyuRows.length + ' 件';
         rowBoxes.forEach(function (entry) { entry.disabled = running || !hasXianyu; });
@@ -10159,7 +10163,10 @@ function renderLivestreamSummary(root) {
       }
       api('/api/tools/shopping/options').then(function (data) {
         platformPicker = buildParserPlatformRange(
-          'shopping', data.platform_options, sync);
+          'shopping', data.platform_options, function () {
+            if (resultView) resultView.invalidate();
+            sync();
+          });
         platformHost.replaceChildren(platformPicker.element);
         sync();
       }).catch(function (error) {
@@ -10180,6 +10187,8 @@ function renderLivestreamSummary(root) {
           }, {
             cancelable: true,
             indeterminate: true,
+            clearPollErrorOnSuccess: true,
+            onPollError: function (_error, retry) { setTimeout(retry, 1000); },
             onSettled: function (job) {
               running = false;
               sync();
@@ -10197,6 +10206,7 @@ function renderLivestreamSummary(root) {
 
       function showResult(outcome) {
         var items = outcome.items || [];
+        resultView = null;
         selected.clear();
         rowBoxes = [];
         selectionButtons = [];
@@ -10214,26 +10224,13 @@ function renderLivestreamSummary(root) {
         } else {
           searchState = null;
           xianyuRows = [];
-          if (!items.length) {
-            resultHost.replaceChildren(empty('没有解析到商品，请检查链接后重试。'));
-          } else {
-            var body = h('tbody');
-            items.forEach(function (item) {
-              body.appendChild(h('tr', null,
-                h('td', { class: 'ellipsis' }, item.title || '-'),
-                h('td', null, item.price || '-'),
-                h('td', { class: 'num' }, item.sales || '-'),
-                h('td', { class: 'ellipsis' }, item.url
-                  ? h('a', { href: item.url, target: '_blank',
-                    rel: 'noopener noreferrer' }, item.url) : '-')));
-            });
-            resultHost.replaceChildren(
-              h('div', { class: 'muted small', style: 'margin-bottom:6px' }, outcome.selection_note || ''),
-              h('div', { class: 'table-wrap' },
-                h('table', { class: 'db-table' }, h('thead', null,
-                  h('tr', null, h('th', null, '商品'), h('th', null, '价格'),
-                    h('th', null, '销量'), h('th', null, '链接'))), body)));
-          }
+          resultView = window.createShoppingResultsView({
+            h: h, outcome: outcome, cycleSort: cycleSort, sortRows: sortRows,
+            post: post, watchJob: watchJob, toast: toast, jobHost: jobHost,
+            isBusy: function () { return running; },
+            setBusy: function (busy) { running = busy; exporting = busy; sync(); }
+          });
+          resultHost.replaceChildren(resultView.element);
         }
         reload();
       }
@@ -10435,6 +10432,7 @@ function renderLivestreamSummary(root) {
       btn.addEventListener('click', function () {
         if (running || !platformPicker || !platformPicker.selected().length) return;
         if (!input.value.trim()) { toast('请粘贴链接或分享文案', 'warning'); return; }
+        if (resultView) resultView.invalidate('正在重新解析，完成后可导出新结果。');
         var text = input.value.trim();
         var isXianyuLink = /(?:https?:\/\/)?(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?:\/\/2\.taobao\.com\/item|https?:\/\/h5\.m\.taobao\.com\/app\/idleFish-F2e\//i.test(text);
         if (platformPicker.selected().indexOf('xianyu') !== -1 && !isXianyuLink &&
@@ -10448,6 +10446,9 @@ function renderLivestreamSummary(root) {
         runShoppingJob('/api/tools/shopping/parse', {
           platforms: platformPicker.selected(), text: text
         }, '搜索并解析', showResult);
+      });
+      input.addEventListener('input', function () {
+        if (resultView) resultView.invalidate();
       });
       return h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('label', { class: 'row-title', for: 'shopping-input' }, '链接 / 闲鱼关键词'),
@@ -13429,6 +13430,7 @@ function renderMusicTag(root) {
           state.tcdoc.docKey = docSelect.value;
           state.tcdoc.rowsTab = '';
           state.tcdoc.rowsPage = 1;
+          state.tcdoc.rowsSort = { order: '', asc: true };
           renderTcdoc(root);
         });
         var current = (data.docs || []).filter(function (doc) {
@@ -14391,7 +14393,13 @@ function renderMusicTag(root) {
         }
 
         function renderSyncTab() {
-          var sheets = data.tables.sheets || [];
+          var sheets = (data.tables.sheets || []).filter(function (sheet) {
+            return !sheet.skipped;
+          });
+          var docKey = data.selected;
+          var rowsRequest = 0;
+          var changesOverlay = null;
+          var widths = [];
           var sheetSelect = h('select', { class: 'select' });
           if (!sheets.length) {
             sheetSelect.appendChild(h('option', { value: '' }, '（暂无子表）'));
@@ -14403,24 +14411,204 @@ function renderMusicTag(root) {
               selected: state.tcdoc.rowsTab === sheet.tab_id
             }, sheet.tab_name || sheet.tab_id));
           });
+          if (!sheets.some(function (sheet) { return sheet.tab_id === state.tcdoc.rowsTab; })) {
+            state.tcdoc.rowsTab = '';
+            state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+          }
           if (!state.tcdoc.rowsTab && sheets.length) {
             state.tcdoc.rowsTab = sheets[0].tab_id;
             sheetSelect.value = sheets[0].tab_id;
           }
+          var newest = h('input', { type: 'checkbox', checked: state.tcdoc.rowsNewest });
+          var changesBtn = h('button', { class: 'btn', type: 'button',
+            disabled: !docKey }, '最近变更');
           var rowsHost = h('div');
           var pagerHost = h('div', { class: 'col-pager' });
           tabHost.appendChild(h('div', { class: 'toolbar' },
             h('span', { class: 'muted small' }, '工作表'), sheetSelect,
-            h('span', { style: 'flex:1' })));
+            h('label', { class: 'check' }, newest, ' 最新在前'),
+            h('span', { style: 'flex:1' }), changesBtn));
           tabHost.appendChild(rowsHost);
           tabHost.appendChild(pagerHost);
           sheetSelect.addEventListener('change', function () {
             state.tcdoc.rowsTab = sheetSelect.value;
             state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+            widths = [];
             loadRows();
           });
+          newest.addEventListener('change', function () {
+            state.tcdoc.rowsNewest = newest.checked;
+            state.tcdoc.rowsPage = 1;
+            state.tcdoc.rowsSort = { order: '', asc: true };
+            loadRows();
+          });
+          changesBtn.addEventListener('click', openChanges);
+
+          function sortableHeader(label, key, order, redraw) {
+            var active = order.order === key;
+            function sort() { cycleSort(order, key); redraw(); }
+            return h('th', { class: 'sortable', tabIndex: 0,
+              'aria-sort': active ? (order.asc ? 'ascending' : 'descending') : 'none',
+              title: label + '：点击切换升序、降序和默认顺序',
+              onclick: sort, onkeydown: function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault(); sort();
+                }
+              }
+            }, label + (active ? (order.asc ? ' ↑' : ' ↓') : ''));
+          }
+
+          function columnTools(table, footer, columns, records, weights) {
+            var group = h('colgroup');
+            if (weights.length !== columns.length) {
+              weights.splice.apply(weights, [0, weights.length].concat(columns.map(function (column) {
+                return column.key === 'row_no' ? 0.5 : 1;
+              })));
+            }
+            columns.forEach(function () { group.appendChild(h('col')); });
+            table.insertBefore(group, table.firstChild);
+            function apply() {
+              var total = weights.reduce(function (sum, value) { return sum + value; }, 0) || 1;
+              Array.from(group.children).forEach(function (col, i) {
+                col.style.width = (100 * weights[i] / total) + '%';
+              });
+            }
+            function fit() {
+              columns.forEach(function (column, i) {
+                weights[i] = Math.min(40, Math.max(column.label.length, 4,
+                  Math.max.apply(null, records.map(function (row) {
+                    return String(row[column.key] == null ? '' : row[column.key]).length;
+                  }))));
+              });
+              apply();
+            }
+            function reset() {
+              columns.forEach(function (column, i) { weights[i] = column.key === 'row_no' ? 0.5 : 1; });
+              apply();
+            }
+            table.querySelector('thead').addEventListener('contextmenu', function (event) {
+              event.preventDefault();
+              var menu = h('div', { class: 'card', role: 'menu',
+                style: 'position:fixed;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
+                  + 'px;top:' + Math.max(0, Math.min(event.clientY, window.innerHeight - 80)) + 'px' },
+                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+                  onclick: function () { menu.remove(); fit(); } }, '列宽自适应'),
+                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+                  onclick: function () { menu.remove(); reset(); } }, '重置列宽'));
+              menu.addEventListener('focusout', function (focusEvent) {
+                if (!menu.contains(focusEvent.relatedTarget)) menu.remove();
+              });
+              menu.addEventListener('keydown', function (keyEvent) {
+                if (keyEvent.key === 'Escape') { keyEvent.stopPropagation(); menu.remove(); }
+              });
+              (changesOverlay && changesOverlay.contains(table) ? changesOverlay : rowsHost).appendChild(menu);
+              menu.querySelector('button').focus();
+            });
+            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: fit }, '自适应'));
+            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: reset }, '重置'));
+            apply();
+          }
+
+          function openChanges() {
+            if (changesOverlay && changesOverlay.isConnected) return;
+            var previousFocus = document.activeElement;
+            var overlay = h('div', { class: 'preview-overlay', role: 'dialog',
+              'aria-modal': 'true', 'aria-label': '最近变更' });
+            changesOverlay = overlay;
+            var box = h('div', { class: 'preview-box', style: 'width:1040px;max-width:100%;min-width:0' });
+            var description = h('div', { class: 'muted small' });
+            var changeHost = h('div');
+            var note = h('span', { class: 'muted small', style: 'flex:1' });
+            var widthHost = h('span', { class: 'toolbar', style: 'margin:0' });
+            var refreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新');
+            var closeBtn = h('button', { class: 'btn', type: 'button' }, '关闭');
+            var changeSort = { order: '', asc: true };
+            var changeWidths = [];
+            var changesRequest = 0;
+            function close() {
+              changesRequest += 1;
+              overlay.remove();
+              if (changesOverlay === overlay) changesOverlay = null;
+              if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+            }
+            closeBtn.addEventListener('click', close);
+            refreshBtn.addEventListener('click', loadChanges);
+            overlay.addEventListener('click', function (event) { if (event.target === overlay) close(); });
+            overlay.addEventListener('keydown', function (event) {
+              if (event.key === 'Escape') { event.preventDefault(); close(); }
+              if (event.key !== 'Tab') return;
+              var focusable = Array.from(box.querySelectorAll('button:not([disabled]),[tabindex="0"]'));
+              var first = focusable[0];
+              var last = focusable[focusable.length - 1];
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            });
+            box.appendChild(h('div', { class: 'preview-caption' },
+              h('span', null, '最近变更 · ' + (current.name || docKey))));
+            box.appendChild(h('div', { style: 'padding:12px;overflow:auto;min-height:0;display:grid;gap:12px' },
+              description, changeHost));
+            box.appendChild(h('div', { class: 'toolbar', style: 'padding:12px;margin:0;border-top:1px solid var(--border)' },
+              refreshBtn, note, widthHost, closeBtn));
+            overlay.appendChild(box);
+            tabHost.appendChild(overlay);
+            closeBtn.focus();
+            loadChanges();
+
+            function loadChanges() {
+              var request = ++changesRequest;
+              refreshBtn.disabled = true;
+              widthHost.replaceChildren();
+              note.textContent = '';
+              setLoading(changeHost, '正在读取本地变更记录…');
+              api('/api/tcdoc/recent-changes?doc_key=' + encodeURIComponent(docKey) + '&limit=60')
+                .then(function (result) {
+                  if (!overlay.isConnected || request !== changesRequest) return;
+                  refreshBtn.disabled = false;
+                  description.textContent = result.description;
+                  note.textContent = '最近 ' + fmtNumber(result.total) + ' 条';
+                  var columns = [
+                    { key: 'ts', label: '检测时间' }, { key: 'tab_name', label: '工作表' },
+                    { key: 'kind', label: '变更' }, { key: 'record_id', label: '记录' },
+                    { key: 'summary', label: '内容' }
+                  ];
+                  function drawChanges() {
+                    widthHost.replaceChildren();
+                    if (!result.rows.length) {
+                      changeHost.replaceChildren(empty('还没有本地同步变更记录，完成表格同步后可在此查看。'));
+                      return;
+                    }
+                    var head = h('tr');
+                    columns.forEach(function (column) {
+                      head.appendChild(sortableHeader(column.label, column.key, changeSort, drawChanges));
+                    });
+                    var body = h('tbody');
+                    sortRows(result.rows, columns, changeSort).forEach(function (row) {
+                      var tr = h('tr');
+                      columns.forEach(function (column) {
+                        var value = row[column.key] == null ? '' : String(row[column.key]);
+                        tr.appendChild(h('td', { title: value,
+                          style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, value || '-'));
+                      });
+                      body.appendChild(tr);
+                    });
+                    var table = h('table', { class: 'db-table',
+                      style: 'width:100%;min-width:0;table-layout:fixed' }, h('thead', null, head), body);
+                    changeHost.replaceChildren(h('div', { class: 'table-wrap' }, table));
+                    columnTools(table, widthHost, columns, result.rows, changeWidths);
+                  }
+                  drawChanges();
+                }).catch(function (error) {
+                  if (!overlay.isConnected || request !== changesRequest) return;
+                  refreshBtn.disabled = false;
+                  setError(changeHost, error, loadChanges);
+                });
+            }
+          }
 
           function loadRows() {
+            var request = ++rowsRequest;
             var tabId = state.tcdoc.rowsTab;
             if (!tabId) {
               rowsHost.replaceChildren(empty(
@@ -14428,12 +14616,19 @@ function renderMusicTag(root) {
               pagerHost.replaceChildren();
               return;
             }
+            var order = state.tcdoc.rowsSort;
+            pagerHost.replaceChildren();
             setLoading(rowsHost, '正在读取表格行…');
             api('/api/tcdoc/table-rows?doc_key='
-              + encodeURIComponent(state.tcdoc.docKey)
+              + encodeURIComponent(docKey)
               + '&tab_id=' + encodeURIComponent(tabId)
-              + '&page=' + state.tcdoc.rowsPage + '&page_size=50')
+              + '&page=' + state.tcdoc.rowsPage + '&page_size=200'
+              + '&newest=' + (state.tcdoc.rowsNewest ? '1' : '0')
+              + '&sort_column=' + encodeURIComponent(order.order)
+              + '&direction=' + (order.order ? (order.asc ? 'asc' : 'desc') : ''))
               .then(function (rows) {
+                if (!rowsHost.isConnected || request !== rowsRequest || state.tcdoc.docKey !== docKey) return;
+                state.tcdoc.rowsPage = rows.page;
                 var sheet = sheets.filter(function (item) {
                   return item.tab_id === tabId;
                 })[0] || {};
@@ -14445,9 +14640,14 @@ function renderMusicTag(root) {
                     && rows.rows[0].values) {
                   columns = Object.keys(rows.rows[0].values);
                 }
+                if (!rows.total) {
+                  rowsHost.replaceChildren(empty('该工作表还没有本地记录，请完成表格同步后再查看。'));
+                  return;
+                }
+                function sortRowsPage() { state.tcdoc.rowsPage = 1; loadRows(); }
                 var head = h('tr', null, h('th', null, '行号'));
                 columns.forEach(function (column) {
-                  head.appendChild(h('th', null, column));
+                  head.appendChild(sortableHeader(column, column, order, sortRowsPage));
                 });
                 var body = h('tbody');
                 rows.rows.forEach(function (row) {
@@ -14456,38 +14656,44 @@ function renderMusicTag(root) {
                   columns.forEach(function (column) {
                     var value = row.values ? row.values[column] : '';
                     if (value === null || value === undefined) value = '';
-                    tr.appendChild(h('td', { class: 'ellipsis' },
+                    tr.appendChild(h('td', { class: 'ellipsis', title: String(value),
+                      style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
                       String(value)));
                   });
                   body.appendChild(tr);
                 });
+                var table = h('table', { style: 'width:100%;min-width:0;table-layout:fixed' },
+                  h('thead', null, head), body);
+                var widthBar = h('div', { class: 'toolbar', style: 'margin-top:8px;justify-content:flex-end' });
                 rowsHost.replaceChildren(
                   h('div', { class: 'muted small', style: 'margin-bottom:8px' },
                     (sheet.tab_name || tabId) + ' · ' + rows.total + ' 行'),
-                  h('div', { class: 'table-wrap' },
-                    h('table', null, h('thead', null, head), body)));
+                  h('div', { class: 'table-wrap' }, table), widthBar);
+                var widthColumns = [{ key: 'row_no', label: '行号' }].concat(columns.map(function (column) {
+                  return { key: column, label: column };
+                }));
+                var widthRows = rows.rows.map(function (row) {
+                  return Object.assign({ row_no: row.row_no }, row.values || {});
+                });
+                columnTools(table, widthBar, widthColumns, widthRows, widths);
                 pagerHost.replaceChildren();
+                function pageButton(label, page, disabled) {
+                  return h('button', { class: 'btn ghost mini', type: 'button', disabled: disabled,
+                    onclick: function () { state.tcdoc.rowsPage = page; loadRows(); } }, label);
+                }
                 if (rows.pages > 1) {
-                  pagerHost.appendChild(h('button', {
-                    class: 'btn ghost mini', type: 'button',
-                    disabled: rows.page <= 1,
-                    onclick: function () {
-                      state.tcdoc.rowsPage = rows.page - 1;
-                      loadRows();
-                    }
-                  }, '上一页'));
-                  pagerHost.appendChild(h('span', { class: 'muted small' },
-                    rows.page + ' / ' + rows.pages));
-                  pagerHost.appendChild(h('button', {
-                    class: 'btn ghost mini', type: 'button',
-                    disabled: rows.page >= rows.pages,
-                    onclick: function () {
-                      state.tcdoc.rowsPage = rows.page + 1;
-                      loadRows();
-                    }
-                  }, '下一页'));
+                  pagerHost.appendChild(pageButton('首页', 1, rows.page <= 1));
+                  pagerHost.appendChild(pageButton('上一页', rows.page - 1, rows.page <= 1));
+                }
+                pagerHost.appendChild(h('span', { class: 'muted small' },
+                  '第 ' + rows.page + ' / ' + rows.pages + ' 页 · 共 '
+                  + String(rows.total).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' 条'));
+                if (rows.pages > 1) {
+                  pagerHost.appendChild(pageButton('下一页', rows.page + 1, rows.page >= rows.pages));
+                  pagerHost.appendChild(pageButton('末页', rows.pages, rows.page >= rows.pages));
                 }
               }).catch(function (error) {
+                if (!rowsHost.isConnected || request !== rowsRequest || state.tcdoc.docKey !== docKey) return;
                 setError(rowsHost, error, loadRows);
               });
           }

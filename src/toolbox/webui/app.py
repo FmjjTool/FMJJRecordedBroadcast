@@ -524,6 +524,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_shopping_parse(req):
         return shopping.start_parse(dict(req.json or {}))
     server.post("/api/tools/shopping/parse", start_shopping_parse)
+    server.post("/api/tools/shopping/export", lambda req: shopping.start_export(req.json))
 
     def search_xianyu_shopping(req):
         """JSON page 默认为 1，由购物用例校验平台允许的页码范围。"""
@@ -872,6 +873,15 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     def start_tcdoc_writeback(req):
         return tcdoc.start_writeback_upload(dict(req.json or {}))
     server.post("/api/tcdoc/writeback/upload", start_tcdoc_writeback)
+
+    server.post("/api/tcdoc/mapping/import",
+                lambda req: tcdoc.mapping_import(dict(req.json or {})), max_body=6 * 1024 * 1024)
+    server.get("/api/tcdoc/mapping/rows", lambda req: tcdoc.mapping_rows(
+        req.q("session"), req.q_int("page", 1, 1, 10000), req.q("mode", "all"),
+        req.q("sort_column"), req.q("direction"), req.q("preview")))
+    for operation in ("schema", "compare", "apply"):
+        server.post("/api/tcdoc/mapping/" + operation,
+                    lambda req, action=operation: tcdoc.start_mapping(action, dict(req.json or {})))
 
     server.get("/api/tcdoc/edit/status", lambda req: tcdoc.edit_status())
 
