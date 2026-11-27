@@ -93,12 +93,10 @@ class MusicPlaylistPage(BasePage):
     # ---------- 界面 ----------
 
     def _build_setup_card(self) -> QWidget:
-        card = ToolSectionCard(
-            "来源与目标",
-            "仅使用所选线下活动的登记曲目；优先匹配表内官方歌曲 ID，"
-            "缺失平台时才走平台官方搜索。",
-            icon="music",
-        )
+        card = ToolSectionCard("来源与目标", icon="music")
+        self.open_dir_btn = QPushButton("打开报告目录")
+        self.open_dir_btn.clicked.connect(self._open_report_dir)
+        card.heading_layout.addWidget(self.open_dir_btn)
         content = card.content_layout
 
         source_row = QHBoxLayout()
@@ -155,9 +153,8 @@ class MusicPlaylistPage(BasePage):
         platform_row.addStretch(1)
         content.addLayout(platform_row)
 
-        self.platform_note = QLabel(self._platform_note_text())
-        self.platform_note.setProperty("role", "caption")
-        self.platform_note.setWordWrap(True)
+        self.platform_note = ElidedLabel(
+            self._platform_note_text(), role="caption")
         content.addWidget(self.platform_note)
 
         action_row = QHBoxLayout()
@@ -198,7 +195,7 @@ class MusicPlaylistPage(BasePage):
         action_row.addWidget(self.preview_btn)
         content.addLayout(action_row)
 
-        self.status_label = QLabel("选择线下活动 → 预览匹配 → 确认写入")
+        self.status_label = QLabel("")
         self.status_label.setProperty("role", "muted")
         self.status_label.setWordWrap(True)
         content.addWidget(self.status_label)
@@ -221,14 +218,15 @@ class MusicPlaylistPage(BasePage):
         self.select_all_btn = QPushButton("全选")
         self.select_all_btn.setToolTip("勾选已匹配 + 待确认的全部歌曲")
         self.select_all_btn.clicked.connect(lambda: self._bulk_select("all"))
-        pick_row.addWidget(self.select_all_btn)
-        self.select_matched_btn = QPushButton("只选已匹配")
-        self.select_matched_btn.setToolTip("只勾选相似度达标的歌曲，待确认的取消勾选")
+        card.heading_layout.addWidget(self.select_all_btn)
+        self.select_matched_btn = QPushButton("选匹配")
+        self.select_matched_btn.setToolTip("只勾选已匹配歌曲")
         self.select_matched_btn.clicked.connect(lambda: self._bulk_select("matched"))
-        pick_row.addWidget(self.select_matched_btn)
-        self.select_none_btn = QPushButton("全不选")
+        card.heading_layout.addWidget(self.select_matched_btn)
+        self.select_none_btn = QPushButton("清除")
+        self.select_none_btn.setToolTip("取消勾选全部可写入歌曲")
         self.select_none_btn.clicked.connect(lambda: self._bulk_select("none"))
-        pick_row.addWidget(self.select_none_btn)
+        card.heading_layout.addWidget(self.select_none_btn)
         for button in (self.select_all_btn, self.select_matched_btn,
                        self.select_none_btn):
             button.setEnabled(False)
@@ -256,9 +254,6 @@ class MusicPlaylistPage(BasePage):
         footer.setSpacing(8)
         self.report_label = ElidedLabel("报告目录：" + str(self._report_dir))
         footer.addWidget(self.report_label, 1)
-        self.open_dir_btn = QPushButton("打开报告目录")
-        self.open_dir_btn.clicked.connect(self._open_report_dir)
-        footer.addWidget(self.open_dir_btn)
         card.content_layout.addLayout(footer)
         return card
 
@@ -369,7 +364,7 @@ class MusicPlaylistPage(BasePage):
         self._source_label = ""
         self.table.setRowCount(0)
         self.summary_label.setText("尚未预览")
-        self.selection_label.setText("请先选择线下活动并预览匹配")
+        self.selection_label.setText("")
         self.apply_btn.setEnabled(False)
         for button in (self.select_all_btn, self.select_matched_btn,
                        self.select_none_btn):
@@ -475,8 +470,7 @@ class MusicPlaylistPage(BasePage):
             return
         total_matched = sum(plan.counts()["matched"] for plan in plans)
         self.summary_label.setText(
-            f"来源：{label}；已匹配 {total_matched} 首，"
-            "可在「写入」列逐首勾选后确认写入")
+            f"来源：{label}；已匹配 {total_matched} 首")
         self.status_label.setText(
             f"预览完成：{source_count} 首歌，{len(plans)} 个平台"
             + ("；已停止，部分平台未匹配" if self._cancel.is_set() else ""))
@@ -605,10 +599,10 @@ class MusicPlaylistPage(BasePage):
         chosen = sum(plan.selected_count() for plan in self._plans) if self._plans else 0
         total = sum(len(plan.items) for plan in self._plans) if self._plans else 0
         if not self._plans:
-            self.selection_label.setText("预览后可在「写入」列逐首勾选")
+            self.selection_label.setText("")
         else:
             self.selection_label.setText(
-                f"已勾选 {chosen} / {total} 首写入（「写入」列可逐首勾选）")
+                f"已勾选 {chosen} / {total} 首")
         if not self._busy:
             self.apply_btn.setEnabled(bool(chosen))
             for button in (self.select_all_btn, self.select_matched_btn,
