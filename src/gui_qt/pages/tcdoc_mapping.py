@@ -508,6 +508,9 @@ class TcDocMappingPanel(QWidget):
             self.connect_btn.setEnabled(self.doc is not None)
             self.refresh_btn.setEnabled(bool(self.client and self.file_id))
             self._update_selection()
+            local_pages = max(1, (len(self.local_rows) + self._page_size - 1) // self._page_size)
+            self.local_prev_btn.setEnabled(self._local_page > 1)
+            self.local_next_btn.setEnabled(self._local_page < local_pages)
 
     def _run(self, fn, on_done, label: str, action: str) -> None:
         if self._busy or self._closed:
@@ -516,10 +519,19 @@ class TcDocMappingPanel(QWidget):
         self._set_busy(True)
         self.log(label)
 
+        def checked_work():
+            if self._cancel.is_set():
+                raise workflow.MappingError("任务已取消")
+            return fn()
+
         def done(result, err):
             if self._closed:
                 return
             self._set_busy(False)
+            if self._cancel.is_set() and action != "写入":
+                self.log("任务已取消")
+                self.summary_label.setText("已取消，可重新对比云端")
+                return
             if err:
                 self.log(f"[错误] {err}")
                 receipt = getattr(err, "receipt", None)
@@ -528,8 +540,8 @@ class TcDocMappingPanel(QWidget):
                 if action == "写入":
                     self._invalidate_preview("本次写入已停止，请重新对比云端后核对结果")
                 QMessageBox.warning(
-                    self, "操作失败",
-                    f"{action}失败：{err}\n\n请检查网络与官方 OpenAPI 配置后重试。")
+                    self, "任务已停止",
+                    f"{action}未完成：{err}\n\n请核对当前状态后重试。")
                 return
             try:
                 on_done(result)
@@ -537,9 +549,9 @@ class TcDocMappingPanel(QWidget):
                 self.log(f"[错误] {exc}")
                 QMessageBox.warning(
                     self, "操作失败",
-                    f"{action}失败：{exc}\n\n请检查网络与官方 OpenAPI 配置后重试。")
+                    f"{action}失败：{exc}\n\n请检查网络与登录状态后重试。")
 
-        thread = run_bg(fn, done, owner=self.page)
+        thread = run_bg(checked_work, done, owner=self.page)
         if thread is None:
             self._set_busy(False)
             self.log("任务未启动，请重试")
