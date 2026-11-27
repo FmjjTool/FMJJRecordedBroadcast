@@ -60,7 +60,7 @@ PAGE_INDEX = {
     "bili_resource": PageMeta(
         "B站资源", "信息工具",
         module="gui_qt.pages.bili_resource", cls="BiliResourcePage",
-        preload=False, tab_of="info_tools", card_note="表情包、收藏集、空间资源"),
+        preload=False, tab_of="info_tools", card_note="表情包、收藏集、空间数据"),
     "wechat_article": PageMeta(
         "公众号文章", "信息工具",
         module="gui_qt.pages.wechat_article", cls="WechatArticlePage",

@@ -9,7 +9,7 @@ import re
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout,
+    QTableWidget, QTextBrowser, QVBoxLayout,
 )
 
 from bili import api
@@ -29,9 +29,7 @@ class BiliInfoPage(BasePage):
         self._space_current = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
-        self.tabs.addTab(self._build_space_tab(), "用户空间")
+        layout.addWidget(self._build_space_tab(), 1)
 
     # ---------- 空间 ----------
     def _build_space_tab(self):
@@ -67,8 +65,8 @@ class BiliInfoPage(BasePage):
 
         self.space_view = QTextBrowser()
         self.space_view.setOpenExternalLinks(True)
-        # 聚合页会把本页 tab 提升出去；监听实际浏览器，主题切换无需
-        # 依赖逻辑宿主是否可见、或外层是否转发 on_theme_changed。
+        # 监听实际浏览器，主题切换无需依赖逻辑宿主是否可见，
+        # 或外层是否转发 on_theme_changed。
         self.space_view.installEventFilter(self)
         v.addWidget(self.space_view, 1)
         self.space_table = QTableWidget(0, 2)

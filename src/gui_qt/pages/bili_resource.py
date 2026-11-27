@@ -1,27 +1,15 @@
-"""B站资源 · 聚合页：5 个功能 tab 平铺（表情包 / 直播表情 / 装扮与收藏集 / 收藏集活动 / 用户空间）。
+"""B站资源 · 按表情包、收藏集和空间数据分组。
 
-三个子页实例只作为逻辑宿主（控件属性与网络回调挂在其上），内层 tab
-被平铺提升到本页顶部一级；搜索、按 ID 详情、装扮表情包等重合功能已在
-各子页内合并。子页自身的头部与内层 QTabWidget 不再展示。
+具体操作保留在各功能页内；这里仅负责聚合入口与收藏集活动跳转。
 导航入口位于「信息获取」组。
 """
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QTabWidget, QVBoxLayout
+from PySide6.QtWidgets import QTabWidget, QVBoxLayout
 
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.bili_emoji import BiliEmojiPage
 from gui_qt.pages.bili_garb import BiliGarbPage
 from gui_qt.pages.bili_info import BiliInfoPage
-
-
-# 平铺顺序与命名：(子页键, 内层 tab 下标, 顶部标签)
-_FLAT = [
-    ("emoji", 0, "表情包"),
-    ("emoji", 1, "直播表情"),
-    ("garb", 0, "装扮与收藏集"),
-    ("garb", 1, "收藏集活动"),
-    ("info", 0, "用户空间"),
-]
 
 
 class BiliResourcePage(BasePage):
@@ -33,37 +21,20 @@ class BiliResourcePage(BasePage):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
 
-        # 子页只作为逻辑宿主；先取出各自内层 tab 控件（按本地顺序）
         self.emoji_page = BiliEmojiPage(app)
         self.garb_page = BiliGarbPage(app)
         self.info_page = BiliInfoPage(app)
-        subs = {"emoji": self.emoji_page, "garb": self.garb_page, "info": self.info_page}
-        for sub in subs.values():
-            # 子页需要切回本页的「收藏集活动」tab，嵌入 tab 容器后 app.pages 里没有本页，
-            # 因此保留一个宿主引用供子页回跳。
-            sub._resource_host = self
-        widgets = {}
-        for key, sub in subs.items():
-            ws = []
-            while sub.tabs.count():
-                w = sub.tabs.widget(0)
-                sub.tabs.removeTab(0)
-                ws.append(w)
-            widgets[key] = ws
+        for page in (self.emoji_page, self.garb_page, self.info_page):
+            page._resource_host = self
 
-        # 按 _FLAT 顺序平铺提升到本页顶部（两个子页的 tab 交错），并记录映射表
-        tab_map = {"emoji": [], "garb": [], "info": []}
-        for key, local, label in _FLAT:
-            flat_idx = self.tabs.addTab(widgets[key][local], label)
-            tab_map[key].append(flat_idx)
-        for key, sub in subs.items():
-            sub._flat_tabs = self.tabs
-            sub._tab_map = tab_map[key]
+        self.tabs.addTab(self.emoji_page, "表情包")
+        self.tabs.addTab(self.garb_page, "收藏集")
+        self.tabs.addTab(self.info_page, "空间数据")
 
     def show_garb(self, act_id: str):
-        """表情包 tab 命中收藏集 ID 时切到「收藏集活动」tab 并加载活动。"""
+        """切到「收藏集」并加载活动详情。"""
+        self.tabs.setCurrentWidget(self.garb_page)
         self.garb_page.open_act(act_id)
 
     def on_hide(self):
-        # 平铺子页没有 Qt parent，显式转发预览缓存的收尾。
         self.emoji_page.on_hide()
