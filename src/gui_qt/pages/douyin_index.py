@@ -1,6 +1,6 @@
 """抖音指数页：搜索达人 → 全量抓取（作者分析/作品分析/粉丝分析）→ 本地保存 JSON。
 
-- 搜索：输入达人名称或抖音号 → 候选列表确认（两步确认，不直接抓）
+- 搜索：输入达人名称或抖音号 → 候选列表确认后立即抓取并回写
 - 抓取：核心指标（昨日/近7天/近15天/近30天）、稿均指标、每日趋势、
         达人视频（点赞/评论/分享/收藏/视频指数）、粉丝画像（地域/年龄/性别/手机/兴趣 + TGI）、
         相似达人
@@ -12,7 +12,7 @@ import os
 from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+    QComboBox, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget,
 )
@@ -45,6 +45,9 @@ _AVG_ROWS = [
     ("稿均分享量", "share_info", "share_average_count_by_"),
     ("稿均评论量", "comment_info", "comment_average_count_by_"),
 ]
+_WRITEBACK_HINT = (
+    "将保存完整指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。\n"
+    "不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。")
 
 
 def _center(text):
@@ -117,21 +120,23 @@ _EX_AVG_COLS = (2, 4)
 
 
 class _PickDialog(QDialog):
-    """搜索结果两步确认：候选表 → 双击或「选择」填充当前账号。"""
+    """确认目标及回写范围后立即抓取，取消不启动任务。"""
 
     def __init__(self, parent, users):
         super().__init__(parent)
         self.setWindowTitle("选择达人")
-        self.resize(720, 420)
+        self.resize(900, 640)
+        self.setMinimumSize(420, 300)
         self.picked = None
         v = QVBoxLayout(self)
-        v.addWidget(QLabel(f"找到 {len(users)} 个达人，双击或选择后点「确认」："))
+        v.addWidget(QLabel(f"找到 {len(users)} 个达人，双击目标或选择后点「确认并抓取」："))
         self.table = QTableWidget(len(users), 6)
         self.table.setHorizontalHeaderLabels(["达人", "抖音号", "粉丝", "总获赞", "作品", "标签"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
         for i, u in enumerate(users):
             vals = [u.get("user_name"), u.get("aweme_id") or "-", dxi.fmt_count(u.get("follow_count")),
                     dxi.fmt_count(u.get("like_count")), u.get("item_count"),
@@ -146,16 +151,22 @@ class _PickDialog(QDialog):
         self._pick_sorter = table_sort.install(
             self.table, rows=users, skip_columns=())
         v.addWidget(self.table, 1)
-        h = QHBoxLayout()
-        h.addStretch(1)
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        h.addWidget(cancel)
-        ok = QPushButton("确认")
-        ok.setStyleSheet("background: palette(highlight); color: palette(highlighted-text); padding: 5px 18px; border-radius: 4px;")
-        ok.clicked.connect(self._pick_ok)
-        h.addWidget(ok)
-        v.addLayout(h)
+        hint = QLabel(_WRITEBACK_HINT)
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        cancel = buttons.button(QDialogButtonBox.Cancel)
+        cancel.setText("取消")
+        cancel.setDefault(True)
+        ok = buttons.addButton("确认并抓取", QDialogButtonBox.AcceptRole)
+        ok.setProperty("variant", "primary")
+        ok.setAutoDefault(False)
+        ok.setEnabled(False)
+        self.table.itemSelectionChanged.connect(
+            lambda: ok.setEnabled(self.table.currentRow() >= 0))
+        buttons.accepted.connect(self._pick_ok)
+        buttons.rejected.connect(self.reject)
+        v.addWidget(buttons)
 
     def _pick_ok(self):
         row = self.table.currentRow()
@@ -192,7 +203,7 @@ class DouyinIndexPage(BasePage):
         self.tabs.addTab(self._build_similar_tab(), "相似达人")
         layout.addWidget(self.tabs, 1)
 
-        self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认 → 抓取并回写")
+        self.status_label = QLabel("输入达人名称或抖音号 → 搜索 → 确认后自动抓取并回写")
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(self.status_label)
@@ -225,7 +236,7 @@ class DouyinIndexPage(BasePage):
         row.addWidget(self.input_edit, 1)
 
         self.search_btn = self._icon_button("搜索", "search")
-        self.search_btn.setToolTip("按达人名称或抖音号搜索候选，确认后再抓取")
+        self.search_btn.setToolTip("按达人名称或抖音号搜索候选，确认后自动抓取并回写")
         self.search_btn.clicked.connect(self._do_search)
         row.addWidget(self.search_btn)
 
@@ -318,7 +329,7 @@ class DouyinIndexPage(BasePage):
         cv.addWidget(self.avg_table, 1)
         self.core_body = _StackedBody(
             content, "还没有达人数据",
-            "在上面输入达人名称或抖音号，搜索并确认后点「抓取并回写」", parent)
+            "在上面输入达人名称或抖音号，搜索并确认后自动抓取并回写", parent)
         return self.core_body
 
     def _build_trend_tab(self):
@@ -444,7 +455,7 @@ class DouyinIndexPage(BasePage):
             else:
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
 
-    # ---------- 搜索（两步确认） ----------
+    # ---------- 搜索并确认后自动抓取 ----------
     def _do_search(self):
         if self._busy:
             return
@@ -458,15 +469,18 @@ class DouyinIndexPage(BasePage):
             return dxi.search_daren(kw)
 
         def done(users, err):
-            self._set_busy(False)
             if err:
+                self._set_busy(False)
                 self.status_label.setText(f"搜索失败：{err}")
                 return
             if not users:
+                self._set_busy(False)
                 self.status_label.setText(f"未找到「{kw}」相关的达人")
                 return
             dlg = _PickDialog(self, users)
-            if dlg.exec() == QDialog.Accepted and dlg.picked is not None:
+            accepted = dlg.exec() == QDialog.Accepted and dlg.picked is not None
+            self._set_busy(False)
+            if accepted:
                 u = users[dlg.picked]
                 self._uid = u.get("user_id", "")
                 self._name = u.get("user_name", "")
@@ -475,14 +489,15 @@ class DouyinIndexPage(BasePage):
                     f" · 粉丝 {dxi.fmt_count(u.get('follow_count'))}"
                     f" · 总获赞 {dxi.fmt_count(u.get('like_count'))}"
                     f" · 作品 {u.get('item_count')}")
-                self.status_label.setText(f"已选择「{self._name}」→ 点「抓取并回写」")
                 self.account_extra_label.hide()
-                self.fetch_btn.setFocus()
+                self._do_fetch(writeback_confirmed=True)
+            else:
+                self.status_label.setText("已取消选择达人")
 
         run_bg(work, done)
 
     # ---------- 抓取 ----------
-    def _do_fetch(self):
+    def _do_fetch(self, *, writeback_confirmed: bool = False):
         if not self._uid:
             self.status_label.setText("请先搜索并确认达人")
             return
@@ -490,7 +505,7 @@ class DouyinIndexPage(BasePage):
             return
         days = self.range_combo.currentData() or 30
         uid, name = self._uid, self._name
-        if not self._confirm_writeback(name):
+        if not writeback_confirmed and not self._confirm_writeback(name):
             return
         self._set_busy(True, f"正在抓取「{name}」的抖音指数…", cancellable=True)
 
@@ -529,9 +544,7 @@ class DouyinIndexPage(BasePage):
         box.setWindowTitle("回写资产")
         box.setIcon(QMessageBox.Question)
         box.setText(f"抓取「{name}」并回写已有资产？")
-        box.setInformativeText(
-            "将保存完整指数快照，并按视频 ID 更新本次结果中已有抖音条目的点赞、评论、分享、收藏与指数来源信息。\n"
-            "不改标题、文件和人工信息；未匹配的作品不新建，旧快照不覆盖较新数据。")
+        box.setInformativeText(_WRITEBACK_HINT)
         cancel = box.addButton("取消", QMessageBox.RejectRole)
         box.addButton("抓取并回写", QMessageBox.AcceptRole)
         box.setDefaultButton(cancel)

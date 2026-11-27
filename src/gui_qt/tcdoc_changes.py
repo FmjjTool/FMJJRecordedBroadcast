@@ -101,7 +101,7 @@ class TcDocChangesDialog(QDialog):
             self.refresh_btn.setText("刷新")
             self._rows = rows
             self._render()
-            self.status.setText(f"当前文档全部子表 · 最近 {len(rows)} 条 · 按检测顺序新到旧")
+            self.status.setText(f"当前文档全部子表 · 最近 {len(rows)} 条 · 默认按检测顺序新到旧")
 
         run_bg(lambda: table_preview.recent_changes(self._doc.get("key", "")),
                done, owner=self)
@@ -121,11 +121,18 @@ class TcDocChangesDialog(QDialog):
                 self.table.setItem(index, column, item)
         self.stack.setCurrentWidget(self.table if rows else self.empty)
 
-    def closeEvent(self, event):
+    def _retire(self):
         self._closed = True
         self._loading = False
         self._request += 1
         self._positioned = False
+
+    def reject(self):
+        self._retire()
+        super().reject()
+
+    def closeEvent(self, event):
+        self._retire()
         super().closeEvent(event)
 
     def showEvent(self, event):

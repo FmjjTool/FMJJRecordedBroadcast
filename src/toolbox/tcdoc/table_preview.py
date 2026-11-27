@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from toolbox.table_sort_keys import sort_key, sort_records
 
-from . import tables
+from . import config, tables
 
 CHANGES_DESCRIPTION = (
     "本地同步检测记录：同步时对比云端当前数据与上次本地快照，记录新增、修改和删除。"
@@ -72,5 +72,9 @@ def read_page(doc_key: str, sheet: dict, offset: int = 0, page_size: int = 200,
 def recent_changes(doc_key: str, limit: int = 60, path=None) -> list[dict]:
     """当前文档全部子表的本地检测记录，新检测在前，不请求云端。"""
     if not doc_key:
+        return []
+    path = path if path is not None else config.tables_db_path()
+    from pathlib import Path
+    if not Path(path).exists():
         return []
     return tables.recent_changes(doc_key, limit=max(1, min(60, int(limit))), path=path)

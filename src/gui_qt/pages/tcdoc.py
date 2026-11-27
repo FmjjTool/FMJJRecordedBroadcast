@@ -32,26 +32,25 @@ from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QProgressBar, QPushButton, QStackedWidget, QTableWidget,
     QTextBrowser,
     QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from gui_qt import table_sort
+from gui_qt import table_columns, table_sort
 from gui_qt.common import post_to_main, run_bg, TASKS
 from gui_qt.pages.base import BasePage
 from gui_qt.pages.tcdoc_bridge import TcDocBridgePanel
 from gui_qt.skeleton import LoadingSkeleton
 from toolbox import tcdoc as tc_engine
 from toolbox.tcdoc import config as tc_cfg, storage, tables
-from toolbox.tcdoc import preview_content
+from toolbox.tcdoc import preview_content, table_preview
 
 DAILY_COLS = [("采集时间", 170), ("浏览量", 110), ("浏览增量", 110),
               ("成员数", 110), ("成员增量", 110), ("已查看人数", 110)]
 SNAP_COLS = [("采集时间", 170), ("状态", 90), ("浏览量", 110), ("成员数", 110),
              ("说明", 420)]
 DOC_COLS = [("名称", 260), ("类型", 100), ("记录数", 90), ("最近采集", 170), ("链接", 300)]
-CHANGE_COLS = [("时间", 160), ("工作表", 150), ("变更", 70), ("记录", 100), ("内容", 300)]
 REV_COLS = [("时间", 165), ("版本", 90), ("编辑人", 140), ("修订号", 100), ("类型", 90)]
 MEMBER_COLS = [("昵称", 220), ("权限等级", 110), ("账号来源", 100), ("UID", 210),
                ("企业", 160)]
@@ -646,6 +645,7 @@ class TcDocPage(BasePage):
         self._preload_requested = False
         self._preload_indexes = []
         self._version_dialog = None
+        self._changes_dialog = None
         self._preload_timer = QTimer(self)
         self._preload_timer.setSingleShot(True)
         self._preload_timer.timeout.connect(self._preload_next_panel)
@@ -802,6 +802,22 @@ class TcDocPage(BasePage):
         dialog.raise_()
         dialog.activateWindow()
 
+    def _open_changes(self):
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先选择腾讯文档", "warning")
+            return
+        from gui_qt.tcdoc_changes import TcDocChangesDialog
+        from shiboken6 import isValid
+        dialog = self._changes_dialog
+        if dialog is None or not isValid(dialog) or dialog._doc.get("key") != doc.get("key"):
+            dialog = TcDocChangesDialog(doc, self)
+            self._changes_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.refresh()
+
     def _ensure_panel(self, index):
         if index not in self._panels:
             panel = self._panel_builders[index]()
@@ -928,6 +944,8 @@ class TcDocPage(BasePage):
     def _apply_table_sort(self, table):
         """填充完成后按 sorter 记住的表头状态重排（未点过表头时不做任何事）。"""
         sorter = getattr(table, "_table_sorter", None)
+        if table is getattr(self, "table_data", None):
+            return  # 表格数据已在共享用例中整表排序后分页，不再次触发读取回调。
         if sorter is not None:
             sorter.apply()
 
@@ -1035,7 +1053,7 @@ class TcDocPage(BasePage):
         return box
 
     def _build_sheet_tab(self) -> QWidget:
-        """表格同步：工作表切换 + 数据预览 + 分页 + 变更记录。"""
+        """表格同步：工作表切换 + 数据预览 + 分页 + 本地变更入口。"""
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(6, 8, 6, 6)
@@ -1045,34 +1063,38 @@ class TcDocPage(BasePage):
         bar.setSpacing(6)
         bar.addWidget(QLabel("工作表"))
         self.sheet_combo = QComboBox()
-        self.sheet_combo.setMinimumWidth(220)
+        self.sheet_combo.setMinimumWidth(160)
+        self.sheet_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.sheet_combo.setMinimumContentsLength(8)
         self.sheet_combo.setToolTip("切换该文档下的工作表（普通表格 / 图表页不支持同步）")
-        self.sheet_combo.currentIndexChanged.connect(lambda _i: self._load_sheet_page(reset=True))
+        self.sheet_combo.currentIndexChanged.connect(self._on_sheet_changed)
         bar.addWidget(self.sheet_combo)
         self.sheet_info = QLabel("")
         self.sheet_info.setStyleSheet("color: #888;")
-        bar.addWidget(self.sheet_info)
+        self.sheet_info.setWordWrap(True)
         bar.addStretch(1)
 
         self.prev_btn = QPushButton("上一页")
         self.prev_btn.setToolTip("显示上一页表格记录")
         self.prev_btn.clicked.connect(lambda: self._load_sheet_page(delta=-1))
-        bar.addWidget(self.prev_btn)
         self.page_label = QLabel("-/-")
         self.page_label.setAlignment(Qt.AlignCenter)
         self.page_label.setMinimumWidth(66)
-        bar.addWidget(self.page_label)
         self.next_btn = QPushButton("下一页")
         self.next_btn.setToolTip("显示下一页表格记录")
         self.next_btn.clicked.connect(lambda: self._load_sheet_page(delta=1))
-        bar.addWidget(self.next_btn)
 
         self.newest_cb = QCheckBox("最新在前")
+        self.newest_cb.setChecked(True)
         self.newest_cb.setToolTip(
-            "按日期列倒序显示（默认保持表格原顺序；腾讯表的新记录常追加在末尾，"
-            "原顺序下第一页看到的可能是较早的记录）")
-        self.newest_cb.toggled.connect(lambda _on: self._load_sheet_page(reset=True))
+            "默认按日期列倒序显示，空日期排在最后；没有日期列时按原行序倒序。"
+            "取消勾选恢复表格原顺序；只改变本地预览，不重排云端。")
+        self.newest_cb.toggled.connect(self._on_newest_changed)
         bar.addWidget(self.newest_cb)
+        self.changes_btn = QPushButton("最近变更")
+        self.changes_btn.setToolTip("查看当前文档的本地同步检测记录，不读取云端编辑历史")
+        self.changes_btn.clicked.connect(self._open_changes)
+        bar.addWidget(self.changes_btn)
         v.addLayout(bar)
 
         self.table_data = QTableWidget(0, 0)
@@ -1083,43 +1105,22 @@ class TcDocPage(BasePage):
         self.table_data.setAlternatingRowColors(True)
         self.table_data.setWordWrap(False)
         self.table_data.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self._data_sorter = table_sort.install(self.table_data, skip_columns=())
+        self._data_sorter = table_sort.install_callback(
+            self.table_data, self._sheet_sort_changed, skip_columns=(), tri_state=True)
         self.table_data.setToolTip("本地存档的表格数据（每次同步按记录逐行比对增量）")
 
-        change_box = QFrame()
-        change_box.setProperty("variant", "card")
-        cv = QVBoxLayout(change_box)
-        cv.setContentsMargins(12, 10, 12, 10)
-        cv.setSpacing(6)
-        change_title = QLabel("最近变更（新增 / 修改 / 删除）")
-        change_title.setProperty("role", "sectionTitle")
-        cv.addWidget(change_title)
-        self.table_changes = QTableWidget(0, len(CHANGE_COLS))
-        self.table_changes.setHorizontalHeaderLabels([c[0] for c in CHANGE_COLS])
-        self.table_changes.verticalHeader().setVisible(False)
-        self.table_changes.verticalHeader().setDefaultSectionSize(24)
-        self.table_changes.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table_changes.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table_changes.setWordWrap(False)
-        for idx, (_name, width) in enumerate(CHANGE_COLS):
-            self.table_changes.setColumnWidth(idx, width)
-        self.table_changes.horizontalHeader().setStretchLastSection(True)
-        self._changes_sorter = table_sort.install(self.table_changes, skip_columns=())
-        cv.addWidget(self.table_changes, 1)
-
-        # 上下可拖动分栏：预览表与变更记录各自独立伸缩，避免预览把变更区压成一条缝
-        body = QSplitter(Qt.Vertical)
-        body.setChildrenCollapsible(False)
-        body.addWidget(self.table_data)
-        body.addWidget(change_box)
-        body.setStretchFactor(0, 3)
-        body.setStretchFactor(1, 1)
-        body.setSizes([430, 170])
-        v.addWidget(body, 1)
+        v.addWidget(self.table_data, 1)
+        paging = QHBoxLayout()
+        paging.setSpacing(8)
+        paging.addWidget(self.sheet_info, 1)
+        paging.addWidget(self.prev_btn)
+        paging.addWidget(self.page_label)
+        paging.addWidget(self.next_btn)
+        v.addLayout(paging)
 
         self.sheet_hint = QLabel("点「同步表格」把文档里的表格内容抓到本地；"
-                                "图片字段会自动增量下载到 图片/。默认按表格原顺序显示，"
-                                "新记录常追加在末尾，勾选「最新在前」可按日期倒序。")
+                                "图片字段会自动增量下载到 图片/。默认最新在前，"
+                                "取消勾选可恢复原顺序；本地检测记录见「最近变更」。")
         self.sheet_hint.setStyleSheet("color: #888;")
         v.addWidget(self.sheet_hint)
 
@@ -1671,14 +1672,12 @@ class TcDocPage(BasePage):
             sheet = next((s for s in available if s["tab_id"] == keep),
                          available[0] if available else {})
             data = self._read_sheet_page(doc, sheet, 0, page_size, newest)
-            changes = tables.recent_changes(doc["key"], limit=60) if doc else []
-            return sheets, data, changes
+            return sheets, data
 
         def apply(result, done, valid):
-            sheets, data, changes = result
+            sheets, data = result
             self._sheets = sheets
             self._apply_sheet_tabs(doc, sheets, keep)
-            self._fill_changes(changes)
             self._apply_sheet_page(data, page_size, done, valid)
 
         self._load_local(self.content_tab_index, work, apply)
@@ -1731,6 +1730,21 @@ class TcDocPage(BasePage):
         box = getattr(self, "newest_cb", None)
         return bool(box is not None and box.isChecked())
 
+    def _reset_sheet_sort(self):
+        self._data_sorter.col, self._data_sorter.ascending = -1, True
+        self._data_sorter._update_indicator()
+
+    def _on_sheet_changed(self, *_args):
+        self._reset_sheet_sort()
+        self._load_sheet_page(reset=True)
+
+    def _on_newest_changed(self, *_args):
+        self._reset_sheet_sort()
+        self._load_sheet_page(reset=True)
+
+    def _sheet_sort_changed(self, *_args):
+        self._load_sheet_page(reset=True)
+
     def _load_sheet_page(self, reset: bool = False, delta: int = 0):
         doc = self.current_doc()
         sheet = self._current_sheet() or {}
@@ -1738,52 +1752,23 @@ class TcDocPage(BasePage):
         offset = 0 if reset else self._sheet_offset
         offset = max(0, offset + delta * page_size)
         newest = self._newest_first()
+        column = self._data_sorter.col
+        sort_column = self._sheet_columns[column] if 0 <= column < len(self._sheet_columns) else ""
+        descending = not self._data_sorter.ascending
         self._load_local(self.content_tab_index,
-                         lambda: self._read_sheet_page(doc, sheet, offset, page_size, newest),
+                         lambda: self._read_sheet_page(
+                             doc, sheet, offset, page_size, newest, sort_column, descending),
                          lambda data, done, valid: self._apply_sheet_page(
                              data, page_size, done, valid))
 
-    @staticmethod
-    def _date_column(sheet, rows) -> str:
-        """挑一列能当日期排序的字段：优先常见时间列名，再按取值形状判断。"""
-        names = [c["name"] for c in sheet.get("columns", [])]
-        for key in ("开始时间", "发布时间", "直播时间", "日期", "时间", "创建时间"):
-            if key in names:
-                return key
-        for name in names:
-            sample = [str(r["values"].get(name) or "") for r in rows[:20]]
-            hits = sum(1 for s in sample
-                       if len(s) >= 10 and s[4] == "-" and s[7] == "-")
-            if hits >= min(5, len([s for s in sample if s])):
-                return name
-        return ""
-
     @classmethod
-    def _sort_newest_first(cls, rows, sheet):
-        column = cls._date_column(sheet, rows)
-        if not column:
-            return list(reversed(rows))   # 没有日期列：后追加的排在后面，直接倒序
-        def key(row):
-            return str(row["values"].get(column) or "")
-        ordered = sorted(rows, key=key, reverse=True)
-        return [r for r in ordered if key(r)] + [r for r in ordered if not key(r)]
-
-    @classmethod
-    def _read_sheet_page(cls, doc, sheet, offset, page_size, newest=False):
+    def _read_sheet_page(cls, doc, sheet, offset, page_size, newest=True,
+                         sort_column="", descending=False):
         tab_id = sheet.get("tab_id")
         if not doc or not tab_id:
             return sheet, [], 0, 0, {}
-        if newest:
-            # 排序需要整表：本地存档读取很快，按页在内存里切
-            all_rows, _total = tables.rows_page(doc["key"], tab_id, 0, 1_000_000)
-            ordered = cls._sort_newest_first(all_rows, sheet)
-            total = len(ordered)
-            rows = ordered[offset:offset + page_size]
-        else:
-            rows, total = tables.rows_page(doc["key"], tab_id, offset, page_size)
-            if not rows and total and offset:
-                offset = max(0, (total - 1) // page_size * page_size)
-                rows, total = tables.rows_page(doc["key"], tab_id, offset, page_size)
+        rows, total, offset = table_preview.read_page(
+            doc["key"], sheet, offset, page_size, newest, sort_column, descending)
         try:
             image_stats = tc_engine.images.stats(doc["key"], tab_id)
         except Exception:  # noqa: BLE001 - 图片统计异常不影响表格预览
@@ -1804,9 +1789,13 @@ class TcDocPage(BasePage):
             return
 
         names = [c["name"] for c in sheet.get("columns", [])]
+        columns_changed = names != self._sheet_columns
         self._sheet_columns = names
         self.table_data.setColumnCount(len(names))
         self.table_data.setHorizontalHeaderLabels(names)
+        if columns_changed:
+            table_columns.configure_table_columns(
+                self.table_data, stretch=range(len(names)), auto_fit=True)
         self.table_data.setRowCount(len(rows))
         for r, row in enumerate(rows):
             self.table_data.setVerticalHeaderItem(r, QTableWidgetItem(str(row["row_no"])))
@@ -1852,24 +1841,6 @@ class TcDocPage(BasePage):
             row_no = item.data(Qt.UserRole) if item is not None else None
             if row_no:
                 table.setVerticalHeaderItem(r, QTableWidgetItem(str(row_no)))
-
-    def _refresh_changes(self):
-        doc = self.current_doc()
-        self._load_local(self.content_tab_index,
-                         lambda: tables.recent_changes(doc["key"], limit=60) if doc else [],
-                         lambda rows, done, valid: (self._fill_changes(rows), done()))
-
-    def _fill_changes(self, rows):
-        self.table_changes.setRowCount(0)
-        for row in rows:
-            r = self.table_changes.rowCount()
-            self.table_changes.insertRow(r)
-            self.table_changes.setItem(r, 0, _cell(row["ts"]))
-            self.table_changes.setItem(r, 1, QTableWidgetItem(row["tab_name"] or ""))
-            self.table_changes.setItem(r, 2, _cell(row["kind"]))
-            self.table_changes.setItem(r, 3, _cell(row["record_id"] or ""))
-            self.table_changes.setItem(r, 4, QTableWidgetItem(row["summary"] or ""))
-        self._changes_sorter.apply()
 
     def _sync_tables(self):
         if self._busy:

@@ -464,13 +464,12 @@ class TcDocMappingPanel(QWidget):
         self.remote_records = []
         self.remote_total = 0
         self.mapping = {}
-        self.actions = []
+        self._invalidate_preview("文档已切换，请连接后重新对比")
         self.sheet_combo.blockSignals(True)
         self.sheet_combo.clear()
         self.sheet_combo.blockSignals(False)
         self._rebuild_mapping_table()
         self._render_remote()
-        self.summary_label.setText("尚未生成预览")
         self.execute_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
         self.conn_status.setText("")
@@ -498,6 +497,9 @@ class TcDocMappingPanel(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.busy_bar.setVisible(busy)
+        self.cancel_btn.setVisible(busy)
+        self.mapping_dialog.setEnabled(not busy)
+        self.diff_table.setEnabled(not busy)
         for button in self._buttons:
             button.setEnabled(not busy)
         for widget in self._controls:
@@ -505,11 +507,12 @@ class TcDocMappingPanel(QWidget):
         if not busy:
             self.connect_btn.setEnabled(self.doc is not None)
             self.refresh_btn.setEnabled(bool(self.client and self.file_id))
-            self.execute_btn.setEnabled(bool(self._writable_actions()))
+            self._update_selection()
 
     def _run(self, fn, on_done, label: str, action: str) -> None:
         if self._busy or self._closed:
             return
+        self._cancel.clear()
         self._set_busy(True)
         self.log(label)
 
@@ -519,6 +522,11 @@ class TcDocMappingPanel(QWidget):
             self._set_busy(False)
             if err:
                 self.log(f"[错误] {err}")
+                receipt = getattr(err, "receipt", None)
+                if receipt:
+                    self._record_history(receipt, self.sheet_combo.currentData())
+                if action == "写入":
+                    self._invalidate_preview("本次写入已停止，请重新对比云端后核对结果")
                 QMessageBox.warning(
                     self, "操作失败",
                     f"{action}失败：{err}\n\n请检查网络与官方 OpenAPI 配置后重试。")
@@ -538,6 +546,8 @@ class TcDocMappingPanel(QWidget):
 
     def shutdown(self) -> None:
         self._closed = True
+        self._cancel.set()
+        self.mapping_dialog.hide()
 
     # ==================== 连接 / 字段 ====================
 
@@ -549,11 +559,11 @@ class TcDocMappingPanel(QWidget):
         try:
             data = json.loads(raw)
         except (TypeError, ValueError):
-            raise RuntimeError("官方 OpenAPI 凭证不可用，请重新保存后重试") from None
+            raise RuntimeError("当前登录不可用，请登录后重试") from None
         values = tuple(str(data.get(key) or "").strip()
                        for key in ("client_id", "access_token", "open_id"))
         if not all(values):
-            raise RuntimeError("官方 OpenAPI 凭证不完整，请重新保存后重试")
+            raise RuntimeError("当前登录不完整，请登录后重试")
         return values  # type: ignore[return-value]
 
     def on_connect(self) -> None:
@@ -562,6 +572,7 @@ class TcDocMappingPanel(QWidget):
             QMessageBox.warning(self, "没有文档", "请先在页面顶部选择腾讯文档")
             return
         self.set_doc(doc)
+        self._invalidate_preview("正在连接，连接后请对比云端")
         if doc.get("key") != openapi.WRITABLE_DOC_KEY:
             QMessageBox.warning(self, "禁止回写此文档",
                                 "映射回写仅允许封茗囧菌数据汇总库的官方动态与直播记录")
@@ -592,7 +603,7 @@ class TcDocMappingPanel(QWidget):
             self.file_id = file_id
             self.sheets = sheets
             self._cred_snapshot = creds
-            self.actions = []
+            self._invalidate_preview("已连接，正在读取字段…")
             self.execute_btn.setEnabled(False)
             self.summary_label.setText("已连接，正在读取字段…")
             self.sheet_combo.blockSignals(True)
@@ -619,9 +630,7 @@ class TcDocMappingPanel(QWidget):
             self.sample_records = []
             self.remote_records = []
             self.remote_total = 0
-            self.actions = []
-            self.execute_btn.setEnabled(False)
-            self.summary_label.setText("已切换子表，请重新生成预览")
+            self._invalidate_preview("子表已切换，读取字段后请重新对比")
             self._rebuild_mapping_table()
             self._render_remote()
             self.load_fields()
@@ -633,9 +642,7 @@ class TcDocMappingPanel(QWidget):
         file_id = self.file_id
         sheet_id = self.sheet_combo.currentData()
         limit = self._remote_limit()
-        self.actions = []
-        self.execute_btn.setEnabled(False)
-        self.summary_label.setText("正在刷新字段与预览…")
+        self._invalidate_preview("正在刷新字段与云端记录…")
 
         def work():
             fields = client.get_fields(file_id, sheet_id)
@@ -652,9 +659,7 @@ class TcDocMappingPanel(QWidget):
             self.sample_records = samples
             self.remote_records = samples
             self.remote_total = total
-            self.actions = []
-            self.execute_btn.setEnabled(False)
-            self.summary_label.setText("字段已刷新，请重新生成预览")
+            self._invalidate_preview("字段已匹配，请点击「对比云端」")
             self._rebuild_mapping_table()
             self.auto_match(quiet=True)
             self._render_remote()
@@ -723,7 +728,10 @@ class TcDocMappingPanel(QWidget):
             self.remote_table.horizontalHeader().setSortIndicatorShown(False)
         self.remote_table.setColumnCount(len(headers))
         self.remote_table.setHorizontalHeaderLabels(headers)
-        rows = self.remote_records
+        rows = self._ordered(self.remote_records, self._remote_sorter,
+                             lambda record, col: openapi.display_value(
+                                 fields[col], (record.get("values") or {}).get(
+                                     fields[col].get("fieldTitle"))))
         self.remote_table.setRowCount(len(rows))
         self.remote_table.setUpdatesEnabled(False)
         try:
@@ -740,7 +748,7 @@ class TcDocMappingPanel(QWidget):
             self.remote_table.setUpdatesEnabled(True)
         for col in range(len(headers)):
             self.remote_table.setColumnWidth(col, 130)
-        self._remote_sorter.reapply()
+        table_columns.fit_table_columns(self.remote_table)
         title = (self.sheet_combo.currentText().split("  (")[0]
                  if self.sheet_combo.count() else "")
         total = self.remote_total or len(rows)
@@ -760,17 +768,30 @@ class TcDocMappingPanel(QWidget):
             titles[title] = titles.get(title, 0) + 1
         self.mapping = {col: fid for col, fid in self.mapping.items()
                         if col in self.local_headers and fid in self.field_by_id}
-        self.map_table.setRowCount(len(self.local_headers))
+        headers = self._ordered(
+            self.local_headers, self._map_sorter,
+            lambda header, col: header if col == 0 else (
+                FIELD_TYPES.get(int(self.field_by_id.get(self.mapping.get(header), {}).get(
+                    "fieldType") or 0), "") if col == 2 else ""))
+        self.map_table.setRowCount(len(headers))
         self.map_combos: dict[str, QComboBox] = {}
-        for row, header in enumerate(self.local_headers):
-            self.map_table.setItem(row, 0, QTableWidgetItem(header))
+        for row, header in enumerate(headers):
+            name_item = QTableWidgetItem(header)
+            name_item.setData(Qt.UserRole, header)
+            self.map_table.setItem(row, 0, name_item)
             combo = QComboBox()
+            combo.setMinimumWidth(120)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
             combo.addItem("（不映射）", "")
             for field in sorted(self.fields, key=lambda f: str(f.get("fieldTitle") or "")):
                 field_id = field.get("fieldID")
                 title = field.get("fieldTitle") or field_id
                 label = f"{title} [{field_id}]" if titles.get(title, 0) > 1 else title
                 combo.addItem(label, field_id)
+            if combo.count() > 12:
+                combo.setEditable(True)
+                combo.setInsertPolicy(QComboBox.NoInsert)
             index = combo.findData(self.mapping.get(header, ""))
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.currentIndexChanged.connect(
@@ -797,12 +818,11 @@ class TcDocMappingPanel(QWidget):
             self.mapping.pop(header, None)
         self._refresh_mapping_labels()
         self._rebuild_key_combo()
-        self.actions = []
-        self.execute_btn.setEnabled(False)
-        self.summary_label.setText("映射已修改，请重新生成预览")
+        self._invalidate_preview("字段匹配已修改，请重新对比云端")
 
     def _refresh_mapping_labels(self) -> None:
-        for row, header in enumerate(self.local_headers):
+        for row in range(self.map_table.rowCount()):
+            header = self.map_table.item(row, 0).data(Qt.UserRole)
             field = self.field_by_id.get(self.mapping.get(header, ""))
             type_item = self.map_table.item(row, 2)
             sample_item = self.map_table.item(row, 3)
@@ -832,13 +852,14 @@ class TcDocMappingPanel(QWidget):
             self.key_combo.addItem(header, header)
         index = self.key_combo.findData(current) if current else -1
         if index < 0:
-            for header in candidates:
-                if any(word in header.lower() for word in ("名称", "标题", "name")):
-                    index = self.key_combo.findData(header)
-                    break
+            suggested = workflow.suggest_key(self.local_headers, self.mapping, self.field_by_id)
+            index = self.key_combo.findData(suggested)
         if index < 0 and candidates:
             index = 0
         self.key_combo.setCurrentIndex(index if index >= 0 else -1)
+        if self.key_combo.count() > 12:
+            self.key_combo.setEditable(True)
+            self.key_combo.setInsertPolicy(QComboBox.NoInsert)
         self.key_combo.blockSignals(False)
 
     def auto_match(self, quiet: bool = False) -> None:
@@ -846,18 +867,16 @@ class TcDocMappingPanel(QWidget):
             if not quiet:
                 QMessageBox.information(self, "无法匹配", "请先载入本地文件并连接字段")
             return
-        by_title = {}
-        for field in self.fields:
-            by_title.setdefault(str(field.get("fieldTitle") or "").strip().lower(), field)
+        suggested = workflow.suggest_mapping(self.local_headers, self.fields)
         matched = 0
         for header in self.local_headers:
             combo = self.map_combos.get(header)
             if combo is None:
                 continue
-            field = by_title.get(header.strip().lower())
-            if field is None:
+            field_id = suggested.get(header)
+            if not field_id:
                 continue
-            index = combo.findData(field.get("fieldID"))
+            index = combo.findData(field_id)
             if index >= 0:
                 combo.setCurrentIndex(index)
                 matched += 1
@@ -873,9 +892,7 @@ class TcDocMappingPanel(QWidget):
         self.mapping.clear()
         self._refresh_mapping_labels()
         self._rebuild_key_combo()
-        self.actions = []
-        self.execute_btn.setEnabled(False)
-        self.summary_label.setText("已清空映射")
+        self._invalidate_preview("已清空字段匹配，请重新匹配后对比")
 
     def save_mapping_file(self) -> None:
         if not self.local_headers:
@@ -917,6 +934,7 @@ class TcDocMappingPanel(QWidget):
             index = self.key_combo.findData(key)
             if index >= 0:
                 self.key_combo.setCurrentIndex(index)
+        self._invalidate_preview("已载入字段匹配，请重新对比云端")
         self.log(f"映射已载入：{path}")
 
     # ==================== 本地文件 ====================
