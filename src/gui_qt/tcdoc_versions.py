@@ -106,6 +106,14 @@ def _combo():
     return box
 
 
+def _combo_data(box):
+    index, text = box.currentIndex(), box.currentText()
+    if index >= 0 and box.itemText(index) == text:
+        return box.itemData(index)
+    matches = [i for i in range(box.count()) if box.itemText(i) == text]
+    return box.itemData(matches[0]) if len(matches) == 1 else None
+
+
 class TcDocVersionsDialog(QDialog):
     """一个文档的独立历史预览，关闭后继续使用主页面的最新数据。"""
 
@@ -113,12 +121,13 @@ class TcDocVersionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("采集版本")
         self.setModal(False)
-        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setProperty("windowSurface", True)
         self.setMinimumSize(720, 520)
         self.resize(1040, 720)
         self._doc = dict(doc)
         self._closed = False
+        self._loading = False
         self._request = 0
         self._asset_request = 0
         self._version = ""
@@ -127,6 +136,7 @@ class TcDocVersionsDialog(QDialog):
         self._shown_rows = []
         self._page = self._pages = 1
         self._render = 0
+        self._positioned = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -249,14 +259,13 @@ class TcDocVersionsDialog(QDialog):
         return not self._closed and isValid(self) and request == self._request
 
     def _selected_id(self):
-        text = self.version_combo.currentText()
-        index = self.version_combo.findText(text, Qt.MatchExactly)
-        return self.version_combo.itemData(index) if index >= 0 else ""
+        return _combo_data(self.version_combo) or ""
 
     def _selection_changed(self, *_args):
-        self.open_btn.setEnabled(bool(self._selected_id()) and not self.progress.isVisible())
+        self.open_btn.setEnabled(bool(self._selected_id()) and not self._loading)
 
     def _busy(self, value):
+        self._loading = bool(value)
         self.progress.setVisible(value)
         self.refresh_btn.setEnabled(not value)
         self.version_combo.setEnabled(not value)
@@ -339,8 +348,7 @@ class TcDocVersionsDialog(QDialog):
         run_bg(lambda: version_service.read_version(self._doc["key"], version), done)
 
     def _sheet(self):
-        index = self.sheet_combo.findText(self.sheet_combo.currentText(), Qt.MatchExactly)
-        number = self.sheet_combo.itemData(index) if index >= 0 else None
+        number = _combo_data(self.sheet_combo)
         sheets = self._content.get("sheets") or []
         return sheets[number] if isinstance(number, int) and 0 <= number < len(sheets) else {}
 
@@ -372,12 +380,15 @@ class TcDocVersionsDialog(QDialog):
 
     def _fill_table(self):
         self._render += 1
+        self._asset_request += 1
+        self.detail.clear()
         serial = self._render
         columns = self._sheet().get("columns") or []
         names = [str(c.get("name") or "") if isinstance(c, dict) else str(c) for c in columns]
         self._shown_rows = self._ordered_rows[(self._page - 1) * PAGE_SIZE:self._page * PAGE_SIZE]
         self.table.setColumnCount(len(names) + 1)
         self.table.setHorizontalHeaderLabels(["行号"] + names)
+        self.table.clearContents()
         self.table.setRowCount(len(self._shown_rows))
         self.table.horizontalHeader().setVisible(bool(self._shown_rows))
         self.page_label.setText(f"第 {self._page} / {self._pages} 页 · 共 {len(self._ordered_rows):,} 条".replace(",", " "))
@@ -409,8 +420,7 @@ class TcDocVersionsDialog(QDialog):
         self._load_images(self.detail, f"第 {record.get('row_no') or row + 1} 行", text, record.get("images") or [])
 
     def _show_body(self, *_args):
-        index = self.page_combo.findText(self.page_combo.currentText(), Qt.MatchExactly)
-        number = self.page_combo.itemData(index) if index >= 0 else None
+        number = _combo_data(self.page_combo)
         pages = self._content.get("pages") or []
         if isinstance(number, int) and 0 <= number < len(pages):
             page = pages[number]
@@ -447,9 +457,35 @@ class TcDocVersionsDialog(QDialog):
                 view.show_content(title, text, images)
         run_bg(work, done)
 
-    def closeEvent(self, event):
+    def _retire(self):
+        if self._closed:
+            return
         self._closed = True
         self._request += 1
         self._asset_request += 1
         self._render += 1
+        # 全局列宽组件有最长 400ms 的显示回调；先停本窗口渲染，等回调收尾再释放。
+        QTimer.singleShot(500, lambda: self.deleteLater() if isValid(self) else None)
+
+    def reject(self):
+        self._retire()
+        super().reject()
+
+    def closeEvent(self, event):
+        self._retire()
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        if not self._positioned:
+            self._positioned = True
+            available = self.screen().availableGeometry()
+            self.resize(min(self.width(), available.width() - 32),
+                        min(self.height(), available.height() - 32))
+            parent = self.parentWidget()
+            center = parent.window().frameGeometry().center() if parent else available.center()
+            frame = self.frameGeometry()
+            frame.moveCenter(center)
+            frame.moveLeft(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)))
+            frame.moveTop(max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
+            self.move(frame.topLeft())
+        super().showEvent(event)

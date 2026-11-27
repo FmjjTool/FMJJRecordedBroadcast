@@ -112,7 +112,7 @@ def _python_status(key: str) -> dict:
     if key == "pyzipper":
         return dependency_installer.dependency_status(key)
     import importlib
-    from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
     name = {"PIL": "Pillow", "bs4": "BeautifulSoup4",
             "websocket": "websocket-client"}.get(key, key)
@@ -121,8 +121,12 @@ def _python_status(key: str) -> dict:
     status = {"name": name, "installed": False, "supported": not getattr(sys, "frozen", False),
               "version": "", "reason": ""}
     try:
-        importlib.import_module(module)
-        status.update(installed=True, version=version(distribution))
+        loaded = importlib.import_module(module)
+        try:
+            detail = version(distribution)
+        except PackageNotFoundError:
+            detail = str(getattr(loaded, "__version__", "已安装"))
+        status.update(installed=True, version=detail)
     except Exception:
         status["reason"] = "依赖尚未安装" if status["supported"] else "未内置，请重装软件"
     return status

@@ -6,9 +6,6 @@
 
 from __future__ import annotations
 
-from io import BytesIO
-
-
 def _document(doc_key: str) -> dict:
     from . import config
 
@@ -75,21 +72,7 @@ def table_page(doc_key: str, version_id: str, tab_id: str,
 
 def read_asset(doc_key: str, version_id: str, asset_id: str) -> tuple[bytes, str]:
     """只提供校验通过的内置位图，绝不从历史记录里的 URL 或路径补读。"""
-    from PIL import Image
     from . import versions
 
     doc = _document(doc_key)
-    data, _mime = versions.read_asset(doc["key"], version_id, asset_id)
-    try:
-        if not data or len(data) > 32 * 1024 * 1024:
-            raise ValueError("图片大小超出预览限制")
-        with Image.open(BytesIO(data)) as picture:
-            mime = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif",
-                    "WEBP": "image/webp", "BMP": "image/bmp", "AVIF": "image/avif"}.get(
-                        str(picture.format or "").upper())
-            if not mime or min(picture.size) < 1 or picture.width * picture.height > 50_000_000:
-                raise ValueError("图片格式或尺寸不支持预览")
-            picture.verify()
-    except (OSError, ValueError, Image.DecompressionBombError) as exc:
-        raise ValueError("历史图片不可用，请选择其他采集版本") from exc
-    return data, mime
+    return versions.read_asset(doc["key"], version_id, asset_id)

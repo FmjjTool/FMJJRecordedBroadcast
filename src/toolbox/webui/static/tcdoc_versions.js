@@ -11,7 +11,8 @@
       placeholder: '按采集时间或版本号搜索', 'aria-label': '搜索采集版本' });
     var select = h('select', { class: 'select', style: 'flex:1;min-width:160px;max-width:100%',
       'aria-label': '采集版本' });
-    var open = h('button', { class: 'btn primary', type: 'button', disabled: true }, '打开版本');
+    var open = h('button', { class: 'btn primary', type: 'button', disabled: true,
+      style: 'margin-left:auto' }, '打开版本');
     var refresh = h('button', { class: 'btn', type: 'button' }, '刷新');
     var latest = h('button', { class: 'btn', type: 'button' }, '返回最新');
     var note = h('div', { class: 'small', style: 'margin:8px 0;overflow-wrap:anywhere',

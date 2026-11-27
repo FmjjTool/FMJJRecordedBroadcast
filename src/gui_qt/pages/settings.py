@@ -71,6 +71,9 @@ class _SettingsScrollArea(QScrollArea):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.sync_content()
+        callback = getattr(self, "on_width_changed", None)
+        if callback is not None:
+            callback(self.viewport().width())
 
     def sync_content(self):
         body = self.widget()
@@ -424,6 +427,9 @@ class GlobalSettingsPage(BasePage):
         # 骨架屏加载：检测在后台线程跑，页面打开即刻渲染灰色占位条（__init__ 末尾 on_show 已触发）
         self._dep_cache = None      # [(key, name, ok, version)] 上次检测结果
         self._dep_loading = False
+        self._dep_refresh_pending = False
+        self._dependency_compact = self.scroll.viewport().width() < 760
+        self.scroll.on_width_changed = self._on_dependencies_resized
         self._skel_bars = []
         self._skel_phase = 0
         self._skel_timer = QTimer(self)
@@ -638,6 +644,13 @@ class GlobalSettingsPage(BasePage):
     def _set_local_llm_busy(self, busy):
         self._dep_downloading = bool(busy)
         self._sync_dependency_busy()
+
+    def _on_dependencies_resized(self, width):
+        compact = width < 760
+        if compact != self._dependency_compact:
+            self._dependency_compact = compact
+            if self._dep_cache is not None and not self._dep_loading:
+                self._fill_dep_rows(self._dep_cache)
 
     def _sync_dependency_busy(self):
         busy = self._dep_downloading or self._ffmpeg_installing
@@ -1449,6 +1462,7 @@ class GlobalSettingsPage(BasePage):
         再次进入页面先立即显示上次缓存结果，后台静默复核更新。
         """
         if self._dep_loading:
+            self._dep_refresh_pending = True
             return
         self._dep_loading = True
         self.recheck_btn.setEnabled(False)
@@ -1478,9 +1492,17 @@ class GlobalSettingsPage(BasePage):
                 tip.setStyleSheet("color: palette(bright-text); font-size: 11px; padding: 2px;")
                 self.dependency_layout.addWidget(tip)
                 self.scroll.sync_content()
+                pending = self._dep_refresh_pending
+                self._dep_refresh_pending = False
+                if pending:
+                    QTimer.singleShot(0, self._refresh_dependencies)
                 return
             self._dep_cache = result
             self._fill_dep_rows(result)
+            pending = self._dep_refresh_pending
+            self._dep_refresh_pending = False
+            if pending:
+                QTimer.singleShot(0, self._refresh_dependencies)
 
         run_bg(work, done)
 
@@ -1616,9 +1638,8 @@ class GlobalSettingsPage(BasePage):
                         " background: transparent; border: none;")
                     h.addWidget(hint)
                 else:
-                    install_btn = self._dep_btn("安装")
+                    install_btn = self._dep_btn("安装", variant="primary")
                     install_btn.setObjectName("dependencyInstall_" + key)
-                    install_btn.setProperty("variant", "primary")
                     install_btn.clicked.connect(
                         lambda _c=False, k=key, n=name, u=url:
                         self._pip_install(k, n, u))
@@ -1663,7 +1684,13 @@ class GlobalSettingsPage(BasePage):
             elif action == "clip_model" and not ok:
                 h.addWidget(self._dep_btn("下载", self._download_clip_model))
             elif action == "local_llm":
-                self.local_llm_panel.add_dependency_shortcuts(h, key)
+                shortcut_layout = h
+                if self._dependency_compact:
+                    shortcut_layout = QHBoxLayout()
+                    shortcut_layout.addStretch(1)
+                self.local_llm_panel.add_dependency_shortcuts(shortcut_layout, key)
+                if self._dependency_compact:
+                    row_layout.addLayout(shortcut_layout)
             elif action == "proxy_core" and not ok:
                 dl_btn = self._dep_btn("下载", self._download_proxy_core)
                 dl_btn.setToolTip("自动测速选最快的加速源，支持断点续传")
@@ -2039,19 +2066,18 @@ class GlobalSettingsPage(BasePage):
 
     # ----- 缺失项快捷安装 -----
 
-    def _dep_btn(self, text, slot=None):
+    def _dep_btn(self, text, slot=None, *, variant="secondary"):
         """依赖行里的小按钮（高亮主色，等比缩进）。"""
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setProperty("variant", "secondary")
+        btn.setProperty("variant", variant)
         btn.setStyleSheet("padding: 4px 10px; font-size: 11px;")
         if slot is not None:
             btn.clicked.connect(lambda _c=False: slot())
         return btn
 
     def _add_uninstall_btn(self, layout, name, detail, action, tooltip=""):
-        btn = self._dep_btn("卸载")
-        btn.setProperty("variant", "danger")
+        btn = self._dep_btn("卸载", variant="danger")
         btn.setToolTip(tooltip or ("卸载 %s" % name))
         btn.clicked.connect(
             lambda _checked=False: self._confirm_and_uninstall(name, detail, action))

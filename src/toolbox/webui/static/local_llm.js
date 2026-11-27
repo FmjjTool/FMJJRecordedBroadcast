@@ -143,6 +143,7 @@
               onSettled: function (job) {
                 busy = false;
                 if (job.status === 'done') {
+                  jobHost.replaceChildren();
                   load();
                   global.dispatchEvent(new CustomEvent('fmjj-local-components-changed', { detail: host }));
                 } else {
@@ -305,6 +306,7 @@
             busy = false;
             sync();
             if (job.status === 'done') {
+              jobHost.replaceChildren();
               helpers.toast((job.result || {}).summary || '已完成', 'success');
               load();
               global.dispatchEvent(new CustomEvent('fmjj-local-components-changed', { detail: host }));

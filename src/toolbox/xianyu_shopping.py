@@ -76,6 +76,15 @@ def parse(text, on_log=None, is_cancelled=None):
             "summary": "闲鱼商品已解析，勾选后可入库并下载图片"}
 
 
+def is_item_reference(text: str) -> bool:
+    """判断输入是否为规范化商品 ID / 官方商品链接，供 UI 入口路由使用。"""
+    try:
+        xianyu.item_id(text)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def normalize_items(items):
     """只接受 ID/官方链接，忽略客户端图片地址和其他业务字段。"""
     if not isinstance(items, list) or not 1 <= len(items) <= xianyu.MAX_ITEMS:

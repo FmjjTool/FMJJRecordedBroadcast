@@ -30,9 +30,9 @@ class XianyuShopPage(BasePage):
         layout.setSpacing(12)
 
         self.input_edit = QLineEdit()
-        self.input_edit.setPlaceholderText("闲鱼商品完整链接")
-        self.parse_btn = QPushButton("解析")
-        self.parse_btn.clicked.connect(lambda: self.submit_text(self.input_edit.text()))
+        self.input_edit.setPlaceholderText("闲鱼关键词或完整商品链接")
+        self.parse_btn = QPushButton("搜索并解析")
+        self.parse_btn.clicked.connect(lambda: self.submit_auto(self.input_edit.text()))
         layout.addWidget(self.input_edit)
         layout.addWidget(self.parse_btn)
 
@@ -41,7 +41,7 @@ class XianyuShopPage(BasePage):
         body = QVBoxLayout(card)
         body.setContentsMargins(12, 12, 12, 12)
         body.setSpacing(8)
-        self.empty_label = QLabel("输入周边关键词并点「搜索闲鱼」，或粘贴商品链接后解析")
+        self.empty_label = QLabel("输入周边关键词或粘贴商品链接后点「搜索并解析」")
         self.empty_label.setWordWrap(True)
         body.addWidget(self.empty_label)
         self.table = QTableWidget(0, 6)
@@ -105,6 +105,12 @@ class XianyuShopPage(BasePage):
     def submit_text(self, text):
         self._start(lambda: xianyu_shopping.parse(text, on_log=self._log,
                                                 is_cancelled=self._cancel.is_set))
+
+    def submit_auto(self, text):
+        """统一入口：商品链接解析，普通文本搜索。"""
+        if not xianyu_shopping.is_item_reference(text):
+            return self.submit_search(text)
+        return self.submit_text(text)
 
     def submit_search(self, text):
         self._start(lambda: xianyu_shopping.search(text, on_log=self._log,

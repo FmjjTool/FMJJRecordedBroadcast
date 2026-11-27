@@ -8238,7 +8238,10 @@ function renderLivestreamSummary(root) {
             onSettled: function (job) {
               depBusy = false;
               syncDependencyActions();
-              if (job.status === 'done') loadDependencies();
+              if (job.status === 'done') {
+                depJobHost.replaceChildren();
+                loadDependencies();
+              }
               else {
                 depState.textContent = job.status === 'cancelled' ? '已取消，可重新安装'
                   : item.name + ' 安装失败：' + (job.error || '请检查网络后重试');
