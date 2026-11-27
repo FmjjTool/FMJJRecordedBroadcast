@@ -315,7 +315,8 @@ class NeteasePage(BasePage):
         self.setStyleSheet(ROW_QSS)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         layout.addWidget(self._build_func())
 
     # ===================== 公共：登录态 =====================

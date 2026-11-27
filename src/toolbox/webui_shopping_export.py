@@ -30,6 +30,7 @@ MAX_ROWS = 2000
 MAX_MEMORY = 16 * 1024 * 1024
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
+MAX_CELL_TEXT = 32767
 _ID = re.compile(r"[A-Za-z0-9_-]{32}")
 _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _PLATFORMS = {"douyin": "抖音商城", "bili": "B站小店"}
@@ -149,6 +150,15 @@ def _snapshot(platform, models, root, created, is_cancelled):
         raise ShoppingExportError("本次没有可导出的商品，请重新解析")
     if count > MAX_ROWS:
         raise ShoppingExportError("本次商品超过 2000 件，无法导出，请减少本次解析数量")
+    pending = [values]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str) and len(value) > MAX_CELL_TEXT:
+            raise ShoppingExportError("本次商品文本超过 Excel 单元格 32767 字符上限，暂不能完整导出")
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            pending.extend(value)
     raw = json.dumps(values, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     size = len(raw)
     if size > MAX_MEMORY:

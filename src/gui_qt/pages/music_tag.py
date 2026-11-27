@@ -297,8 +297,8 @@ class MusicTagPage(BasePage):
         self._pending_encrypted: list[str] = []
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(6, 2, 6, 6)
-        v.setSpacing(2)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(12)
         v.addWidget(self._build_menubar())
         self.decrypt_bar = self._build_decrypt_bar()
         v.addWidget(self.decrypt_bar)

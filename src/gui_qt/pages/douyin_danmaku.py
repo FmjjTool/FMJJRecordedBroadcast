@@ -197,8 +197,8 @@ class DouyinDanmakuPage(BasePage):
         self._resume_keep = False   # 切页自动重连：保留本场弹幕/搜索状态
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(4)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
 
         # 子类按平台改写标题；仅用于浮层标题，不在页面顶部显示。
         self.title_lbl = QLabel("抖音弹幕 · 实时数据接入")

@@ -954,7 +954,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         path = jobs.download(job_id)
         if path is None:
             raise NotFound("任务文件不存在")
-        return FileResponse(path, path.name, "application/zip")
+        job = jobs.get(job_id)
+        content_type = "application/zip"
+        if job is not None and job.kind == "shopping_export" and path.suffix.lower() == ".xlsx":
+            content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return FileResponse(path, path.name, content_type)
 
     def cancel_job(req, job_id):
         if not jobs.cancel(job_id):

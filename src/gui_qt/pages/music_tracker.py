@@ -74,7 +74,7 @@ class MusicTrackerPage(BasePage):
         self._collecting = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(0)
         layout.addWidget(self._build_func())
         self.reload_accounts()
@@ -83,8 +83,8 @@ class MusicTrackerPage(BasePage):
     def _build_func(self) -> QWidget:
         f = QWidget()
         v = QVBoxLayout(f)
-        v.setContentsMargins(10, 8, 10, 10)
-        v.setSpacing(6)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(12)
 
         head = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
@@ -118,8 +118,8 @@ class MusicTrackerPage(BasePage):
         self.cards_scroll.setWidgetResizable(True)
         self.cards_container = QWidget()
         self.cards_layout = QVBoxLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(4, 4, 4, 4)
-        self.cards_layout.setSpacing(6)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(12)
         self.cards_layout.addStretch(1)
         self.cards_scroll.setWidget(self.cards_container)
         v.addWidget(self.cards_scroll, 1)
