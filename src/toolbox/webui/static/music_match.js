@@ -28,7 +28,7 @@
     host.replaceChildren(h('div', { class: 'card music-match-panel' },
       h('div', { class: 'row-title' }, '自动匹配'),
       h('div', { class: 'muted small' },
-        '读取已保存标签，从所选来源取最高候选；预览不改文件。默认只填空值，覆盖需逐项勾选。'),
+        '读取已保存标签，从所选来源取最高候选；预览不改文件。默认只填空值，覆盖需逐项勾选。结果保留 30 分钟，写入前会检查文件变化。'),
       h('div', { class: 'toolbar' }, all, clear), fileList, settingsHost,
       h('div', { class: 'toolbar' }, start, apply, notice), results, jobHost));
 
@@ -208,6 +208,7 @@
       options.post(endpoint, payload).then(function (response) {
         options.watchJob(jobHost, response.job, onDone, {
           cancelable: true,
+          indeterminate: true,
           onSettled: function (job) {
             setBusy(false);
             if (job.status === 'error') options.toast('自动匹配失败：' + job.error, 'error');
