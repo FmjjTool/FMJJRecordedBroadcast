@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+
 def _document(doc_key: str) -> dict:
     from . import config
 
