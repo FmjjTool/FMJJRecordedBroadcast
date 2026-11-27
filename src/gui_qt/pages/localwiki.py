@@ -1,4 +1,4 @@
-"""本地资料站：GitHub 拉取 webwiki / webwiki-api，读取监控数据重建并一键起站。
+"""本地资料站：同步小程序主源与 Web 投影，读取监控数据重建并一键起站。
 
 页面只做服务启动器：
 - GitHub 登录状态由统一管理入口维护，未登录时锁定拉取/部署
@@ -534,7 +534,7 @@ class LocalWikiPage(BasePage):
                 f"<span style='color:{warn_color}'>● 未登录</span> 拉取与一键部署已锁定")
 
         lines = []
-        for name in ("webwiki-api", "webwiki"):
+        for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
             try:
                 state = gitops.repo_state(name)
             except Exception as exc:  # noqa: BLE001
@@ -804,6 +804,7 @@ class LocalWikiPage(BasePage):
         return self._deploy_start(root, log)
 
     def _deploy_pull(self, root, token, log):
+        gitops.ensure_repo("mandisa-miniprogram", token, log, root)
         gitops.ensure_repo("webwiki-api", token, log, root)
         gitops.ensure_repo("webwiki", token, log, root)
 

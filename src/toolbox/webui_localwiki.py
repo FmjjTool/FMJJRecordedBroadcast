@@ -42,7 +42,7 @@ def _ts(value) -> str:
 
 def _repo_rows(gitops) -> list[dict]:
     rows = []
-    for name in ("webwiki-api", "webwiki"):
+    for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
         try:
             state = gitops.repo_state(name)
         except Exception as exc:

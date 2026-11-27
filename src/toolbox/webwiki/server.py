@@ -54,10 +54,44 @@ class _QuietServer(ThreadingHTTPServer):
 
 
 class _StaticProxy(BaseHTTPRequestHandler):
-    """静态文件 + /api、/uploads 反代；history 路由回退到 index.html。"""
+    """静态文件 + 公开只读 API 反代；history 路由回退到 index.html。
+
+    站点是资料浏览入口，不把后端的后台、统计、内部或上传路由暴露给
+    浏览器。仅明确列出的公开 GET/HEAD 路由会被转发。
+    """
 
     server_version = "LocalWiki/1.0"
     protocol_version = "HTTP/1.1"
+
+    _PUBLIC_EXACT = frozenset({
+        "/api/health", "/api/visibility", "/api/wiki",
+        "/api/schedules", "/api/img", "/api/song-search",
+        "/api/albums", "/api/albums/detail", "/api/anniversaries",
+        "/api/live-songs", "/api/live-songs/detail", "/api/changelogs",
+        "/api/gallery", "/api/gallery/search",
+        "/api/gallery/search/status",
+    })
+    _PUBLIC_RESOURCES = frozenset({
+        "songs", "events", "goods", "posts",
+        "live-records", "changelogs",
+    })
+
+    @classmethod
+    def _is_public_api_path(cls, path: str) -> bool:
+        """判断路径是否属于资料浏览所需的公开只读接口。"""
+        if path in cls._PUBLIC_EXACT:
+            return True
+        if path.startswith("/api/wiki/"):
+            return True
+        if path.startswith("/api/filters/"):
+            resource = path.removeprefix("/api/filters/").split("/", 1)[0]
+            return resource in cls._PUBLIC_RESOURCES
+        if path.startswith("/api/"):
+            tail = path.removeprefix("/api/")
+            resource = tail.split("/", 1)[0]
+            if resource in cls._PUBLIC_RESOURCES:
+                return tail == resource or tail.startswith(resource + "/")
+        return False
 
     def log_message(self, _format, *args):  # noqa: A003 - 静默访问日志
         pass
@@ -68,13 +102,35 @@ class _StaticProxy(BaseHTTPRequestHandler):
     def do_HEAD(self):  # noqa: N802
         self._handle(head=True)
 
+    def do_POST(self):  # noqa: N802
+        self._method_not_allowed()
+
+    def do_PUT(self):  # noqa: N802
+        self._method_not_allowed()
+
+    def do_PATCH(self):  # noqa: N802
+        self._method_not_allowed()
+
+    def do_DELETE(self):  # noqa: N802
+        self._method_not_allowed()
+
+    def _method_not_allowed(self):
+        self._send(405, b"Read-only site", "text/plain; charset=utf-8",
+                   headers=[("Allow", "GET, HEAD")])
+
     def _handle(self, head: bool):
         parts = urlsplit(self.path)
         if parts.path == "/api/img":
             self._image(parts, head)
             return
-        if parts.path.startswith("/api/") or parts.path.startswith("/uploads/"):
+        if parts.path.startswith("/api/"):
+            if not self._is_public_api_path(parts.path):
+                self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
+                return
             self._proxy(parts, head)
+            return
+        if parts.path.startswith("/uploads/"):
+            self._send(404, b"Not found", "text/plain; charset=utf-8", head=head)
             return
         dist = Path(self.server.dist_dir)  # type: ignore[attr-defined]
         rel = unquote(parts.path).lstrip("/")

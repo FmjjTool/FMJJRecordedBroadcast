@@ -24,8 +24,16 @@ from toolbox.config_manager import (
 )
 
 REPO_URLS = {
+    "mandisa-miniprogram": "https://github.com/FmjjTool/mandisa-miniprogram.git",
     "webwiki": "https://github.com/FmjjTool/webwiki.git",
     "webwiki-api": "https://github.com/FmjjTool/webwiki-api.git",
+}
+
+# 小程序是资料内容主源；Web 版只是本地只读投影。两个 Web 仓库仍使用 main。
+REPO_BRANCHES = {
+    "mandisa-miniprogram": "master",
+    "webwiki": "main",
+    "webwiki-api": "main",
 }
 
 # ==================== 目录 ====================
@@ -50,6 +58,11 @@ def web_dir(root: Path | None = None) -> Path:
 
 def api_dir(root: Path | None = None) -> Path:
     return Path(root or root_dir()) / "webwiki-api"
+
+
+def miniapp_dir(root: Path | None = None) -> Path:
+    """小程序主源仓库目录；仅用于版本同步与源码查看，不参与 Web 构建。"""
+    return Path(root or root_dir()) / "mandisa-miniprogram"
 
 
 def venv_dir(root: Path | None = None) -> Path:

@@ -60,6 +60,8 @@ def _git(log, args, cwd, token: str = "", check: bool = True, title: str = ""):
 
 
 def repo_target(name: str, root: Path | None = None) -> Path:
+    if name == "mandisa-miniprogram":
+        return config.miniapp_dir(root)
     if name == "webwiki":
         return config.web_dir(root)
     if name == "webwiki-api":
@@ -138,8 +140,9 @@ def ensure_repo(name: str, token: str, log, root: Path | None = None,
             f"{name} 仓库有未提交的本地改动，已停止拉取以免覆盖。\n"
             f"请先处理：{target}")
     log(f"更新 {name}（当前 {state.get('commit') or '?'}）")
+    branch = config.REPO_BRANCHES.get(name, "main")
     rc, _lines, failures = _run_on_all_channels(
-        log, ["fetch", "--depth", "1", "origin", "main"],
+        log, ["fetch", "--depth", "1", "origin", branch],
         target, token, f"fetch {name}")
     if rc:
         raise GitError("拉取失败，已尝试全部网络通道：\n" + "\n".join(failures))
@@ -178,9 +181,9 @@ def _advance(log, name: str, target: Path, token: str, old_commit: str) -> None:
 
 
 def pull_all(token: str, log, root: Path | None = None) -> str:
-    """依次更新两个仓库；某个仓库失败不影响另一个，最后汇总报错。"""
+    """依次更新主源仓库与 Web 投影仓库；某仓库失败不影响另一个。"""
     errors: list[str] = []
-    for name in ("webwiki-api", "webwiki"):
+    for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
         try:
             ensure_repo(name, token, log, root)
         except GitError as exc:
@@ -189,7 +192,7 @@ def pull_all(token: str, log, root: Path | None = None) -> str:
     if errors:
         raise GitError("\n\n".join(errors))
     parts = []
-    for name in ("webwiki-api", "webwiki"):
+    for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
         state = repo_state(name, root)
         parts.append(f"{name}@{state.get('commit') or '?'}")
     return " · ".join(parts)
