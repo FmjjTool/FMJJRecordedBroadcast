@@ -728,6 +728,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .home-stat { min-width: 0; }
 .home-stat .value { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .home-stat .note { line-height: 1.6; overflow-wrap: anywhere; }
+.home-stat.has-error .note { color: var(--danger); }
 .home-charts { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; }
 .home-dashboard .card + .card { margin-top: 0; }
 .home-chart-card { min-width: 0; }
@@ -741,6 +742,7 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .home-chart-value { fill: var(--text); }
 .home-trend-bar { fill: var(--accent); }
 .home-chart-note { margin-top: 2px; }
+.home-dashboard .home-data-warning { color: var(--danger); }
 .home-source-body { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 278px; }
 .home-donut { display: block; width: min(44%, 200px); flex: 0 1 200px; min-width: 120px; overflow: visible; }
 .home-donut-track, .home-donut-ring { fill: none; stroke-width: 26; }

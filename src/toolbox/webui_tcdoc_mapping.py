@@ -79,6 +79,8 @@ def _read_upload(payload):
         raise ValueError("文件内容无法读取，请重新选择") from None
     if not data or len(data) > MAX_FILE_BYTES:
         raise ValueError("请选择非空且不超过 4 MB 的表格")
+    if suffix == ".json" and data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
     if suffix == ".xlsx":
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -280,11 +282,11 @@ class MappingSessions:
                     "message": str(action.get("message") or ""),
                     "changes": deepcopy(action.get("changes") or [])})
             if direction:
-                if sort_column not in {"row_no", "op", "key", "message"} and sort_column not in headers:
+                local_column = sort_column[6:] if sort_column.startswith("local:") else ""
+                if sort_column not in {"row_no", "op", "key", "message"} and local_column not in headers:
                     raise ValueError("排序列不存在")
-                result = sort_records(result, lambda row: sort_key(row[sort_column]
-                    if sort_column in {"row_no", "op", "key", "message"}
-                    else row["local"].get(sort_column)), ascending=direction == "asc")
+                result = sort_records(result, lambda row: sort_key(row["local"].get(local_column)
+                    if local_column else row[sort_column]), ascending=direction == "asc")
             total = len(result)
             pages = max(1, (total + 199) // 200)
             page = max(1, min(int(page), pages))

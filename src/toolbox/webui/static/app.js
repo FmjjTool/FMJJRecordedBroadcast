@@ -427,8 +427,9 @@
       return node;
     }
 
-    function overviewCard(label, value, note) {
-      return h('div', { class: 'stat home-stat' },
+    function overviewCard(label, value, note, metricState) {
+      if (metricState === 'error') { value = null; note = '暂时无法读取，稍后刷新重试'; }
+      return h('div', { class: 'stat home-stat' + (metricState === 'error' ? ' has-error' : '') },
         h('div', { class: 'label' }, label),
         h('div', { class: 'value' }, amount(value)),
         h('div', { class: 'note' }, note));
@@ -437,13 +438,14 @@
     function trendChart(data) {
       var card = h('section', { class: 'card home-chart-card', 'aria-label': '近 7 天数据增量' },
         h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '近 7 天数据增量'),
-          h('span', { class: 'muted small' }, '本周 ' + amount(data.week_total) + ' · 今日 ' + amount(data.today_total))));
+          h('span', { class: 'muted small' }, '近 7 天 ' + amount(data.week_total) + ' · 今日 ' + amount(data.today_total))));
       var labels = Array.isArray(data.labels) ? data.labels.slice(-7) : [];
       var counts = (Array.isArray(data.counts) ? data.counts.slice(-7) : []).map(function (value) {
         return Math.max(0, Number(value) || 0);
       });
       if (!labels.length || !counts.some(function (value) { return value > 0; })) {
-        card.appendChild(h('div', { class: 'home-chart-empty' }, '近 7 天还没有新增记录，完成采集或同步后刷新查看。'));
+        card.appendChild(h('div', { class: 'home-chart-empty' }, data.trend_state === 'error'
+          ? '趋势数据暂时无法读取，请稍后刷新重试。' : '近 7 天还没有新增记录，完成采集或同步后刷新查看。'));
         return card;
       }
       var max = Math.max.apply(null, counts);
@@ -469,7 +471,9 @@
         chart.appendChild(svg('text', { x: x + '%', y: 236, 'text-anchor': 'middle', class: 'home-chart-label' }, label));
       });
       card.appendChild(chart);
-      card.appendChild(h('div', { class: 'muted small home-chart-note' }, '按各来源的本地记录日期汇总'));
+      card.appendChild(h('div', { class: 'muted small home-chart-note' + (data.trend_state === 'error' ? ' home-data-warning' : '') },
+        (data.trend_state === 'error' ? '部分数据读取失败，统计不完整。' : '')
+        + (data.trend_note || '按各来源的本地记录日期汇总')));
       return card;
     }
 
@@ -478,19 +482,20 @@
         kuaishou: '快手', weibo_chaohua: '微博超话', tcdoc: '腾讯文档', assets: '资源文件',
         acfun: 'AcFun', baidu: '百度', wechat: '微信公众号', qq: 'QQ', youtube: 'YouTube' };
       var entries = Object.keys(data.by_source || {}).map(function (key) {
-        return { label: names[key] || key, value: Math.max(0, Number(data.by_source[key]) || 0) };
+        return { label: (data.source_labels || {})[key] || names[key] || key,
+          value: Math.max(0, Number(data.by_source[key]) || 0) };
       }).filter(function (item) { return item.value > 0; }).sort(function (a, b) { return b.value - a.value; });
       var total = entries.reduce(function (sum, item) { return sum + item.value; }, 0);
+      var incomplete = ['platform_items', 'chaohua_posts', 'tcdoc_rows', 'asset_files'].some(function (key) {
+        return (data.stat_states || {})[key] === 'error';
+      });
       var card = h('section', { class: 'card home-chart-card', 'aria-label': '内容来源分布' },
         h('div', { class: 'home-card-head' }, h('h2', { class: 'card-title' }, '内容来源分布'),
-          h('span', { class: 'muted small' }, '共 ' + amount(total) + ' 条')));
+          h('span', { class: 'muted small' }, (incomplete ? '已读取 ' : '共 ') + amount(total) + ' 条')));
       if (!total) {
-        card.appendChild(h('div', { class: 'home-chart-empty' }, '还没有可汇总的内容，完成采集或资源登记后刷新查看。'));
+        card.appendChild(h('div', { class: 'home-chart-empty' + (incomplete ? ' home-data-warning' : '') }, incomplete
+          ? '部分来源读取失败，暂时无法汇总完整分布。' : '还没有可汇总的内容，完成采集或资源登记后刷新查看。'));
         return card;
-      }
-      if (entries.length > 6) {
-        var remainder = entries.slice(5).reduce(function (sum, item) { return sum + item.value; }, 0);
-        entries = entries.slice(0, 5).concat([{ label: '其他', value: remainder }]);
       }
       var chart = svg('svg', { class: 'home-donut', viewBox: '0 0 200 200', role: 'img',
         'aria-label': entries.map(function (item) { return item.label + '：' + amount(item.value); }).join('；') });
@@ -501,12 +506,12 @@
         var percent = item.value / total * 100;
         var ring = svg('circle', { cx: 100, cy: 100, r: 72, pathLength: 100,
           'stroke-dasharray': percent + ' ' + (100 - percent), 'stroke-dashoffset': -offset,
-          transform: 'rotate(-90 100 100)', class: 'home-donut-ring home-series-' + index });
+          transform: 'rotate(-90 100 100)', class: 'home-donut-ring home-series-' + (index % 6) });
         ring.appendChild(svg('title', {}, item.label + '：' + amount(item.value) + '（' + percent.toFixed(1) + '%）'));
         chart.appendChild(ring);
         offset += percent;
         legend.appendChild(h('li', {},
-          h('span', { class: 'home-source-dot home-series-' + index, 'aria-hidden': 'true' }),
+          h('span', { class: 'home-source-dot home-series-' + (index % 6), 'aria-hidden': 'true' }),
           h('span', { class: 'home-source-name' }, item.label),
           h('span', { class: 'home-source-value' }, amount(item.value)),
           h('span', { class: 'muted home-source-percent' }, percent.toFixed(1) + '%')));
@@ -514,27 +519,29 @@
       chart.appendChild(svg('text', { x: 100, y: 95, 'text-anchor': 'middle', class: 'home-donut-caption' }, '来源总量'));
       chart.appendChild(svg('text', { x: 100, y: 121, 'text-anchor': 'middle', class: 'home-donut-total' }, compact(total)));
       card.appendChild(h('div', { class: 'home-source-body' }, chart, legend));
+      if (incomplete) card.appendChild(h('div', { class: 'small home-data-warning' }, '部分来源读取失败，分布统计不完整。'));
       return card;
     }
 
     function renderData(data) {
       var stats = data.stats;
+      var metricStates = data.stat_states || {};
       var siteReady = !!stats.site_collected;
       var siteNote = siteReady ? [stats.site_scope, stats.site_date].filter(Boolean).join(' · ') : '尚未采集访问统计';
       var docNote = '已采集 ' + amount(stats.doc_count) + ' 份文档';
       var cards = h('div', { class: 'home-overview' },
-        overviewCard('平台内容', stats.platform_items, '各平台已入库内容'),
-        overviewCard('超话帖子', stats.chaohua_posts, '去重后的本地帖子'),
-        overviewCard('文档表格行', stats.tcdoc_rows, '已同步的本地表格记录'),
-        overviewCard('资源文件', stats.asset_files, '资产索引已登记文件'),
-        overviewCard('文档浏览量', stats.doc_views, docNote),
-        overviewCard('文档成员数', stats.doc_members, docNote),
-        overviewCard('文档查看人数', stats.doc_readers, docNote),
-        overviewCard('观察账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号'),
-        overviewCard('站点访客', siteReady ? stats.site_visitors : null, siteNote),
-        overviewCard('站点会话', siteReady ? stats.site_sessions : null, siteNote),
-        overviewCard('站点浏览量', siteReady ? stats.site_pageviews : null, siteNote),
-        overviewCard('在线访客', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote));
+        overviewCard('平台内容', stats.platform_items, '各平台已入库内容', metricStates.platform_items),
+        overviewCard('超话帖子', stats.chaohua_posts, '去重后的本地帖子', metricStates.chaohua_posts),
+        overviewCard('文档表格行', stats.tcdoc_rows, '已同步的本地表格记录', metricStates.tcdoc_rows),
+        overviewCard('资源文件', stats.asset_files, '资产索引已登记文件', metricStates.asset_files),
+        overviewCard('文档浏览量', stats.doc_views, docNote, metricStates.doc_views),
+        overviewCard('文档成员数', stats.doc_members, docNote, metricStates.doc_members),
+        overviewCard('文档查看人数', stats.doc_readers, docNote, metricStates.doc_readers),
+        overviewCard('观察账号', stats.tracked_accounts, '共配置 ' + amount(stats.tracked_total) + ' 个追踪账号', metricStates.tracked_accounts),
+        overviewCard('站点访客', siteReady ? stats.site_visitors : null, siteNote, metricStates.site_visitors),
+        overviewCard('站点会话', siteReady ? stats.site_sessions : null, siteNote, metricStates.site_sessions),
+        overviewCard('站点浏览量', siteReady ? stats.site_pageviews : null, siteNote, metricStates.site_pageviews),
+        overviewCard('在线访客', siteReady ? stats.site_online : null, siteReady ? '最近一次本地快照' : siteNote, metricStates.site_online));
       var sections = h('div', { class: 'home-sections' });
       (Array.isArray(data.sections) ? data.sections : []).forEach(function (section) {
         var metrics = h('dl', { class: 'home-metric-list' });
@@ -929,106 +936,9 @@
     }
 
     function commentsCard(reload) {
-      var platformSel = h('select', { class: 'select' },
-        h('option', { value: 'douyin' }, '抖音'),
-        h('option', { value: 'bili' }, 'B站'),
-        h('option', { value: 'weibo' }, '微博'));
-      var urlInput = h('input', {
-        class: 'input grow',
-        placeholder: '视频链接或 ID；抖音支持作者主页（抓最新 N 个）'
+      return window.createVideoCommentsCard({
+        h: h, post: post, toast: toast, watchJob: watchJob, reload: reload
       });
-      var pagesInput = h('input', {
-        class: 'input', style: 'width:70px', type: 'number',
-        min: '1', max: '50', value: '5'
-      });
-      var pngCb = h('input', { type: 'checkbox', checked: true });
-      var rawCb = h('input', { type: 'checkbox', checked: true });
-      var kwInput = h('input', {
-        class: 'input', placeholder: '关键词', style: 'width:130px'
-      });
-      var userInput = h('input', {
-        class: 'input', placeholder: '昵称', style: 'width:120px'
-      });
-      var likesInput = h('input', {
-        class: 'input', placeholder: '最少点赞', style: 'width:90px',
-        type: 'number', min: '0'
-      });
-      var imageSel = h('select', { class: 'select' },
-        h('option', { value: 'all' }, '全部评论'),
-        h('option', { value: 'has' }, '仅带图'),
-        h('option', { value: 'text' }, '仅纯文字'));
-      var sortSel = h('select', { class: 'select' },
-        h('option', { value: 'default' }, '默认排序'),
-        h('option', { value: 'likes' }, '按点赞'),
-        h('option', { value: 'time' }, '按时间'));
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始抓取');
-      var jobHost = h('div');
-      var running = false;
-      btn.addEventListener('click', function () {
-        if (running) return;
-        if (!urlInput.value.trim()) {
-          toast('请输入视频链接或 ID', 'warning');
-          return;
-        }
-        if (!pngCb.checked && !rawCb.checked) {
-          toast('请至少选择一种导出内容', 'warning');
-          return;
-        }
-        running = true;
-        btn.disabled = true;
-        btn.textContent = '抓取中…';
-        post('/api/tools/artifacts/comments', {
-          platform: platformSel.value,
-          url: urlInput.value.trim(),
-          pages: Number(pagesInput.value) || 5,
-          png: pngCb.checked,
-          raw: rawCb.checked,
-          keyword: kwInput.value.trim(),
-          user: userInput.value.trim(),
-          min_likes: Number(likesInput.value) || 0,
-          image_mode: imageSel.value,
-          sort_by: sortSel.value
-        }).then(function (result) {
-          watchJob(jobHost, result.job, function (job) {
-            running = false;
-            btn.disabled = false;
-            btn.textContent = '开始抓取';
-            var outcome = job.result || {};
-            toast(outcome.summary || '抓取完成', 'success');
-            reload();
-          }, {
-            cancelable: true,
-            onSettled: function (job) {
-              running = false;
-              btn.disabled = false;
-              btn.textContent = '开始抓取';
-              if (job.status === 'error') {
-                toast('抓取失败：' + (job.error || '未知错误'), 'error');
-              }
-            }
-          });
-        }).catch(function (error) {
-          running = false;
-          btn.disabled = false;
-          btn.textContent = '开始抓取';
-          toast('抓取失败：' + error.message, 'error');
-        });
-      });
-      return h('div', { class: 'card', style: 'margin-bottom:12px' },
-        h('div', { class: 'row-title' }, '抓取评论区'),
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '平台'), platformSel,
-          urlInput),
-        h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { class: 'muted small' }, '页数'), pagesInput,
-          h('label', { class: 'muted small' }, pngCb, ' 评论区长图'),
-          h('label', { class: 'muted small' }, rawCb, ' 原始数据'),
-          kwInput, userInput, likesInput, imageSel, sortSel,
-          h('span', { style: 'flex:1' }), btn),
-        h('div', { class: 'muted small', style: 'margin-top:6px' },
-          '导出到「评论区/<平台>/<视频ID>/」，可在下方产物列表预览长图或下载；'
-          + '抓取依赖登录态与网络，作者主页模式对抖音有效。'),
-        jobHost);
     }
 
     function wechatCard(reload) {

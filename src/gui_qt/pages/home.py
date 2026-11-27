@@ -52,7 +52,7 @@ SITE_STAT_KEYS = {"site_visitors", "site_sessions", "site_pageviews", "site_onli
 # 下钻抽屉表格最多显示的行数，超出后表格内部滚动；高度按实际行数自适应
 DRAWER_MAX_ROWS = 10
 
-def _dist_items(by_source):
+def _dist_items(by_source, source_labels=None):
     """来源计数 → 环形图数据，未知来源合并为「其他」。"""
     rest = dict(by_source)
     items = []
@@ -60,6 +60,10 @@ def _dist_items(by_source):
         n = rest.pop(key, 0)
         if n:
             items.append((label, n, color))
+    for key, label in (source_labels or {}).items():
+        value = rest.pop(key, 0)
+        if value:
+            items.append((str(label), value, OTHER_COLOR))
     other = sum(rest.values())
     if other:
         items.append(("其他", other, OTHER_COLOR))
@@ -78,6 +82,7 @@ class _DonutChart(QWidget):
 
     def set_items(self, items):
         self._items = list(items or [])
+        self.setMinimumHeight(max(210, len(self._items) * 24 + 28))
         self.update()
 
     def paintEvent(self, _event):
@@ -1403,17 +1408,17 @@ class HomePage(BasePage):
             value = stats.get(key)
             label.setText("—" if value is None else f"{int(value):,}")
         self._stat_values["doc_views"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新浏览量合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新浏览量合计")
         self._stat_values["doc_members"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新成员数合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新成员数合计")
         self._stat_values["doc_readers"].setToolTip(
-            f"腾讯文档 {int(stats.get('doc_count', 0))} 个文档的最新已查看人数合计")
+            f"腾讯文档 {int(stats.get('doc_count') or 0)} 个文档的最新已查看人数合计")
         self._stat_values["tracked_accounts"].setToolTip(
-            f"已观察 {int(stats.get('tracked_accounts', 0))} / "
-            f"共 {int(stats.get('tracked_total', 0))} 个账号\n点击配置观察账号")
+            f"已观察 {int(stats.get('tracked_accounts') or 0)} / "
+            f"共 {int(stats.get('tracked_total') or 0)} 个账号\n点击配置观察账号")
 
         scope = str(stats.get("site_scope") or "严格验证")
-        if int(stats.get("site_collected", 0)):
+        if int(stats.get("site_collected") or 0):
             fetched = str(stats.get("site_fetched_at") or "")
             stat_date = str(stats.get("site_date") or "")
             head = f"mandisa.wiki 站点访问 · {scope}"
@@ -1426,14 +1431,14 @@ class HomePage(BasePage):
                                ("site_pageviews", "浏览量"),
                                ("site_online", "在线")):
                 self._stat_values[key].setToolTip(
-                    f"{head}\n{label}：{int(stats.get(key, 0)):,}\n点击在卡片内展开摘要")
+                    f"{head}\n{label}：{int(stats.get(key) or 0):,}\n点击在卡片内展开摘要")
         else:
             for key in SITE_STAT_KEYS:
                 self._stat_values[key].setText("—")
                 self._stat_values[key].setToolTip(
                     f"尚无站点访问统计（口径：{scope}）\n点击在卡片内展开摘要")
 
-        self.donut.set_items(_dist_items(by_source))
+        self.donut.set_items(_dist_items(by_source, data.get("source_labels")))
         self.trend.set_data(labels, counts)
         self._render_sections(data.get("sections") or [])
         week_total = int(data.get("week_total") or sum(counts))
@@ -1444,6 +1449,18 @@ class HomePage(BasePage):
         generated = str(data.get("generated_at") or "")
         if generated:
             self.date_label.setText(f"{generated} 刷新 · 本地数据")
+        incomplete = data.get("trend_state") == "error"
+        for key, state in (data.get("stat_states") or {}).items():
+            if state == "error":
+                incomplete = True
+                if key in self._stat_values:
+                    self._stat_values[key].setToolTip("读取数据失败，请刷新重试；其他数据仍可查看")
+        if any(metric.get("state") == "error"
+               for section in data.get("sections") or []
+               for metric in section.get("metrics") or []):
+            incomplete = True
+        if incomplete:
+            self.date_label.setText(self.date_label.text() + " · 部分数据读取失败，可刷新重试")
 
     # ==================== 主题 ====================
 

@@ -234,6 +234,17 @@ def _ensure_gate():
         raise MappingError(f"暂不允许写入：{reason}。请先在中间层完成「同步前刷新」。")
 
 
+def _read_cloud_state(client, file_id, sheet_id, log):
+    try:
+        fields = client.get_fields(file_id, sheet_id)
+        records = client.get_records(file_id, sheet_id, log)
+    except Exception:
+        # 读请求失败没有使前面已验证的写入变成未知；外层统一附上已完成回执。
+        # 原始响应可能含平台数据，不传给界面、日志或异常链。
+        raise MappingError("读取云端字段或记录失败，已停止；请检查网络后重新比对") from None
+    return fields, records
+
+
 @contextmanager
 def _selected_write_lock(receipt):
     from toolbox import sync_refresh
@@ -277,9 +288,8 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
         with _selected_write_lock(receipt):
             _ensure_gate()
             _check_cancelled(is_cancelled, receipt)
-            fields = client.get_fields(file_id, sheet_id)
+            fields, records = _read_cloud_state(client, file_id, sheet_id, log)
             current_fields = {str(item["fieldID"]): item for item in fields}
-            records = client.get_records(file_id, sheet_id, log)
             fresh = {item["row_no"]: item for item in compare(
                 headers, rows, mapping, current_fields, key_col, records)}
             for number in selected:
@@ -292,9 +302,9 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
                 if receipt["row_nos"]:
                     # 跨进程锁只约束本软件，云端其它编辑者仍可在两行之间改数据。
                     # 后续行写前再次读取，不能覆盖用户确认后才发生的变动。
-                    latest_fields = client.get_fields(file_id, sheet_id)
+                    latest_fields, latest_records = _read_cloud_state(
+                        client, file_id, sheet_id, log)
                     latest_by_id = {str(item["fieldID"]): item for item in latest_fields}
-                    latest_records = client.get_records(file_id, sheet_id, log)
                     latest = compare(headers, rows, mapping, latest_by_id, key_col, latest_records)
                     current = next((item for item in latest if item["row_no"] == number), {})
                     if _fingerprint(previews[number]) != _fingerprint(current):
@@ -305,6 +315,8 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
                 values = deepcopy(action["values"])
                 if not values:
                     raise MappingError(f"本地第 {number} 行没有可写字段，请重新比对")
+                # 云端读取可能阻塞；读取期间收到取消时不能继续提交下一行。
+                _check_cancelled(is_cancelled, receipt)
                 receipt["_attempted"] = True
                 try:
                     if action["op"] == "新增":

@@ -213,7 +213,8 @@ class TcDocMappingPanel(QWidget):
         mapping_layout.addLayout(buttons)
 
         dialog_layout.addWidget(mapping_box, 1)
-        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_box = QDialogButtonBox()
+        close_box.addButton("关闭", QDialogButtonBox.RejectRole)
         close_box.rejected.connect(self.mapping_dialog.hide)
         dialog_layout.addWidget(close_box)
         return panel
@@ -511,8 +512,9 @@ class TcDocMappingPanel(QWidget):
             local_pages = max(1, (len(self.local_rows) + self._page_size - 1) // self._page_size)
             self.local_prev_btn.setEnabled(self._local_page > 1)
             self.local_next_btn.setEnabled(self._local_page < local_pages)
+            self._render_diff()
 
-    def _run(self, fn, on_done, label: str, action: str) -> None:
+    def _run(self, fn, on_done, label: str, action: str, receipt_callback=None) -> None:
         if self._busy or self._closed:
             return
         self._cancel.clear()
@@ -535,8 +537,8 @@ class TcDocMappingPanel(QWidget):
             if err:
                 self.log(f"[错误] {err}")
                 receipt = getattr(err, "receipt", None)
-                if receipt:
-                    self._record_history(receipt, self.sheet_combo.currentData())
+                if receipt and receipt_callback:
+                    receipt_callback(receipt)
                 if action == "写入":
                     self._invalidate_preview("本次写入已停止，请重新对比云端后核对结果")
                 QMessageBox.warning(
@@ -780,11 +782,19 @@ class TcDocMappingPanel(QWidget):
             titles[title] = titles.get(title, 0) + 1
         self.mapping = {col: fid for col, fid in self.mapping.items()
                         if col in self.local_headers and fid in self.field_by_id}
-        headers = self._ordered(
-            self.local_headers, self._map_sorter,
-            lambda header, col: header if col == 0 else (
-                FIELD_TYPES.get(int(self.field_by_id.get(self.mapping.get(header), {}).get(
-                    "fieldType") or 0), "") if col == 2 else ""))
+        def mapping_value(header, col):
+            if col == 0:
+                return header
+            field = self.field_by_id.get(self.mapping.get(header), {})
+            if col == 2:
+                return FIELD_TYPES.get(int(field.get("fieldType") or 0), "")
+            for record in self.sample_records:
+                values = record.get("values") or {}
+                if field.get("fieldTitle") in values:
+                    return openapi.display_value(field, values[field["fieldTitle"]])
+            return ""
+
+        headers = self._ordered(self.local_headers, self._map_sorter, mapping_value)
         self.map_table.setRowCount(len(headers))
         self.map_combos: dict[str, QComboBox] = {}
         for row, header in enumerate(headers):
@@ -1193,6 +1203,12 @@ class TcDocMappingPanel(QWidget):
         rows = list(self.local_rows)
         preview_actions = list(self.actions)
         selected_row_nos = sorted(self._selected_rows)
+        history_doc = dict(self.doc or {})
+        history_sheet = dict(next((item for item in self.sheets
+                                   if item.get("sheetID") == sheet_id), {}))
+
+        def record_result(result):
+            self._record_history(result, sheet_id, doc=history_doc, sheet=history_sheet)
 
         def work():
             if self._revision != revision or self._credentials() != self._cred_snapshot:
@@ -1205,7 +1221,7 @@ class TcDocMappingPanel(QWidget):
         def done(result):
             self.log(f"写入完成：新增 {result.get('added', 0)}，"
                      f"更新 {result.get('updated', 0)}")
-            self._record_history(result, sheet_id)
+            record_result(result)
             toast = getattr(getattr(self.page, "app", None), "toast", None)
             if callable(toast):
                 toast(f"写入完成：新增 {result.get('added', 0)} 条，"
@@ -1214,18 +1230,22 @@ class TcDocMappingPanel(QWidget):
                     and self.sheet_combo.currentData() == sheet_id):
                 self.on_preview()
 
-        self._run(work, done, f"正在写入勾选 {len(writable)} 条并读回核对…", "写入")
+        self._run(work, done, f"正在写入勾选 {len(writable)} 条并读回核对…", "写入",
+                  receipt_callback=record_result)
 
-    def _record_history(self, result: dict, sheet_id: str) -> None:
+    def _record_history(self, result: dict, sheet_id: str, *, doc=None, sheet=None) -> None:
         try:
             from toolbox.tcdoc import push_history
         except Exception:  # noqa: BLE001 - 历史不可用不影响写入结果
             return
-        sheet = next((item for item in self.sheets
-                      if item.get("sheetID") == sheet_id), {})
+        if sheet is None:
+            sheet = next((item for item in self.sheets
+                          if item.get("sheetID") == sheet_id), {})
+        if doc is None:
+            doc = self.doc or {}
         push_history.record(
             tab_name=str(sheet.get("title") or ""), tab_id=str(sheet_id or ""),
-            doc_key=str((self.doc or {}).get("key") or ""), profile="mapping",
+            doc_key=str(doc.get("key") or ""), profile="mapping",
             source="映射回写", status="成功" if result.get("verified") else "需核对",
             added=int(result.get("added") or 0),
             note=f"更新 {int(result.get('updated') or 0)} 条；"

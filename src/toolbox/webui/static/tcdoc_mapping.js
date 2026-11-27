@@ -7,7 +7,7 @@
     var s = saved || (saved = { session: '', headers: [], total: 0, tab: 'official', fields: [],
       mapping: {}, key: '', preview: '', counts: null, selected: new Set(), page: 1,
       mode: 'all', order: { order: '', asc: true }, visible: [], job: '', action: '', result: '' });
-    var busy = !!s.job, serial = 0, rows = [], widths = [], controls = [];
+    var busy = !!s.job, serial = 0, rows = [], widths = [];
     var file = h('input', { type: 'file', accept: '.csv,.tsv,.xlsx,.json', class: 'input',
       'aria-label': '选择本地表格', style: 'max-width:340px' });
     var importBtn = h('button', { type: 'button', class: 'btn' }, '导入表格');
@@ -41,7 +41,6 @@
       h('div', { class: 'toolbar', style: 'margin-top:12px;flex-wrap:wrap;gap:8px' }, selected, clear,
         h('span', { style: 'flex:1' }), write));
     host.replaceChildren(card, tableCard, detailHost);
-    controls = [file, importBtn, target, connect, compare, clear, write, filters];
 
     function invalidate() {
       s.preview = ''; s.counts = null; s.selected.clear(); s.mode = 'all'; s.page = 1;
@@ -60,7 +59,7 @@
       tableHost.querySelectorAll('[data-row-select]').forEach(function (input) { input.disabled = busy; });
       counts.textContent = s.counts ? ['新增', '更新', '不变', '错误'].map(function (key) {
         return key + ' ' + s.counts[key] + ' 行';
-      }).join(' · ') : '导入后先查看本地表格，再连接云端识别差异';
+      }).join(' · ') : s.session ? '本地 ' + s.total + ' 行 · 请识别差异后勾选' : '';
     }
     function error(message) { note.className = 'error small'; note.textContent = message; }
     function message(text) { note.className = 'small'; note.textContent = text; s.result = text; }
@@ -167,11 +166,12 @@
       if (!rows.length) { tableHost.replaceChildren(helpers.empty(s.preview
         ? '当前筛选没有记录，可切换「全部本地行」查看。' : '当前表格没有可显示的行，请重新导入。')); return; }
       var cols = [{ key: 'row_no', title: '本地行', weight: 1 }, { key: 'op', title: '状态', weight: 1 }]
-        .concat(s.visible.map(function (name) { return { key: name, title: name, weight: 3 }; }))
+        .concat(s.visible.map(function (name) { return { key: 'local:' + name, local: name, title: name, weight: 3 }; }))
         .concat([{ key: 'message', title: '差异说明', weight: 4 }]);
       if (widths.length !== cols.length) widths = cols.map(function (col) { return col.weight; });
       var total = widths.reduce(function (a, b) { return a + b; }, 0), cg = h('colgroup', null, h('col', { style: 'width:36px' }));
-      cols.forEach(function (col, index) { cg.appendChild(h('col', { style: 'width:' + (widths[index] / total * 94) + '%' })); });
+      cols.forEach(function (col, index) { cg.appendChild(h('col', { style: 'width:calc('
+        + (widths[index] / total * 100) + '% - ' + (widths[index] / total * 90) + 'px)' })); });
       cg.appendChild(h('col', { style: 'width:54px' }));
       var head = h('tr', null, h('th', null, '')), body = h('tbody');
       cols.forEach(function (col) {
@@ -193,7 +193,7 @@
         });
         tr.appendChild(h('td', null, cb));
         cols.forEach(function (col) {
-          var value = col.key === 'row_no' || col.key === 'op' || col.key === 'message' ? row[col.key] : row.local[col.key];
+          var value = col.local ? row.local[col.local] : row[col.key];
           tr.appendChild(h('td', { class: 'ellipsis', title: value || '',
             style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, value || '-'));
         });
@@ -204,7 +204,7 @@
       function fit() {
         widths = cols.map(function (col) {
           return Math.min(35, Math.max(4, col.title.length, Math.max.apply(null, rows.map(function (row) {
-            return String(col.key in row ? row[col.key] : row.local[col.key] || '').length;
+            return String((col.local ? row.local[col.local] : row[col.key]) || '').length;
           }))));
         }); drawTable();
       }

@@ -218,6 +218,7 @@ def collect_all(payload: dict, on_progress=None, on_log=None,
             try:
                 from tracker.douyin_live import collect_and_save
                 live = collect_and_save(account, record.get("uid"))
+                live_error = str((live or {}).get("error") or "")[:120]
             except Exception as exc:  # noqa: BLE001 - 直播历史是补充项
                 live_error = str(exc)[:120]
         return record, live, live_error
@@ -235,11 +236,11 @@ def collect_all(payload: dict, on_progress=None, on_log=None,
             try:
                 record, live, live_error = future.result()
                 counts["ok"] += 1
-                if live:
+                if live and not live_error:
                     counts["live"] += 1
                 error = str((record or {}).get("error") or "")
                 logs.append(f"{name}：{error or '采集完成'}"
-                            + ("（含直播历史）" if live else ""))
+                            + ("（含直播历史）" if live and not live_error else ""))
                 if live_error:
                     logs.append(f"{name}：直播历史失败（{live_error}）")
             except Exception as exc:  # noqa: BLE001 - 单账号失败不影响其它

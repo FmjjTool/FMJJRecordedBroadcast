@@ -1121,6 +1121,7 @@ class TcDocPage(BasePage):
         self.sheet_hint = QLabel("点「同步表格」把文档里的表格内容抓到本地；"
                                 "图片字段会自动增量下载到 图片/。默认最新在前，"
                                 "取消勾选可恢复原顺序；本地检测记录见「最近变更」。")
+        self.sheet_hint.setWordWrap(True)
         self.sheet_hint.setStyleSheet("color: #888;")
         v.addWidget(self.sheet_hint)
 

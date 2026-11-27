@@ -105,6 +105,8 @@ class ShoppingHubPage(BasePage):
                           ("bili", self.bili_page),
                           ("xianyu", self.xianyu_page)):
             page.embed_input()
+            # 合并页统一提供四边留白，结果面板不再重复缩进。
+            page.layout().setContentsMargins(0, 0, 0, 0)
             self.stack.addWidget(page)
             self._panels[key] = page
             # 各子页在解析、详情和导出期间均禁用自己的解析按钮。

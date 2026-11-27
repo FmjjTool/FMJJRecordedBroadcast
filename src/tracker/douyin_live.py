@@ -10,6 +10,9 @@
   profile 采集器三级链路。解析出的 uid 记回账号配置 douyin_uid，下次免解析；
   profile 采集返回的 record.uid 优先级最高。
 - 回放：web 端拿不到官方回放（App 专属），本模块只存直播场次记录。
+
+缓存保持追加写入；读取时统一按开播时间降序，兼容既有缓存的混合顺序，
+不因展示排序改写缓存。空值或无法解析的开播时间排在最后。
 """
 import re
 import time
@@ -102,12 +105,23 @@ def fetch_live_history(uid: str, max_pages: int = 20) -> list:
     while page < max_pages:
         r = s.get(API, params={"aid": "6383", "app_name": "douyin_web",
                                "max_time": str(cursor), "anchor_id": uid}, timeout=20)
-        d = r.json()
+        r.raise_for_status()
+        try:
+            d = r.json()
+        except ValueError as exc:
+            raise RuntimeError("直播历史返回内容无法解析，请稍后重试") from exc
+        if not isinstance(d, dict):
+            raise RuntimeError("直播历史返回格式已变化，请稍后重试")
         if d.get("status_code") != 0:
             raise RuntimeError(f"audience_show status_code={d.get('status_code')} "
                                f"{((d.get('data') or {}).get('prompts') or '')[:60]}")
-        data = d.get("data") or {}
-        for h in data.get("history_data") or []:
+        data = d.get("data")
+        if (not isinstance(data, dict) or "history_data" not in data
+                or not isinstance(data["history_data"], (list, type(None)))):
+            raise RuntimeError("直播历史返回格式已变化，请稍后重试")
+        for h in data["history_data"] or []:
+            if not isinstance(h, dict):
+                raise RuntimeError("直播历史场次格式已变化，请稍后重试")
             st, et = int(h.get("start_time") or 0), int(h.get("end_time") or 0)
             rows.append({
                 "start": datetime.fromtimestamp(st).strftime("%Y-%m-%d %H:%M") if st else "",
@@ -152,7 +166,7 @@ def save_live_history(name: str, rows: list) -> int:
     else:
         ws = wb["直播历史"]
     new = 0
-    for r in rows:  # 接口返回最新在前，直接追加后整表仍是新→旧
+    for r in rows:  # 新场次追加到末尾；展示顺序由 load_live_history 统一处理
         rid = str(r.get("room_id") or "")
         # 折叠组等场次可能无 room_id，退化用「开播时间+标题」作合并键
         key = rid or f"{r.get('start', '')}|{r.get('title', '')}"
@@ -188,6 +202,16 @@ def load_live_history(name: str) -> list:
                     "dur": row[2] if row[2] not in (None, "") else "",
                     "title": row[3] or "", "room_id": str(row[4]),
                     "hide": row[5] or "否"})
+
+    def start_key(record):
+        try:
+            value = datetime.fromisoformat(str(record["start"]).strip())
+            return (value.year, value.month, value.day,
+                    value.hour, value.minute, value.second, value.microsecond)
+        except (ValueError, TypeError):
+            return (0,) * 7
+
+    out.sort(key=start_key, reverse=True)
     return out
 
 

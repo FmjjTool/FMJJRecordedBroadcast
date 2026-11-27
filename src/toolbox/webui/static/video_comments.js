@@ -22,7 +22,7 @@
     });
     var countInput = h('input', {
       class: 'input', id: 'comments-count', style: 'width:76px',
-      type: 'number', min: '1', max: '20', value: '3',
+      type: 'number', min: '1', max: '10', value: '3',
       'aria-label': '视频数'
     });
     var pagesInput = h('input', {
@@ -118,7 +118,7 @@
       }
       if (authorMode && (!countInput.checkValidity()
           || !pagesInput.checkValidity())) {
-        toast('视频数需为 1–20，页数需为 1–50', 'warning');
+        toast('视频数需为 1–10，页数需为 1–50', 'warning');
         (!countInput.checkValidity() ? countInput : pagesInput).focus();
         return;
       }

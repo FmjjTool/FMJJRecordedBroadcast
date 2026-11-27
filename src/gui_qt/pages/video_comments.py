@@ -129,6 +129,8 @@ class VideoCommentsPage(BasePage):
 
     def on_theme_changed(self):
         for btn, name, role in self._icons:
+            if btn is self.mode_btn and self.mode_btn.isChecked():
+                role = "primary"
             btn.setIcon(line_icon(name, self._icon_color(role), 16))
 
     def _build_fetch_card(self) -> QFrame:
@@ -333,6 +335,8 @@ class VideoCommentsPage(BasePage):
         is_author = bool(checked) and supported
         self.mode_btn.setChecked(is_author)
         self.mode_btn.setText("作者" if is_author else "视频")
+        self.mode_btn.setIcon(line_icon(
+            "swap", self._icon_color("primary" if is_author else "button"), 16))
         self.mode_btn.setToolTip(
             ("当前为作者模式，点击切换为视频模式" if is_author
              else "当前为视频模式，点击切换为作者模式") if supported
@@ -365,6 +369,8 @@ class VideoCommentsPage(BasePage):
     # ===================== 抓取 =====================
 
     def start_fetch(self):
+        if self._busy:
+            return
         be = self._be()
         raw = self.input_edit.text().strip()
         if not raw:

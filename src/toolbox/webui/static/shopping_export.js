@@ -19,9 +19,9 @@
     });
     var columns = [
       { key: 'title', label: '商品', width: 52 },
-      { key: '_price', label: '价格', width: 18 },
-      { key: '_sales', label: '销量', width: 16 },
-      { key: 'url', label: '链接', width: 14 }
+      { key: '_price', label: '价格', width: 18, minWidth: 78 },
+      { key: '_sales', label: '销量', width: 16, minWidth: 66 },
+      { key: 'url', label: '链接', width: 14, minWidth: 60 }
     ];
     var widths = columns.map(function (column) { return column.width; });
     var table = h('table', { class: 'db-table fg-table', 'aria-label': '购物解析结果' });
@@ -38,8 +38,13 @@
 
     function setWidths() {
       var total = widths.reduce(function (sum, value) { return sum + value; }, 0);
+      var available = tableHost.clientWidth || 400;
+      var sizes = widths.map(function (value, index) {
+        return Math.max(columns[index].minWidth || 0, Math.floor(available * value / total));
+      });
+      sizes[0] = available - sizes.slice(1).reduce(function (sum, value) { return sum + value; }, 0);
       Array.from(table.querySelectorAll('thead th')).forEach(function (header, index) {
-        header.style.width = (widths[index] / total * 100) + '%';
+        header.style.width = sizes[index] + 'px';
       });
     }
     function fit() {
@@ -165,6 +170,10 @@
     draw();
     tableHost.appendChild(rows.length ? h('div', { class: 'table-wrap' }, table)
       : h('div', { class: 'empty' }, '没有解析到商品，请检查链接后重试。'));
+    var resizeObserver = new ResizeObserver(function () {
+      if (element.isConnected) setWidths(); else resizeObserver.disconnect();
+    });
+    resizeObserver.observe(tableHost);
     sync();
     return { element: element, sync: sync, invalidate: invalidate };
   };
