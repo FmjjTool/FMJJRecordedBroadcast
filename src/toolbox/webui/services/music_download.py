@@ -35,6 +35,28 @@ class MusicDownloadService:
             raise ValueError("未知音乐平台")
         return self._submit("music_search", payload, self.search_exports.search)
 
+    def start_resolve(self, payload: dict) -> dict:
+        from toolbox import webui_music_resolve
+        from toolbox.webui.jobs import JobCancelled
+
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        body = webui_music_resolve.validate_payload(payload)
+
+        def run(task):
+            try:
+                outcome = self.search_exports.resolve(
+                    body, on_log=task.log,
+                    is_cancelled=lambda: bool(task.cancel_requested))
+                if task.cancel_requested:
+                    raise JobCancelled()
+                return outcome
+            except InterruptedError:
+                raise JobCancelled() from None
+
+        job = self.jobs.submit("music_resolve", run)
+        return {"job": job.id}
+
     def start_export(self, payload: dict) -> dict:
         from toolbox.webui.jobs import JobCancelled
 

@@ -707,4 +707,12 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-search-table td .badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .music-search-actions { justify-content: flex-end; margin-top: 8px; }
 .music-export-notice:not(:empty) { margin: 8px 0; overflow-wrap: anywhere; }
+.music-search-inputs > .btn { margin-left: auto; }
+.music-song-detail { display: grid; gap: 12px; margin-top: 12px; min-width: 0; }
+.music-song-summary { display: flex; gap: 12px; align-items: flex-start; }
+.music-song-cover { display: flex; align-items: center; justify-content: center; flex: 0 0 120px; width: 120px; height: 120px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); }
+.music-song-cover img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 6px; }
+.music-song-metadata { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.music-song-metadata > .row-title { white-space: normal; overflow-wrap: anywhere; }
+.music-song-lyrics { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--text); font-size: 12px; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }

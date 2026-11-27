@@ -10,24 +10,24 @@
     function sync() {
       if (resultId && expiresAt && Date.now() >= expiresAt) {
         resultId = '';
-        notice.textContent = '搜索结果已过期，请重新搜索后导出。';
+        notice.textContent = '结果已过期，请重新搜索或解析后导出。';
       }
       var count = options.getSelectedIds().length;
       button.textContent = '导出选中（' + count + '）';
       button.disabled = options.isBusy() || !resultId || !count;
-      button.title = resultId ? '导出勾选歌曲的 JSON、Excel 与 Markdown 信息包'
-        : (notice.textContent || '请先搜索并勾选歌曲');
+      button.title = resultId ? '导出所选歌曲的 JSON、Excel 与 Markdown 信息包'
+        : (notice.textContent || '请先搜索并选择歌曲，或解析单曲');
     }
     function failed(message) {
       resultId = '';
-      notice.textContent = '导出失败：' + message + '；请重新搜索后重试。';
+      notice.textContent = '导出失败：' + message + '；请重新搜索或解析后重试。';
       options.setBusy(false); sync();
     }
     button.addEventListener('click', function () {
       sync();
       if (button.disabled) return;
       var ids = options.getSelectedIds();
-      if (!window.confirm('导出勾选的 ' + ids.length + ' 首歌曲信息？\n\n'
+      if (!window.confirm('导出所选的 ' + ids.length + ' 首歌曲信息？\n\n'
           + '生成 JSON、Excel 与 Markdown 导出包供浏览器下载，不下载音频或封面。')) return;
       options.setBusy(true); sync();
       notice.textContent = '';
@@ -42,7 +42,7 @@
           onSettled: function (job) {
             options.setBusy(false);
             if (job.status === 'error') failed(job.error || '请检查所选歌曲后重试');
-            if (job.status === 'cancelled') notice.textContent = '已取消导出，勾选保留，可直接重试。';
+            if (job.status === 'cancelled') notice.textContent = '已取消导出，选择保留，可直接重试。';
             sync();
           },
           onPollError: function (_error, retry) { setTimeout(retry, 1000); }
@@ -56,7 +56,7 @@
       setResult: function (result) {
         resultId = result.export_available && result.export_result_id ? result.export_result_id : '';
         expiresAt = resultId ? Date.now() + (Number(result.expires_in) || 1800) * 1000 : 0;
-        notice.textContent = resultId ? '' : (result.export_message || '请重新搜索后导出。');
+        notice.textContent = resultId ? '' : (result.export_message || '请重新搜索或解析后导出。');
         sync();
       }
     };

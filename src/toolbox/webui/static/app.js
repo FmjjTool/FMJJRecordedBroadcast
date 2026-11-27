@@ -10992,6 +10992,9 @@ function renderLivestreamSummary(root) {
   }
 
   function buildMusicSearch() {
+    var modeSel = h('select', { class: 'select', 'aria-label': '音乐模式' },
+      h('option', { value: 'search' }, '关键词搜索'),
+      h('option', { value: 'single' }, '单曲解析'));
     var platformSel = h('select', { class: 'select', 'aria-label': '音乐平台' },
       h('option', { value: 'all' }, '五平台对比'),
       h('option', { value: 'netease' }, '网易云音乐'),
@@ -11039,6 +11042,9 @@ function renderLivestreamSummary(root) {
     var jobHost = h('div');
     var resultHost = h('div');
     var rows = [];
+    var detailResult = null;
+    var modeDrafts = { search: '', single: '' };
+    var previousMode = 'search';
     var busy = false;
     var searchOrder = { order: '', asc: true };
     var exportControl = window.createMusicExportControl({
@@ -11050,12 +11056,48 @@ function renderLivestreamSummary(root) {
           .map(function (item) { return item.row.export_id; });
       }
     });
+    var downloadSettings = h('div', { class: 'toolbar', style: 'margin-top:8px' },
+      qualitySel,
+      h('label', { class: 'muted small' }, fallbackBox, ' 失败 / 试听时自动换源'),
+      h('label', { class: 'muted small' }, coverBox, ' 下载封面'),
+      h('span', { style: 'flex:1' }), downloadBtn);
+
+    function isSingle() { return modeSel.value === 'single'; }
+    function queryLabel() { return isSingle() ? '解析' : '搜索'; }
+
+    function invalidateResult() {
+      rows = [];
+      detailResult = null;
+      exportControl.setResult({ export_message: '' });
+      renderRows();
+    }
+
+    modeSel.addEventListener('change', function () {
+      modeDrafts[previousMode] = keyword.value;
+      previousMode = modeSel.value;
+      keyword.value = modeDrafts[previousMode];
+      platformSel.options[0].disabled = isSingle();
+      if (isSingle() && platformSel.value === 'all') platformSel.value = 'netease';
+      limitSel.hidden = isSingle();
+      keyword.placeholder = isSingle() ? '所选平台的完整歌曲链接或歌曲 ID' : '歌曲名 / 歌手 / 专辑关键词';
+      keyword.setAttribute('aria-label', isSingle() ? '歌曲链接或 ID' : '歌曲关键词');
+      searchBtn.textContent = queryLabel();
+      refreshQualities();
+      jobHost.replaceChildren();
+      invalidateResult();
+    });
+    platformSel.addEventListener('change', function () {
+      if (isSingle()) { jobHost.replaceChildren(); invalidateResult(); }
+    });
+    keyword.addEventListener('input', function () {
+      if (isSingle() && detailResult) { jobHost.replaceChildren(); invalidateResult(); }
+    });
 
     function syncSelection() {
       var count = rows.filter(function (row) { return row.checked; }).length;
-      downloadBtn.textContent = '下载选中（' + count + '）';
+      downloadBtn.textContent = isSingle() ? '下载歌曲' : '下载选中（' + count + '）';
       downloadBtn.disabled = busy || !count;
-      [searchBtn, platformSel, keyword, limitSel, qualitySel, fallbackBox, coverBox].forEach(function (control) {
+      [searchBtn, modeSel, platformSel, keyword, limitSel, qualitySel, fallbackBox, coverBox].forEach(function (control) {
         control.disabled = busy;
       });
       resultHost.querySelectorAll('input,button').forEach(function (control) { control.disabled = busy; });
@@ -11063,8 +11105,19 @@ function renderLivestreamSummary(root) {
     }
 
     function renderRows() {
+      downloadBtn.hidden = isSingle() && !rows.length;
+      if (!isSingle()) downloadSettings.appendChild(downloadBtn);
       if (!rows.length) {
-        resultHost.replaceChildren(empty('输入关键词后点「搜索」，勾选结果即可下载或导出信息。'));
+        resultHost.replaceChildren(empty(isSingle()
+          ? '选择平台并输入完整歌曲链接或 ID，点「解析」查看歌曲信息。'
+          : '输入关键词后点「搜索」，勾选结果即可下载或导出信息。'));
+        syncSelection();
+        return;
+      }
+      if (isSingle()) {
+        resultHost.replaceChildren(window.renderMusicSongDetail(h, detailResult),
+          h('div', { class: 'toolbar music-search-actions' }, exportControl.button, downloadBtn),
+          exportControl.notice);
         syncSelection();
         return;
       }
@@ -11123,27 +11176,32 @@ function renderLivestreamSummary(root) {
     searchBtn.addEventListener('click', function () {
       if (busy) return;
       if (!keyword.value.trim()) {
-        toast('请输入歌曲关键词', 'warning');
+        toast(isSingle() ? '请输入歌曲链接或 ID' : '请输入歌曲关键词', 'warning');
+        keyword.focus();
         return;
       }
+      var single = isSingle();
+      var label = queryLabel();
+      invalidateResult();
       busy = true;
       syncSelection();
-      searchBtn.disabled = true;
-      searchBtn.textContent = '搜索中…';
-      post('/api/tools/music/search', {
+      searchBtn.textContent = label + '中…';
+      post(single ? '/api/tools/music/resolve' : '/api/tools/music/search', single ? {
+        platform: platformSel.value, reference: keyword.value
+      } : {
         platform: platformSel.value, keyword: keyword.value,
         limit: limitSel.value
       }).then(function (result) {
         watchJob(jobHost, result.job, function (job) {
           busy = false;
-          searchBtn.disabled = false;
-          searchBtn.textContent = '搜索';
+          searchBtn.textContent = label;
           var outcome = job.result || {};
-          toast(outcome.summary || '搜索完成',
+          toast(outcome.summary || label + '完成',
             outcome.failures && outcome.failures.length ? 'warning' : 'success');
           rows = (outcome.items || []).map(function (row) {
-            return Object.assign({}, row, { row: row, checked: false });
+            return Object.assign({}, row, { row: row, checked: single });
           });
+          detailResult = single ? outcome : null;
           searchOrder = { order: '', asc: true };
           exportControl.setResult(outcome);
           renderRows();
@@ -11151,10 +11209,9 @@ function renderLivestreamSummary(root) {
           cancelable: true,
           onSettled: function (job) {
             busy = false;
-            searchBtn.disabled = false;
-            searchBtn.textContent = '搜索';
+            searchBtn.textContent = label;
             if (job.status === 'error') {
-              toast('搜索失败：' + (job.error || '未知错误'), 'error');
+              toast(label + '失败：' + (job.error || '请检查输入后重试'), 'error');
             }
             syncSelection();
           },
@@ -11163,10 +11220,9 @@ function renderLivestreamSummary(root) {
         });
       }).catch(function (error) {
         busy = false;
-        searchBtn.disabled = false;
-        searchBtn.textContent = '搜索';
+        searchBtn.textContent = label;
         syncSelection();
-        toast('搜索失败：' + error.message, 'error');
+        toast(label + '失败：' + error.message, 'error');
       });
     });
 
@@ -11241,14 +11297,9 @@ function renderLivestreamSummary(root) {
     renderRows();
     return h('div', { class: 'card music-search-card', style: 'margin-bottom:12px' },
       h('div', { class: 'row-title' }, '搜索并下载'),
-      h('div', { class: 'toolbar', style: 'margin-top:8px' },
-        platformSel, keyword, limitSel, searchBtn),
-      h('div', { class: 'toolbar', style: 'margin-top:8px' },
-        qualitySel,
-        h('label', { class: 'muted small' },
-          fallbackBox, ' 失败 / 试听时自动换源'),
-        h('label', { class: 'muted small' }, coverBox, ' 下载封面'),
-        h('span', { style: 'flex:1' }), downloadBtn),
+      h('div', { class: 'toolbar music-search-inputs', style: 'margin-top:8px' },
+        modeSel, platformSel, keyword, limitSel, searchBtn),
+      downloadSettings,
       resultHost, jobHost);
   }
 

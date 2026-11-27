@@ -189,6 +189,19 @@ class MusicSearchExports:
         captured = []
         outcome = webui_music.search(payload, on_log=on_log, is_cancelled=is_cancelled,
                                      on_songs=captured.extend)
+        return self._remember(outcome, captured)
+
+    def resolve(self, payload, on_log=None, is_cancelled=None):
+        from toolbox import webui_music_resolve
+
+        captured = []
+        outcome = webui_music_resolve.resolve(
+            payload, on_log=on_log, is_cancelled=is_cancelled, on_songs=captured.extend)
+        if is_cancelled and is_cancelled():
+            raise InterruptedError("已取消单曲解析")
+        return self._remember(outcome, captured)
+
+    def _remember(self, outcome, captured):
         outcome.update(export_result_id="", export_available=False, expires_in=TTL_SECONDS,
                        export_message="没有可导出的歌曲结果")
         if not captured:
