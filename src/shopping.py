@@ -1371,10 +1371,11 @@ def save_latest_products(products, shop_name: str = "", base_dir=None) -> str:
 
 
 def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
-                         threads: int = 6) -> TaobaoItemDetail:
+                         threads: int = 6, *, downloader=None) -> TaobaoItemDetail:
     """下载主图 / SKU 图 / 图文详情长图（图内并发下载）。
 
     目录：base_dir/{商品标题}_{商品ID}_{获取时间 YYYYMMDD_HHMMSS}/{main,sku,desc}/
+    downloader 可注入同签名的受限下载器；默认沿用桌面下载行为。
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder_name = f"{_safe_folder_name(detail.title)}_{detail.item_id}_{ts}"
@@ -1382,16 +1383,17 @@ def download_item_images(detail: TaobaoItemDetail, base_dir, log=None,
     base.mkdir(parents=True, exist_ok=True)
     if log:
         log(f"下载图片到 {base} ...")
-    detail.local_main = _download_images(detail.main_images, base / "main",
+    download = _download_images if downloader is None else downloader
+    detail.local_main = download(detail.main_images, base / "main",
                                          "主图", log=log, threads=threads)
     sku_urls = []
     for grp in detail.sku_props:
         for v in grp.get("values") or []:
             if v.get("image"):
                 sku_urls.append(v["image"])
-    detail.local_sku = _download_images(sku_urls, base / "sku", "规格",
+    detail.local_sku = download(sku_urls, base / "sku", "规格",
                                         log=log, threads=threads)
-    detail.local_desc = _download_images(detail.desc_images, base / "desc",
+    detail.local_desc = download(detail.desc_images, base / "desc",
                                          "详情", log=log, threads=threads)
     # 图片全失败也保留商品目录：Excel 固定落在同一目录，不再散到分类根
     detail.image_dir = str(base)

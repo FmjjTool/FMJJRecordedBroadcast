@@ -10232,6 +10232,7 @@ function renderLivestreamSummary(root) {
           resultView = window.createShoppingResultsView({
             h: h, outcome: outcome, cycleSort: cycleSort, sortRows: sortRows,
             post: post, watchJob: watchJob, toast: toast, jobHost: jobHost,
+            onExported: function () { if (resultHost.isConnected) reload(); },
             isBusy: function () { return running; },
             setBusy: function (busy) { running = busy; exporting = busy; sync(); }
           });

@@ -549,6 +549,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return shopping.start_parse(dict(req.json or {}))
     server.post("/api/tools/shopping/parse", start_shopping_parse)
     server.post("/api/tools/shopping/export", lambda req: shopping.start_export(req.json))
+    server.post("/api/tools/shopping/taobao/export",
+                lambda req: shopping.start_taobao_export(req.json))
 
     def search_xianyu_shopping(req):
         """JSON page 默认为 1，由购物用例校验平台允许的页码范围。"""

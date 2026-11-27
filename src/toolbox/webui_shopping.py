@@ -38,7 +38,8 @@ def _cookie(platform: str) -> str:
         return ""
 
 
-def parse(payload: dict, on_log=None, is_cancelled=None, on_models=None) -> dict:
+def parse(payload: dict, on_log=None, is_cancelled=None, on_models=None,
+          on_taobao_models=None) -> dict:
     """解析购物链接 / 分享文案，返回商品行并写入桌面同款产物目录。"""
     payload = prepare_payload(payload)
     plan = plan_shopping_parse(payload["text"], payload["platforms"])
@@ -51,7 +52,7 @@ def parse(payload: dict, on_log=None, is_cancelled=None, on_models=None) -> dict
             on_log(str(message))
 
     if platform == "taobao":
-        result = _parse_taobao(text, say, is_cancelled)
+        result = _parse_taobao(text, say, is_cancelled, on_models=on_taobao_models)
     elif platform == "douyin":
         result = _parse_douyin(text, say, is_cancelled, on_models=on_models)
     elif platform == "xianyu":
@@ -125,7 +126,7 @@ def _rows_from_products(products) -> list[dict]:
     return rows
 
 
-def _parse_taobao(text: str, say, is_cancelled) -> dict:
+def _parse_taobao(text: str, say, is_cancelled, on_models=None) -> dict:
     import shopping as shopping_mod
 
     cookie = _cookie("taobao")
@@ -135,23 +136,25 @@ def _parse_taobao(text: str, say, is_cancelled) -> dict:
     if kind == "taobao_item":
         say("解析淘宝商品详情…")
         try:
-            detail = shopping_mod.parse_taobao_item_url(text, cookie, log=say)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"解析失败：{exc}") from exc
+            detail = shopping_mod.parse_taobao_item_url(text, cookie, log=None)
+        except Exception:  # noqa: BLE001 - 不公开平台原始错误与认证信息
+            raise ValueError("淘宝商品解析失败，请检查登录状态与链接后重试") from None
         if is_cancelled and is_cancelled():
             raise ValueError("任务已取消（未保存图片）")
         from toolbox.config_manager import get_export_dir
         base = Path(get_export_dir()) / "淘宝商品"
         images = {"main": 0, "sku": 0, "desc": 0}
+        exported = False
         try:
-            shopping_mod.download_item_images(detail, base, log=say)
+            shopping_mod.download_item_images(detail, base, log=None)
             images = {"main": len(getattr(detail, "local_main", []) or []),
                       "sku": len(getattr(detail, "local_sku", []) or []),
                       "desc": len(getattr(detail, "local_desc", []) or [])}
             shopping_mod.export_item_xlsx(
                 detail, shopping_mod.default_item_xlsx_path(detail, base))
-        except Exception as exc:  # noqa: BLE001 - 图片 / Excel 失败不影响详情
-            say(f"图片或 Excel 导出失败：{exc}")
+            exported = True
+        except Exception:  # noqa: BLE001 - 图片 / Excel 失败不影响详情
+            say("商品已解析，但图片或 Excel 保存失败，请稍后重试")
         return {
             "platform": "taobao",
             "kind": "item",
@@ -171,22 +174,25 @@ def _parse_taobao(text: str, say, is_cancelled) -> dict:
             "has_cookie": bool(cookie),
             "summary": (f"商品已解析：{getattr(detail, 'title', '')[:40]}"
                         f"（主图 {images['main']} / 规格 {images['sku']} / "
-                        f"详情 {images['desc']}，Excel 已导出）"),
+                        f"详情 {images['desc']}，"
+                        + ("Excel 已导出）" if exported else "Excel 未导出）")),
             "note": "图片与 Excel 写入「淘宝商品」导出目录。",
         }
     say("解析淘宝店铺与商品列表…")
     try:
         shop, products = shopping_mod.parse_shopping_url(
-            text, cookie=cookie, log=say)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"解析失败：{exc}") from exc
+            text, cookie=cookie, log=None)
+    except Exception:  # noqa: BLE001 - 不公开平台原始错误与认证信息
+        raise ValueError("淘宝店铺解析失败，请检查登录状态与链接后重试") from None
     if is_cancelled and is_cancelled():
         raise ValueError("任务已取消（未保存缓存）")
     try:
         shopping_mod.save_latest_products(products,
                                           getattr(shop, "shop_name", ""))
-    except Exception as exc:  # noqa: BLE001
-        say(f"缓存保存失败：{exc}")
+    except Exception:  # noqa: BLE001
+        say("商品列表缓存保存失败，本次解析结果仍可查看")
+    if on_models is not None:
+        on_models(shop, products)
     rows = _rows_from_products(products)
     name = getattr(shop, "shop_name", "") or "淘宝店铺"
     return {
@@ -201,7 +207,7 @@ def _parse_taobao(text: str, say, is_cancelled) -> dict:
                     else f"{name}：已拿到店铺信息，"
                          + ("但未取到商品（可能风控或无在售）" if cookie
                             else "未登录，商品列表需要登录后获取")),
-        "note": "商品列表写入「淘宝商品」缓存；图片与 Excel 在桌面端按商品导出。",
+        "note": "商品列表写入「淘宝商品」缓存；勾选商品可抓取详情与图片并逐件导出 Excel。",
     }
 
 

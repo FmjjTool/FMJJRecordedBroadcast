@@ -4,10 +4,17 @@
   window.createShoppingResultsView = function (options) {
     var h = options.h;
     var outcome = options.outcome;
-    var resultId = outcome.export_available ? outcome.export_result_id || '' : '';
-    var expiresAt = resultId ? Date.now() + (Number(outcome.expires_in) || 1800) * 1000 : 0;
+    var taobao = outcome.platform === 'taobao' && outcome.kind === 'shop';
+    var resultId = taobao ? (outcome.taobao_available ? outcome.taobao_result_id || '' : '')
+      : (outcome.export_available ? outcome.export_result_id || '' : '');
+    var expiresAt = resultId ? Date.now() + (Number(taobao ? outcome.taobao_expires_in : outcome.expires_in) || 1800) * 1000 : 0;
     var exporting = false;
     var order = { order: '', asc: true };
+    var selected = new Set();
+    var boxes = [];
+    var page = 1;
+    var pageSize = 200;
+    var selectionLimit = 30;
     function numberKey(value) {
       var match = String(value || '').replace(/,/g, '').match(/^(?:[¥￥]\s*)?(\d+(?:\.\d+)?)\s*([万亿kw]?)/i);
       if (!match) return null;
@@ -15,7 +22,8 @@
       return Number(match[1]) * (scale[(match[2] || '').toLowerCase()] || 1);
     }
     var rows = (outcome.items || []).map(function (item) {
-      return Object.assign({}, item, { _price: numberKey(item.price), _sales: numberKey(item.sales) });
+      return Object.assign({}, item, { item_id: String(item.item_id || ''),
+        _price: numberKey(item.price), _sales: numberKey(item.sales), _status: '未开始', _statusNote: '' });
     });
     var columns = [
       { key: 'title', label: '商品', width: 52 },
@@ -23,28 +31,48 @@
       { key: '_sales', label: '销量', width: 16, minWidth: 66 },
       { key: 'url', label: '链接', width: 14, minWidth: 60 }
     ];
+    if (taobao) {
+      columns[0].width = 42;
+      columns[1].minWidth = 60; columns[2].minWidth = 54; columns[3].minWidth = 50;
+      columns.push({ key: '_status', label: '详情导出', width: 20, minWidth: 78 });
+    }
     var widths = columns.map(function (column) { return column.width; });
     var table = h('table', { class: 'db-table fg-table', 'aria-label': '购物解析结果' });
     var tableHost = h('div');
     var notice = h('div', { class: 'small', role: 'status', style: 'margin-top:6px' });
-    var exportBtn = h('button', { class: 'btn', type: 'button', id: 'shopping-export-xlsx' }, '导出 Excel');
-    var supported = outcome.platform === 'douyin' || outcome.platform === 'bili';
+    var exportLabel = taobao ? '抓取详情并导出' : '导出 Excel';
+    var exportBtn = h('button', { class: 'btn', type: 'button',
+      id: taobao ? 'shopping-taobao-export' : 'shopping-export-xlsx' }, exportLabel);
+    var supported = taobao || outcome.platform === 'douyin' || outcome.platform === 'bili';
+    var selectionCount = h('span', { class: 'muted small', role: 'status', 'aria-live': 'polite' });
+    var allBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
+      if (allBtn.disabled) return;
+      rows.forEach(function (item) { if (item.item_id) selected.add(item.item_id); });
+      draw(); sync();
+    } }, '全选');
+    var clearBtn = h('button', { class: 'btn mini', type: 'button', onclick: function () {
+      if (clearBtn.disabled) return;
+      selected.clear(); draw(); sync();
+    } }, '清除');
+    var selectionBar = taobao ? h('div', { class: 'toolbar', style: 'margin-bottom:8px' },
+      allBtn, clearBtn, selectionCount) : null;
+    var pagination = h('div', { class: 'toolbar', style: 'justify-content:flex-end;margin-top:8px' });
     var footer = h('div', { class: 'toolbar', style: 'margin-top:8px' },
       h('span', { class: 'muted small' }, '本次结果 ' + rows.length + ' 件'),
       h('span', { style: 'flex:1' }));
     var element = h('div', null,
       h('div', { class: 'muted small', style: 'margin-bottom:6px' }, outcome.selection_note || ''),
-      tableHost, footer, notice);
+      selectionBar, tableHost, taobao ? pagination : null, footer, notice);
 
     function setWidths() {
       var total = widths.reduce(function (sum, value) { return sum + value; }, 0);
-      var available = tableHost.clientWidth || 400;
+      var available = Math.max(280, (tableHost.clientWidth || 400) - (taobao ? 36 : 0));
       var sizes = widths.map(function (value, index) {
         return Math.max(columns[index].minWidth || 0, Math.floor(available * value / total));
       });
       sizes[0] = available - sizes.slice(1).reduce(function (sum, value) { return sum + value; }, 0);
       Array.from(table.querySelectorAll('thead th')).forEach(function (header, index) {
-        header.style.width = sizes[index] + 'px';
+        header.style.width = (taobao && index === 0 ? 36 : sizes[index - (taobao ? 1 : 0)]) + 'px';
       });
     }
     function fit() {
@@ -55,7 +83,8 @@
         var longest = context.measureText(column.label).width;
         rows.forEach(function (item) {
           var value = column.key === '_price' ? item.price
-            : (column.key === '_sales' ? item.sales : (column.key === 'url' ? '打开' : item.title));
+            : (column.key === '_sales' ? item.sales : (column.key === 'url' ? '打开'
+              : (column.key === '_status' ? item._status : item.title)));
           longest = Math.max(longest, context.measureText(String(value || '')).width);
         });
         return Math.max(52, Math.min(360, longest + 24));
@@ -71,9 +100,11 @@
     }
     function draw() {
       var head = h('tr');
+      boxes = [];
+      if (taobao) head.appendChild(h('th', { 'aria-label': '选择商品', style: 'width:36px;padding:8px' }));
       columns.forEach(function (column) {
         var active = order.order === column.key;
-        function change() { options.cycleSort(order, column.key); draw(); sync(); }
+        function change() { options.cycleSort(order, column.key); page = 1; draw(); sync(); }
         var header = h('th', { class: 'sortable', tabindex: '0',
           'aria-sort': active ? (order.asc ? 'ascending' : 'descending') : 'none',
           onclick: change }, column.label + (active ? (order.asc ? ' ↑' : ' ↓') : ''));
@@ -83,25 +114,81 @@
         head.appendChild(header);
       });
       var body = h('tbody');
-      options.sortRows(rows, columns, order).forEach(function (item) {
+      var visible = options.sortRows(rows, columns, order);
+      if (taobao) visible = visible.slice((page - 1) * pageSize, page * pageSize);
+      visible.forEach(function (item) {
         var link = safeLink(item.url);
-        body.appendChild(h('tr', null,
+        var tr = h('tr', { class: taobao && selected.has(item.item_id) ? 'selected' : '' });
+        if (taobao) {
+          var box = h('input', { type: 'checkbox', checked: selected.has(item.item_id),
+            'aria-label': '选择商品 ' + item.item_id, onchange: function () {
+              if (options.isBusy() || !resultId) { box.checked = selected.has(item.item_id); return; }
+              if (box.checked && selected.size >= selectionLimit) {
+                box.checked = false;
+                notice.textContent = '每批最多选择 30 件商品，请减少勾选后重试。';
+                return;
+              }
+              if (box.checked) selected.add(item.item_id); else selected.delete(item.item_id);
+              tr.classList.toggle('selected', box.checked); sync();
+            } });
+          boxes.push({ box: box, id: item.item_id });
+          tr.appendChild(h('td', { style: 'padding:8px' }, box));
+        }
+        tr.append(
           h('td', { title: item.title || '' }, item.title || '-'),
           h('td', { title: item.price || '' }, item.price || '-'),
           h('td', { class: 'num', title: item.sales || '' }, item.sales || '-'),
           h('td', null, link ? h('a', { href: link, target: '_blank',
-            rel: 'noopener noreferrer', 'aria-label': '打开商品 ' + (item.title || '') }, '打开') : '-')));
+            rel: 'noopener noreferrer', 'aria-label': '打开商品 ' + (item.title || '') }, '打开') : '-'));
+        if (taobao) tr.appendChild(h('td', { title: item._statusNote || item._status }, item._status));
+        body.appendChild(tr);
       });
       table.replaceChildren(h('thead', null, head), body);
+      if (taobao) drawPagination();
       setWidths();
+    }
+    function drawPagination() {
+      pagination.replaceChildren();
+      if (rows.length <= pageSize) return;
+      var pages = Math.ceil(rows.length / pageSize);
+      pagination.appendChild(h('span', { class: 'muted small' },
+        '第 ' + page + ' / ' + pages + ' 页 · 共 ' + rows.length + ' 条'));
+      [['首页', 1], ['上一页', page - 1], ['下一页', page + 1], ['末页', pages]].forEach(function (entry) {
+        var disabled = options.isBusy() || entry[1] < 1 || entry[1] > pages || entry[1] === page;
+        pagination.appendChild(h('button', { class: 'btn mini', type: 'button', disabled: disabled,
+          onclick: function () { if (disabled) return; page = entry[1]; draw(); sync(); } }, entry[0]));
+      });
+    }
+    function showBatchResult(result) {
+      var statusLabels = { completed: '已完成', failed: '失败', skipped: '已跳过' };
+      var updates = new Map((result.rows || []).map(function (item) { return [String(item.item_id), item]; }));
+      rows.forEach(function (item) {
+        var update = updates.get(item.item_id);
+        if (!update) return;
+        item._status = statusLabels[update.status] || '未开始';
+        item._statusNote = update.message || item._status;
+      });
+      draw();
     }
     function sync() {
       if (resultId && expiresAt && Date.now() >= expiresAt) {
         resultId = '';
         notice.textContent = '解析结果已过期，请重新解析后导出。';
       }
-      exportBtn.disabled = options.isBusy() || !resultId || !rows.length;
-      exportBtn.textContent = exporting ? '导出中…' : '导出 Excel';
+      var busy = options.isBusy();
+      exportBtn.disabled = busy || !resultId || !rows.length || (taobao && !selected.size);
+      exportBtn.textContent = exporting ? (taobao ? '抓取并导出中…' : '导出中…') : exportLabel;
+      if (taobao) {
+        allBtn.disabled = busy || !resultId || !rows.length || rows.length > selectionLimit;
+        allBtn.title = rows.length > selectionLimit ? '每批最多选择 30 件，请逐件勾选' : '选择本次全部商品';
+        clearBtn.disabled = busy || !selected.size;
+        selectionCount.textContent = '已选 ' + selected.size + ' / 30 件 · 共 ' + rows.length + ' 件';
+        boxes.forEach(function (entry) {
+          entry.box.checked = selected.has(entry.id);
+          entry.box.disabled = busy || !resultId || !entry.id;
+        });
+        drawPagination();
+      }
     }
     function invalidate(message) {
       if (!supported) return;
@@ -113,8 +200,10 @@
     footer.appendChild(h('button', { class: 'btn mini', type: 'button', onclick: reset }, '重置'));
     if (supported) {
       footer.appendChild(exportBtn);
-      notice.textContent = resultId ? '导出本次全部结果，完成后点击「下载结果」保存 Excel。'
-        : (outcome.export_message || '本次结果暂不能导出，请重新解析后重试。');
+      notice.textContent = taobao ? (outcome.taobao_message || '本次商品列表暂不能导出，请重新解析后重试。')
+        : (resultId ? '导出本次全部结果，完成后点击「下载结果」保存 Excel。'
+          : (outcome.export_message || '本次结果暂不能导出，请重新解析后重试。'));
+      if (taobao && resultId) notice.textContent += ' 每批最多 30 件；完成后点击「下载结果」保存 ZIP。';
     } else {
       notice.textContent = outcome.note || '';
     }
@@ -140,23 +229,31 @@
     exportBtn.addEventListener('click', function () {
       sync();
       if (exportBtn.disabled) return;
-      if (!window.confirm('导出本次解析的 ' + rows.length + ' 件商品为 Excel？\n\n使用本次完整解析结果，不重新抓取商品。')) return;
+      var confirmText = taobao
+        ? '抓取所选 ' + selected.size + ' 件淘宝商品的详情与图片，并逐件导出 Excel？\n\n结果保存到「淘宝商品」导出目录，浏览器可下载 ZIP。取消将在当前详情请求结束后停止后续商品，已完成文件保留。'
+        : '导出本次解析的 ' + rows.length + ' 件商品为 Excel？\n\n使用本次完整解析结果，不重新抓取商品。';
+      if (!window.confirm(confirmText)) return;
       exporting = true;
       options.setBusy(true);
-      notice.textContent = '正在生成 Excel…';
+      notice.textContent = taobao ? '正在提交商品详情任务…' : '正在生成 Excel…';
       sync();
-      options.post('/api/tools/shopping/export', { result_id: resultId }).then(function (response) {
+      var payload = { result_id: resultId };
+      if (taobao) payload.item_ids = Array.from(selected);
+      options.post(taobao ? '/api/tools/shopping/taobao/export' : '/api/tools/shopping/export', payload).then(function (response) {
         options.watchJob(options.jobHost, response.job, function (job) {
-          notice.textContent = (job.result || {}).summary || 'Excel 已生成，点击「下载结果」保存。';
+          var result = job.result || {};
+          notice.textContent = result.message || result.summary || 'Excel 已生成，点击「下载结果」保存。';
+          if (taobao) { showBatchResult(result); if (options.onExported) options.onExported(); }
         }, {
           cancelable: true, indeterminate: true, clearPollErrorOnSuccess: true,
           onSettled: function (job) {
             exporting = false; options.setBusy(false);
+            if (taobao && job.result) showBatchResult(job.result);
             if (job.status === 'error') {
               notice.textContent = '导出失败：' + (job.error || '请重试');
-              options.toast(notice.textContent, 'error');
             }
-            if (job.status === 'cancelled') notice.textContent = '已取消导出，可使用本次解析结果重试。';
+            if (job.status === 'cancelled') notice.textContent = (job.result || {}).message
+              || '已取消导出，可使用本次解析结果重试。';
             sync();
           },
           onPollError: function (_error, retry) { setTimeout(retry, 1000); }
@@ -164,7 +261,7 @@
       }).catch(function (error) {
         exporting = false; options.setBusy(false);
         notice.textContent = '导出失败：' + error.message;
-        options.toast(notice.textContent, 'error'); sync();
+        sync();
       });
     });
     draw();

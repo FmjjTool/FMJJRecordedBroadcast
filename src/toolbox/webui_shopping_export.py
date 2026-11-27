@@ -220,7 +220,7 @@ class ShoppingExports:
             raise ShoppingExportError("导出参数无效，请重新解析商品后导出")
         return {"result_id": payload["result_id"]}
 
-    def parse(self, payload, on_log=None, is_cancelled=None):
+    def parse(self, payload, on_log=None, is_cancelled=None, on_taobao_models=None):
         from toolbox import webui_shopping
 
         _cancel(is_cancelled)
@@ -239,7 +239,7 @@ class ShoppingExports:
                 message = "本次商品信息暂不能导出，请重新解析后重试"
 
         result = webui_shopping.parse(payload, on_log=on_log, is_cancelled=is_cancelled,
-                                      on_models=capture)
+                                      on_models=capture, on_taobao_models=on_taobao_models)
         _cancel(is_cancelled)
         result.update(export_available=False, export_result_id="",
                       export_message=message, expires_in=TTL_SECONDS)
