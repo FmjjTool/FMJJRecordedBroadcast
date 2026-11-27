@@ -8186,9 +8186,9 @@ function renderLivestreamSummary(root) {
       var windowTransitionsHost = h('div');
       host.appendChild(windowTransitionsHost);
       renderDesktopOnly(windowTransitionsHost, '窗口过渡',
-        '桌面端默认启用启动、关闭淡入淡出与最大化、还原平滑过渡；'
-        + '可在桌面端「全局设置 → 窗口过渡」关闭，切换立即保存并生效。'
-        + '此效果依赖本机原生窗口与桌面进程内状态，浏览器端仅提供说明。');
+        '桌面端默认使用 Windows 原生窗口动画，打开、关闭、最大化、最小化和还原交给系统管理，效果遵循系统动画设置。'
+        + '可在桌面端「全局设置 → 窗口过渡」关闭，切换立即保存并生效，仅影响本窗口。'
+        + '此设置只作用于桌面主窗口，浏览器端仅提供说明。');
 
       var deps = h('details', { class: 'card', style: 'margin-top:12px' });
       deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));

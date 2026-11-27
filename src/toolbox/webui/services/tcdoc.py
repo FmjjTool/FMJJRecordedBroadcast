@@ -140,6 +140,14 @@ class TCDocService:
         from toolbox import webui_tcdoc_versions
         return webui_tcdoc_versions.image(doc_key, version_id, asset_id)
 
+    def version_table_page(self, doc_key: str, version_id: str, tab_id: str,
+                           page: int, sort_column: str, direction: str) -> dict:
+        from toolbox import webui_tcdoc_versions
+        if direction not in ("", "asc", "desc"):
+            raise ValueError("排序方向无效，请重新选择")
+        return webui_tcdoc_versions.table_page(doc_key, version_id, tab_id, page,
+                                               sort_column, direction == "desc")
+
     def body_image(self, doc_key: str, page_id: str,
                    image_key: str) -> tuple[bytes, str]:
         return _body_module().read_image(doc_key, page_id, image_key)

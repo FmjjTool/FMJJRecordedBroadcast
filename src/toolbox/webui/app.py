@@ -795,6 +795,9 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tcdoc/versions", lambda req: tcdoc.versions(req.q("doc_key")))
     server.get("/api/tcdoc/versions/open", lambda req: tcdoc.open_version(
         req.q("doc_key"), req.q("version_id")))
+    server.get("/api/tcdoc/versions/rows", lambda req: tcdoc.version_table_page(
+        req.q("doc_key"), req.q("version_id"), req.q("tab_id"),
+        req.q_int("page", 1, 1), req.q("sort_column"), req.q("direction")))
 
     def tcdoc_version_image(req):
         data, mime = tcdoc.version_image(

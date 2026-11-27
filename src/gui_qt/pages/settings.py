@@ -233,13 +233,14 @@ class GlobalSettingsPage(BasePage):
 
         # ---- 窗口过渡 ----
         card = self._section_card("窗口过渡", "expand")
-        self.window_animations_cb = QCheckBox("启用窗口过渡动画")
+        self.window_animations_cb = QCheckBox("使用 Windows 原生窗口动画")
         self.window_animations_cb.setToolTip(
-            "启动、关闭主窗口时淡入淡出，最大化与还原时平滑过渡；\n"
+            "打开、关闭、最大化、最小化和还原交给 Windows 管理，效果遵循系统动画设置；\n"
             "默认开启，切换后立即保存并生效。")
         self.window_animations_cb.toggled.connect(self._on_window_animations_changed)
         card.content_layout.addWidget(self.window_animations_cb)
-        animation_note = QLabel("启动、关闭时淡入淡出，最大化、还原时平滑过渡；关闭后立即切换。")
+        animation_note = QLabel(
+            "打开、关闭、最大化、最小化和还原交给 Windows 管理，效果遵循系统动画设置。")
         animation_note.setWordWrap(True)
         animation_note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         card.content_layout.addWidget(animation_note)

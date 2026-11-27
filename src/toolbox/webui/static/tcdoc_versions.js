@@ -4,7 +4,7 @@
   // Same immutable document versions as desktop; only the preview lives here.
   window.renderTcdocVersions = function (host, helpers, options) {
     var h = helpers.h, api = helpers.api, withToken = helpers.withToken;
-    var cycleSort = helpers.cycleSort, sortRows = helpers.sortRows;
+    var cycleSort = helpers.cycleSort, tableRequest = 0;
     var docKey = options.doc_key, request = 0, versions = [], opened = null, busy = false;
     var page = 1, order = { order: '', asc: true };
     var search = h('input', { class: 'input', type: 'search',
@@ -47,21 +47,21 @@
       return box;
     }
     function drawTable(sheet, area) {
+      var serial = ++tableRequest, versionId = opened.meta.version_id;
+      area.replaceChildren(h('p', { class: 'small', role: 'status' }, '正在读取历史表格…'));
+      api('/api/tcdoc/versions/rows?doc_key=' + encodeURIComponent(docKey)
+        + '&version_id=' + encodeURIComponent(versionId) + '&tab_id=' + encodeURIComponent(sheet.tab_id)
+        + '&page=' + page + '&sort_column=' + encodeURIComponent(order.order)
+        + '&direction=' + (order.order === '' ? '' : order.asc ? 'asc' : 'desc')).then(function (result) {
+      if (!area.isConnected || serial !== tableRequest || !opened || opened.meta.version_id !== versionId) return;
       var columns = (sheet.columns || []).map(function (column) {
         return typeof column === 'string' ? column : column.name;
       }).filter(Boolean);
-      var records = (sheet.rows || []).map(function (row, index) {
-        var item = { _index: index, _number: row.row_no };
-        columns.forEach(function (column, i) { item['c' + i] = (row.values || {})[column]; });
-        return item;
-      });
-      var sortColumns = [{ key: '_number' }].concat(columns.map(function (_column, i) { return { key: 'c' + i }; }));
-      var sorted = sortRows(records, sortColumns, order);
-      var pages = Math.max(1, Math.ceil(sorted.length / 200));
-      page = Math.max(1, Math.min(pages, page));
+      var rows = result.rows || [], pages = result.pages;
+      page = result.page;
       var head = h('tr'), body = h('tbody'), pictures = h('div');
       ['行号'].concat(columns).forEach(function (name, i) {
-        var key = i === 0 ? '_number' : 'c' + (i - 1);
+        var key = String(i);
         var cell = h('th', { tabIndex: 0, class: 'sortable', role: 'columnheader',
           'aria-sort': order.order === key ? (order.asc ? 'ascending' : 'descending') : 'none' },
           name + (order.order === key ? (order.asc ? ' ↑' : ' ↓') : ''));
@@ -72,17 +72,16 @@
         });
         head.appendChild(cell);
       });
-      sorted.slice((page - 1) * 200, page * 200).forEach(function (record) {
-        var original = sheet.rows[record._index];
-        var row = h('tr', null, h('td', null, record._number));
-        columns.forEach(function (_name, i) {
-          var value = record['c' + i];
+      rows.forEach(function (original) {
+        var row = h('tr', null, h('td', null, original.row_no));
+        columns.forEach(function (name) {
+          var value = (original.values || {})[name];
           var text = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
           row.appendChild(h('td', { class: 'ellipsis', title: text }, text));
         });
         row.tabIndex = 0;
         function showImages() {
-          pictures.replaceChildren(h('div', { class: 'small' }, '第 ' + record._number + ' 行 · 留存图片'),
+          pictures.replaceChildren(h('div', { class: 'small' }, '第 ' + original.row_no + ' 行 · 留存图片'),
             imageList(original.images || []));
         }
         row.addEventListener('dblclick', showImages);
@@ -91,7 +90,7 @@
       });
       var pager = h('div', { class: 'col-pager' });
       [['首页', 1], ['上一页', page - 1], ['下一页', page + 1], ['末页', pages]].forEach(function (item, index) {
-        if (index === 2) pager.appendChild(h('span', { class: 'small' }, '第 ' + page + ' / ' + pages + ' 页 · 共 ' + sorted.length + ' 条'));
+        if (index === 2) pager.appendChild(h('span', { class: 'small' }, '第 ' + page + ' / ' + pages + ' 页 · 共 ' + result.total + ' 条'));
         var button = h('button', { class: 'btn mini', type: 'button',
           disabled: item[1] < 1 || item[1] > pages || item[1] === page }, item[0]);
         button.addEventListener('click', function () { page = item[1]; drawTable(sheet, area); });
@@ -99,9 +98,15 @@
       });
       area.replaceChildren(h('div', { class: 'small muted', style: 'margin:8px 0' },
         '只读历史 · 表头可排序 · 双击行或按 Enter 查看该行留存图片'),
-      sorted.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' },
+      result.total ? h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' },
         h('thead', null, head), body)) : h('p', { class: 'muted small' }, '此版本的工作表没有记录，可切换其他工作表'),
       pager, pictures);
+      }).catch(function (error) {
+        if (!area.isConnected || serial !== tableRequest) return;
+        var retry = h('button', { class: 'btn', type: 'button' }, '重试');
+        retry.addEventListener('click', function () { drawTable(sheet, area); });
+        area.replaceChildren(h('p', null, '读取历史表格失败：' + error.message), retry);
+      });
     }
     function draw() {
       content.replaceChildren();
