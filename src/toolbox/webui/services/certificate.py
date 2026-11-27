@@ -85,9 +85,9 @@ class CertificateService:
 
             result = webui_certificate_evidence.export(
                 body, is_cancelled=active["cancel"].is_set, on_progress=update)
-            if active["cancel"].is_set():
-                raise ValueError("已取消证据导出")
             with self._state_lock:
+                if active["cancel"].is_set():
+                    raise ValueError("已取消证据导出")
                 active["status"] = "completed"
             return result
         except OSError:

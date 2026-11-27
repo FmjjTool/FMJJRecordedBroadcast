@@ -11505,8 +11505,8 @@ function renderMusicTag(root) {
       var pollTimer = null;
       var query = h('input', { class: 'input grow', type: 'search',
         placeholder: '按作品 / 认证号筛选', 'aria-label': '筛选证书记录' });
-      var selectAll = h('button', { class: 'btn', type: 'button' }, '全选当前筛选');
-      var clear = h('button', { class: 'btn', type: 'button' }, '清除选择');
+      var selectAll = h('button', { class: 'btn', type: 'button', title: '全选当前筛选结果，保留筛选外已选记录' }, '全选结果');
+      var clear = h('button', { class: 'btn', type: 'button', title: '取消全部已选记录，包含筛选外记录' }, '取消选择');
       var count = h('span', { class: 'muted small', role: 'status' });
       var exportButton = h('button', { class: 'btn primary', type: 'button', disabled: true }, '加密导出');
       var cancelButton = h('button', { class: 'btn hidden', type: 'button' }, '取消导出');
@@ -11537,7 +11537,7 @@ function renderMusicTag(root) {
         var hiddenCount = Array.from(selected).filter(function (id) { return !visible.has(id); }).length;
         count.textContent = '已选 ' + selected.size + ' / ' + records.length + ' 条'
           + (hiddenCount ? '（含筛选外 ' + hiddenCount + ' 条）' : '');
-        exportButton.disabled = busy || !data.available || selected.size === 0;
+        exportButton.disabled = busy || !!exportId || !data.available || selected.size === 0;
         clear.disabled = busy || selected.size === 0;
         selectAll.disabled = busy || filtered().length === 0;
         query.disabled = busy;
@@ -11639,7 +11639,12 @@ function renderMusicTag(root) {
         if (!exportId) return;
         cancelButton.disabled = true;
         post('/api/certificates/evidence/cancel', { export_id: exportId }).then(function (result) {
-          status.textContent = result.cancelled ? '取消中…' : '证据包已生成，正在接收文件。';
+          if (!busy) {
+            exportId = '';
+            cancelButton.classList.add('hidden');
+            status.textContent = result.cancelled ? '导出会话已取消，可以重新导出。' : '导出会话已结束，可以重新导出。';
+            syncSelection();
+          } else status.textContent = result.cancelled ? '取消中…' : '证据包已生成，正在接收文件。';
         }).catch(function (error) {
           status.textContent = '取消未确认：' + error.message + '；导出请求仍在等待，请重试。';
           cancelButton.disabled = false;
@@ -11648,6 +11653,7 @@ function renderMusicTag(root) {
       function beginExport(ids, password) {
         busy = true;
         exportId = '';
+        var keepSession = false;
         bar.classList.remove('hidden');
         bar.classList.add('is-indeterminate');
         cancelButton.classList.remove('hidden');
@@ -11664,14 +11670,25 @@ function renderMusicTag(root) {
         }).then(function () {
           status.textContent = '已完成：' + ids.length + ' 条证书记录的加密证据包已交给浏览器保存；请保管好密码。';
         }).catch(function (error) {
-          status.textContent = error.message.indexOf('取消') >= 0 ? '已取消证据导出，未保存文件。'
-            : '证据导出失败：' + error.message + '；请检查所选记录后重试。';
+          var failure = '证据导出失败：' + error.message + '；请检查所选记录后重试。';
+          if (!exportId) { status.textContent = failure; return; }
+          // A failed download may never have reached the export endpoint. Release
+          // its reservation, or retain its ID so the user can retry cancellation.
+          return post('/api/certificates/evidence/cancel', { export_id: exportId }).then(function (result) {
+            status.textContent = error.message === '已取消证据导出' && result.cancelled
+              ? '已取消证据导出，未保存文件。' : failure;
+          }).catch(function (cancelError) {
+            keepSession = true;
+            status.textContent = '证据导出未完成：' + error.message + '；取消未确认：'
+              + cancelError.message + '。请点击“取消导出”重试，确认后可重新导出。';
+          });
         }).finally(function () {
           password = '';
           busy = false;
-          exportId = '';
+          if (!keepSession) exportId = '';
           clearTimeout(pollTimer);
-          cancelButton.classList.add('hidden');
+          cancelButton.classList.toggle('hidden', !keepSession);
+          cancelButton.disabled = false;
           bar.classList.add('hidden');
           draw();
         });

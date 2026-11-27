@@ -5,7 +5,7 @@
     淘宝      taobao.com / tmall.com / tb.cn / 淘口令
     抖音商城  v.douyin.com / haohuo.jinritemai.com / douyin.com / 【抖音商城】分享文案
     B站小店   b23.tv / mall.bilibili.com / space.bilibili.com / 纯数字 UID
-    闲鱼      goofish.com 商品链接；关键词由「搜索闲鱼」提交
+    闲鱼      goofish.com 商品链接或关键词；由「搜索并解析」自动判断
 - 识别后自动切到对应结果面板，并调用该子页原有解析流程；
   既有三个子页的落盘目录与导出格式不变，闲鱼使用独立结果面板：
     download/淘宝商品/ · download/抖音商品/ · download/B站小店/ · download/闲鱼商品/
@@ -59,7 +59,7 @@ class ShoppingHubPage(BasePage):
             "粘贴链接或分享文案，自动识别平台（抖音可一行一条批量）：\n"
             "淘宝 taobao.com / tmall.com · 抖音商城 v.douyin.com 分享文案 · "
             "B站小店 b23.tv / UP主 UID · 闲鱼 goofish.com/item?id=…\n"
-            "输入周边关键词后点「搜索闲鱼」")
+            "输入周边关键词或粘贴闲鱼商品链接后点「搜索并解析」")
         self.input_edit.setFixedHeight(60)
         self.input_edit.textChanged.connect(self._update_hint)
         tv.addWidget(self.input_edit)
@@ -80,17 +80,14 @@ class ShoppingHubPage(BasePage):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.search_btn = QPushButton("搜索闲鱼")
-        self.search_btn.clicked.connect(self._search_xianyu)
-        self.parse_btn = QPushButton("解析")
+        self.parse_btn = QPushButton("搜索并解析")
         self.parse_btn.setProperty("variant", "primary")
-        self.parse_btn.clicked.connect(self._parse)
+        self.parse_btn.clicked.connect(self._search_or_parse)
 
         self.hint_label = QLabel("仅在勾选的平台内自动识别链接")
         self.hint_label.setStyleSheet("color: palette(placeholder-text);")
         self.hint_label.setWordWrap(True)
         row.addWidget(self.hint_label, 1)
-        row.addWidget(self.search_btn)
         row.addWidget(self.parse_btn)
         tv.addLayout(row)
         layout.addWidget(top)
@@ -119,16 +116,26 @@ class ShoppingHubPage(BasePage):
 
     # ==================== 入口 ====================
 
-    def _search_xianyu(self):
+    def _search_or_parse(self):
+        """闲鱼关键词走搜索，官方商品链接走详情解析；其他平台仍按链接解析。"""
+        if any(self._panel_busy(page) for page in self._panels.values()):
+            return
+        text = self.input_edit.toPlainText().strip()
+        if "xianyu" in self._selected_platforms() and not detect_platform(text):
+            self._search_xianyu(text)
+            return
+        self._parse()
+
+    def _search_xianyu(self, keyword=None):
         if ("xianyu" not in self._selected_platforms()
                 or any(self._panel_busy(page) for page in self._panels.values())):
             return
-        keyword = self.input_edit.toPlainText().strip()
+        keyword = self.input_edit.toPlainText().strip() if keyword is None else keyword.strip()
         if not keyword or len(keyword) > 100 or "://" in keyword:
-            self._set_hint("请输入 1–100 字的闲鱼搜索关键词，商品链接请点「解析」", warn=True)
+            self._set_hint("请输入 1–100 字的闲鱼关键词，或粘贴完整商品链接", warn=True)
             return
         self.stack.setCurrentIndex(_TAB_INDEX["xianyu"])
-        self._set_hint("搜索闲鱼首批商品，勾选后可入库并下载图片")
+        self._set_hint("搜索并解析闲鱼首批商品，勾选后可入库并下载图片")
         self.xianyu_page.submit_search(keyword)
         self._sync_platform_controls()
 
@@ -161,7 +168,7 @@ class ShoppingHubPage(BasePage):
             self._set_hint(plan["summary"])
         except ValueError as exc:
             if "xianyu" in selected and "://" not in text and len(text) <= 100:
-                self._set_hint("可点「搜索闲鱼」按关键词查找周边")
+            self._set_hint("可点「搜索并解析」按关键词查找周边")
             else:
                 self._set_hint(str(exc), warn=True)
 
@@ -184,7 +191,6 @@ class ShoppingHubPage(BasePage):
             selected = self._selected_platforms()
             busy = any(self._panel_busy(page) for page in self._panels.values())
             self.parse_btn.setEnabled(not busy and bool(selected))
-            self.search_btn.setEnabled(not busy and "xianyu" in selected)
             for check in self.platform_checks.values():
                 check.setEnabled(not busy)
             for key, page in self._panels.items():
