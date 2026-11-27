@@ -149,8 +149,13 @@ def _checked_file(raw):
 
 
 def _state(info):
+    # Python 3.12+ on Windows exposes creation time via st_birthtime_ns.
+    # stat() and fstat() can disagree about the deprecated st_ctime meaning;
+    # compare the same timestamp while retaining inode/size/mtime checks.
+    identity_time = (getattr(info, "st_birthtime_ns", info.st_ctime_ns)
+                     if os.name == "nt" else info.st_ctime_ns)
     return (info.st_dev, info.st_ino, info.st_size,
-            info.st_mtime_ns, info.st_ctime_ns)
+            info.st_mtime_ns, identity_time)
 
 
 def _read_file(raw, *, expected=None, consume=None,

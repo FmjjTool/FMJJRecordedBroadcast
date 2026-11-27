@@ -8,6 +8,7 @@
       var h = helpers.h, api = helpers.api, withToken = helpers.withToken;
       var cycleSort = helpers.cycleSort, sortRows = helpers.sortRows;
       var rows = [], selected = '', disposed = false;
+      var closeMenu = function () {};
       var listOrder = { order: '', asc: true }, phaseOrder = { order: '', asc: true };
       var list = h('div'), detail = h('div');
       var refresh = h('button', { class: 'btn', type: 'button' }, '刷新报告');
@@ -63,19 +64,28 @@
         }
         head.addEventListener('contextmenu', function (event) {
           event.preventDefault();
-          var old = area.querySelector('[role=menu]');
-          if (old) old.remove();
+          closeMenu();
           var menu = h('div', { role: 'menu', class: 'card',
             style: 'position:fixed;z-index:30;padding:8px;display:grid;gap:4px;left:'
               + Math.max(0, Math.min(event.clientX, window.innerWidth - 190)) + 'px;top:'
               + Math.max(0, Math.min(event.clientY, window.innerHeight - 110)) + 'px' });
+          var listeners = new AbortController();
+          function dismiss() { menu.remove(); listeners.abort(); }
+          closeMenu = dismiss;
           [['列宽自适应', true], ['重置列宽', false]].forEach(function (action) {
             menu.appendChild(h('button', { class: 'btn mini', type: 'button', role: 'menuitem', onclick: function () {
-              widths(action[1]); menu.remove();
+              widths(action[1]); dismiss();
             } }, action[0]));
           });
           area.appendChild(menu);
-          document.addEventListener('pointerdown', function () { menu.remove(); }, { once: true });
+          document.addEventListener('pointerdown', function (outsideEvent) {
+            if (!menu.contains(outsideEvent.target)) dismiss();
+          }, { signal: listeners.signal });
+          document.addEventListener('keydown', function (keyEvent) {
+            if (keyEvent.key === 'Escape') dismiss();
+          }, { signal: listeners.signal });
+          window.addEventListener('scroll', dismiss, { capture: true, signal: listeners.signal });
+          window.addEventListener('resize', dismiss, { signal: listeners.signal });
         });
         paint();
         area.appendChild(h('div', { class: 'table-wrap', style: 'overflow-x:hidden' }, grid));
@@ -159,7 +169,7 @@
       }
       refresh.addEventListener('click', load);
       load();
-      return { refresh: load, dispose: function () { disposed = true; } };
+      return { refresh: load, dispose: function () { disposed = true; closeMenu(); } };
     }
   };
 }());

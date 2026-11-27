@@ -1,7 +1,6 @@
 """歌单创建 WebUI 适配（L3，Qt-free）。
 
-对齐桌面「歌单」页：选来源（本地完整歌曲快照 / 线下活动 / 平台歌单链接 /
-粘贴清单）→ 选目标平台与歌单名 → 预览匹配 → 确认写入平台。
+对齐桌面「歌单」页：选线下活动 → 选目标平台与歌单名 → 预览匹配 → 确认写入平台。
 
 预览结果缓存在进程内（30 分钟），写入时按 preview_id 取回，避免重复匹配。
 同时保留只读的报告列表与报告内容读取。
@@ -135,55 +134,43 @@ def events() -> list[dict]:
             "date": event.get("date") or "",
             "city": event.get("city") or "",
             "song_count": int(event.get("song_count") or 0),
+            "default_playlist_name": service.default_playlist_name(
+                event.get("name")),
         })
     return out
 
 
-def _text_sources(text: str) -> list:
-    rows = []
-    for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "\t" in line:
-            parts = [p.strip() for p in line.split("\t") if p.strip()]
-        elif " - " in line:
-            parts = [p.strip() for p in line.split(" - ", 1)]
-        else:
-            parts = [line]
-        title = parts[0]
-        artist = parts[1] if len(parts) > 1 else ""
-        if title:
-            rows.append(service.SourceSong(title=title, artist=artist))
-    return rows
+def prepare_preview_payload(payload: dict) -> dict:
+    """只接受线下活动曲目，校验用户填写的完整歌单名。"""
+    normalized = dict(payload) if isinstance(payload, dict) else {}
+    source = normalized.get("source")
+    source = dict(source) if isinstance(source, dict) else {}
+    if str(source.get("kind") or "") != "event":
+        raise ValueError("歌单来源仅支持线下活动曲目")
+    raw_row_no = source.get("row_no")
+    if isinstance(raw_row_no, bool) or (
+            isinstance(raw_row_no, float) and not raw_row_no.is_integer()):
+        raise ValueError("请先选择一场线下活动")
+    try:
+        row_no = int(raw_row_no)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("请先选择一场线下活动") from None
+    if row_no <= 0:
+        raise ValueError("请先选择一场线下活动")
+    source["row_no"] = row_no
+    normalized["source"] = source
+    normalized["name"] = service.validate_playlist_name(normalized.get("name"))
+    return normalized
 
 
 def _load_sources(payload: dict):
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
-    kind = str(source.get("kind") or "snapshot")
-    value = str(source.get("value") or "").strip()
-    if kind == "snapshot":
-        return service.read_source_complete_songs()
-    if kind == "event":
-        row_no = source.get("row_no")
-        if row_no is None:
-            raise ValueError("请先选择一场线下活动")
-        return service.read_source_event(int(row_no))
-    if kind == "text":
-        songs = _text_sources(value)
-        if not songs:
-            raise ValueError("粘贴的清单里没有可用的歌曲行")
-        return songs, f"粘贴清单 {len(songs)} 首"
-    if kind == "playlist":
-        if not value:
-            raise ValueError("请填写歌单链接或 ID")
-        platform = service.detect_platform(value)
-        if not platform:
-            raise ValueError("无法识别歌单链接所属平台")
-        sources, name = service.read_source_playlist(platform, value)
-        label = f"{service.PLATFORM_NAMES.get(platform, platform)}歌单「{name}」"
-        return sources, label
-    raise ValueError("未知的来源类型")
+    if str(source.get("kind") or "") != "event":
+        raise ValueError("歌单来源仅支持线下活动曲目")
+    row_no = source.get("row_no")
+    if row_no is None:
+        raise ValueError("请先选择一场线下活动")
+    return service.read_source_event(int(row_no))
 
 
 def _rows(plans) -> list[dict]:
@@ -251,9 +238,8 @@ def has_preview(preview_id: str) -> bool:
 def preview(payload: dict, on_log=None, is_cancelled=None) -> dict:
     log = on_log or (lambda _msg: None)
     _prune()
-    name = str(payload.get("name") or "").strip()
-    if not name:
-        raise ValueError("请填写歌单名称")
+    payload = prepare_preview_payload(payload)
+    name = payload["name"]
     targets = [str(p) for p in (payload.get("platforms") or [])]
     if not targets:
         raise ValueError("请至少选择一个目标平台")

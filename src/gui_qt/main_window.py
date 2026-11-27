@@ -1080,8 +1080,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self._window_transitions.dismissing:
-            event.ignore()
-            return
+            if self._quitting and self._window_transitions.dismiss_kind != "quit":
+                # 托盘退出/更新退出优先于尚未结束的后台隐藏，不能吞掉退出请求。
+                self._window_transitions.cancel()
+            else:
+                event.ignore()
+                return
         cfg = load_convert_config()
         lrw = getattr(self, "live_record_win", None)
         act = self._live_activity()
@@ -1137,7 +1141,7 @@ class MainWindow(QMainWindow):
                 lrw.stop_and_package(self)
         self._quitting = True
         if (not self._close_animation_done
-                and self._window_transitions.dismiss(self._finish_animated_close)):
+                and self._window_transitions.dismiss(self._finish_animated_close, kind="quit")):
             event.ignore()
             return
         self._closed = True

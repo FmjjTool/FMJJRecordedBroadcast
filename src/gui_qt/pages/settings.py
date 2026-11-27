@@ -231,6 +231,20 @@ class GlobalSettingsPage(BasePage):
         self.sched_light.timeChanged.connect(self._on_schedule_changed)
         self.sched_dark.timeChanged.connect(self._on_schedule_changed)
 
+        # ---- 窗口过渡 ----
+        card = self._section_card("窗口过渡", "expand")
+        self.window_animations_cb = QCheckBox("启用窗口过渡动画")
+        self.window_animations_cb.setToolTip(
+            "启动、关闭主窗口时淡入淡出，最大化与还原时平滑过渡；\n"
+            "默认开启，切换后立即保存并生效。")
+        self.window_animations_cb.toggled.connect(self._on_window_animations_changed)
+        card.content_layout.addWidget(self.window_animations_cb)
+        animation_note = QLabel("启动、关闭时淡入淡出，最大化、还原时平滑过渡；关闭后立即切换。")
+        animation_note.setWordWrap(True)
+        animation_note.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
+        card.content_layout.addWidget(animation_note)
+        v.addWidget(card)
+
         # ---- 后台模式 ----
         card = self._section_card("后台模式", "pulse")
         self.close_to_tray_cb = QCheckBox("启用后台模式（关闭主窗口时隐藏到系统托盘）")
@@ -559,6 +573,10 @@ class GlobalSettingsPage(BasePage):
         self._refresh_exportdir_status()
         # 主题定时切换
         self._load_theme_schedule()
+        # 窗口过渡（程序加载不触发保存）
+        self.window_animations_cb.blockSignals(True)
+        self.window_animations_cb.setChecked(bool(cfg.get("window_animations_enabled", True)))
+        self.window_animations_cb.blockSignals(False)
         # 后台运行（关闭窗口隐藏到托盘）
         self.close_to_tray_cb.blockSignals(True)
         self.close_to_tray_cb.setChecked(bool(cfg.get("close_to_tray", True)))
@@ -1014,6 +1032,14 @@ class GlobalSettingsPage(BasePage):
         if d:
             self.exportdir_entry.setText(d)
             self.app.toast(f"已选择导出目录: {d}", "info")
+
+    def _on_window_animations_changed(self, checked):
+        cfg = load_convert_config()
+        cfg["window_animations_enabled"] = bool(checked)
+        save_convert_config(cfg)
+        setter = getattr(self.app, "set_window_animations_enabled", None)
+        if callable(setter):
+            setter(bool(checked))
 
     def _on_close_to_tray_changed(self, checked):
         cfg = load_convert_config()

@@ -85,10 +85,7 @@
         cycleSort: cycleSort, sortRows: sortRows
       });
     } },
-    certificate_maker: { title: '证书制作', load: function (host) {
-      renderDesktopOnly(host, '证书制作',
-        '证书制作使用桌面端自绘模板与图片合成，Web 端不提供编辑，请在桌面端使用。');
-    } },
+    certificate_maker: { title: '证书制作', load: renderCertificates },
     proxy: { title: '网络代理', load: function (host) {
       renderDesktopOnly(host, '网络代理',
         '网络代理需要在本机启动代理内核进程，Web 端不提供启停，请在桌面端或系统代理中设置。');
@@ -8186,6 +8183,13 @@ function renderLivestreamSummary(root) {
       });
       host.appendChild(themeCard);
 
+      var windowTransitionsHost = h('div');
+      host.appendChild(windowTransitionsHost);
+      renderDesktopOnly(windowTransitionsHost, '窗口过渡',
+        '桌面端默认启用启动、关闭淡入淡出与最大化、还原平滑过渡；'
+        + '可在桌面端「全局设置 → 窗口过渡」关闭，切换立即保存并生效。'
+        + '此效果依赖本机原生窗口与桌面进程内状态，浏览器端仅提供说明。');
+
       var deps = h('details', { class: 'card', style: 'margin-top:12px' });
       deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
       var depHost = h('div', { style: 'margin-top:8px' });
@@ -10376,23 +10380,16 @@ function renderLivestreamSummary(root) {
   }
 
   function buildPlaylistTools(reportDir) {
-    var kindSel = h('select', { class: 'select' },
-      h('option', { value: 'snapshot' }, '本地「完整歌曲」快照'),
-      h('option', { value: 'event' }, '线下活动'),
-      h('option', { value: 'playlist' }, '现有歌单链接'),
-      h('option', { value: 'text' }, '粘贴歌曲清单'));
-    var valueInput = h('input', {
-      class: 'input', type: 'text', placeholder: '歌单链接或 ID',
-      style: 'flex:1;min-width:180px'
+    var eventInput = h('input', {
+      class: 'input', type: 'search', list: 'musicPlaylistEvents',
+      'aria-label': '活动', autocomplete: 'off',
+      placeholder: '搜索或选择线下活动', style: 'flex:1;min-width:160px'
     });
-    var textArea = h('textarea', {
-      class: 'textarea', rows: '5',
-      placeholder: '每行一首：歌名 - 歌手（或制表符分隔）'
-    });
-    var eventSel = h('select', { class: 'select', style: 'flex:1' });
+    var eventOptions = h('datalist', { id: 'musicPlaylistEvents' });
     var nameInput = h('input', {
-      class: 'input', type: 'text', value: '封茗囧菌歌曲合集',
-      placeholder: '歌单名称', style: 'flex:1;min-width:160px', maxlength: '60'
+      class: 'input', type: 'text', 'aria-label': '歌单名称',
+      placeholder: '输入歌单名称，可修改或删除默认前缀',
+      style: 'flex:1;min-width:160px', maxlength: '60'
     });
     var platformHost = h('div', { class: 'toolbar' });
     var includeUncertain = h('input', { type: 'checkbox' });
@@ -10404,6 +10401,8 @@ function renderLivestreamSummary(root) {
     var resultHost = h('div');
     var boxes = [];
     var events = [];
+    var selectedEvent = null;
+    var capabilitiesReady = false;
     var previewId = '';
     var previewData = null;
     var busy = false;
@@ -10433,29 +10432,94 @@ function renderLivestreamSummary(root) {
         selectionLabel.textContent = '已勾选 ' + count
           + ' 首写入（「写入」列可逐首勾选）';
       }
-      applyBtn.disabled = !previewId || count <= 0;
+      applyBtn.disabled = busy || !previewId || count <= 0;
       return count;
     }
 
-    function syncSource() {
-      var kind = kindSel.value;
-      valueInput.style.display = kind === 'playlist' ? '' : 'none';
-      textArea.style.display = kind === 'text' ? '' : 'none';
-      eventSel.style.display = kind === 'event' ? '' : 'none';
+    function eventLabel(event) {
+      return [event.name, event.date, event.city,
+        event.song_count + ' 首'].filter(Boolean).join(' · ');
     }
-    kindSel.addEventListener('change', syncSource);
-    syncSource();
+
+    function invalidatePreview() {
+      previewId = '';
+      previewData = null;
+      selectionCells = [];
+      selectionLabel = null;
+      includeUncertain.onchange = null;
+      resultHost.replaceChildren();
+      applyBtn.disabled = true;
+    }
+
+    function chooseEvent(event) {
+      var changed = !selectedEvent
+        || String(selectedEvent.row_no) !== String(event.row_no);
+      selectedEvent = event;
+      eventInput.value = eventLabel(event);
+      eventInput.title = eventInput.value;
+      if (changed) {
+        nameInput.value = event.default_playlist_name || '';
+        invalidatePreview();
+      }
+    }
+
+    function clearEvent() {
+      selectedEvent = null;
+      eventInput.title = '';
+      nameInput.value = '';
+      invalidatePreview();
+    }
+
+    function resolveEvent(allowSearch) {
+      var text = eventInput.value.trim();
+      var match = events.find(function (event) {
+        return eventLabel(event) === text;
+      });
+      if (!match && allowSearch && text) {
+        var query = text.toLocaleLowerCase();
+        match = events.find(function (event) {
+          return eventLabel(event).toLocaleLowerCase().indexOf(query) >= 0;
+        });
+      }
+      if (match) chooseEvent(match);
+      else clearEvent();
+    }
+
+    function setBusy(value) {
+      busy = value;
+      eventInput.disabled = busy || !events.length;
+      nameInput.disabled = busy;
+      includeUncertain.disabled = busy;
+      boxes.forEach(function (item) {
+        item.box.disabled = busy || !item.row.supports_create || !item.row.available;
+      });
+      previewBtn.disabled = busy || !capabilitiesReady || !events.length;
+      refreshSelectionCount();
+    }
+
+    eventInput.addEventListener('input', function () {
+      if (!busy) resolveEvent(false);
+    });
+    eventInput.addEventListener('change', function () {
+      if (!busy) resolveEvent(false);
+    });
+    eventInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' && !busy) {
+        event.preventDefault();
+        resolveEvent(true);
+      }
+    });
+    nameInput.addEventListener('input', invalidatePreview);
+    setBusy(false);
 
     api('/api/music-playlist/platforms').then(function (data) {
       events = data.events || [];
+      nameInput.maxLength = Number(data.playlist_name_max_length) || 60;
       events.forEach(function (event) {
-        eventSel.appendChild(h('option', { value: String(event.row_no) },
-          [event.name, event.date, event.city,
-            event.song_count + ' 首'].filter(Boolean).join(' · ')));
+        eventOptions.appendChild(h('option', { value: eventLabel(event) }));
       });
-      if (!events.length) {
-        eventSel.appendChild(h('option', { value: '' }, '本地暂无线下活动'));
-      }
+      if (events.length) chooseEvent(events[0]);
+      else eventInput.placeholder = '本地没有线下活动快照，请先同步活动数据';
       (data.platforms || []).forEach(function (row) {
         var box = h('input', { type: 'checkbox' });
         var ok = row.supports_create && row.available;
@@ -10470,19 +10534,16 @@ function renderLivestreamSummary(root) {
         boxes.push({ row: row, box: box });
         platformHost.appendChild(label);
       });
+      capabilitiesReady = true;
+      setBusy(busy);
     }).catch(function (error) {
       platformHost.appendChild(h('span', { class: 'muted small' },
         '平台能力读取失败：' + error.message));
     });
 
     function payload() {
-      var kind = kindSel.value;
-      var source = { kind: kind };
-      if (kind === 'playlist') source.value = valueInput.value;
-      else if (kind === 'text') source.value = textArea.value;
-      else if (kind === 'event') source.row_no = Number(eventSel.value) || null;
       return {
-        source: source,
+        source: { kind: 'event', row_no: selectedEvent ? selectedEvent.row_no : null },
         name: nameInput.value,
         platforms: boxes.filter(function (item) {
           return item.box.checked && !item.box.disabled;
@@ -10576,11 +10637,19 @@ function renderLivestreamSummary(root) {
 
     previewBtn.addEventListener('click', function () {
       if (busy) return;
-      busy = true;
-      previewBtn.disabled = true;
+      if (!selectedEvent) {
+        toast('请先选择一场线下活动', 'warning');
+        eventInput.focus();
+        return;
+      }
+      if (!nameInput.value.trim()) {
+        toast('请填写歌单名称', 'warning');
+        nameInput.focus();
+        return;
+      }
+      invalidatePreview();
+      setBusy(true);
       previewBtn.textContent = '匹配中…';
-      applyBtn.disabled = true;
-      previewId = '';
       post('/api/tools/music-playlist/preview', payload()).then(function (result) {
         watchJob(jobHost, result.job, function (job) {
           var data = job.result || {};
@@ -10593,17 +10662,15 @@ function renderLivestreamSummary(root) {
         }, {
           cancelable: true,
           onSettled: function (job) {
-            busy = false;
-            previewBtn.disabled = false;
+            setBusy(false);
             previewBtn.textContent = '预览匹配';
             if (job.status === 'error') {
-              toast('预览失败：' + (job.error || '未知错误'), 'error');
+              toast('预览失败：' + (job.error || '请检查任务日志后重试'), 'error');
             }
           }
         });
       }).catch(function (error) {
-        busy = false;
-        previewBtn.disabled = false;
+        setBusy(false);
         previewBtn.textContent = '预览匹配';
         toast('预览失败：' + error.message, 'error');
       });
@@ -10623,13 +10690,11 @@ function renderLivestreamSummary(root) {
       var detail = '歌单名称：' + (previewData.name || '') + '\n' + lines
         + (boxes.some(function (item) {
           return item.row.platform === 'kugou' && item.box.checked;
-        }) ? '\n\n酷狗云歌单需先登录酷狗 App（账号与登录 → 酷狗 → App 扫码）。' : '')
-        + (kindSel.value === 'event'
-          ? '\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。' : '')
+        }) ? '\n\n酷狗云歌单需要有效登录状态，未登录时会跳过该平台。' : '')
+        + '\n\n写完会把各平台歌单链接回填到腾讯文档「活动歌单_*」三列。'
         + '\n\n写入会在各平台创建同名歌单并逐首添加，确认继续？';
       if (!window.confirm(detail)) return;
-      busy = true;
-      applyBtn.disabled = true;
+      setBusy(true);
       applyBtn.textContent = '写入中…';
       post('/api/tools/music-playlist/apply', {
         preview_id: previewId,
@@ -10678,17 +10743,16 @@ function renderLivestreamSummary(root) {
         }, {
           cancelable: true,
           onSettled: function (job) {
-            busy = false;
+            setBusy(false);
             applyBtn.disabled = true;
             applyBtn.textContent = '创建歌单';
             if (job.status === 'error') {
-              toast('写入失败：' + (job.error || '未知错误'), 'error');
+              toast('写入失败：' + (job.error || '请检查任务日志后重试'), 'error');
             }
           }
         });
       }).catch(function (error) {
-        busy = false;
-        applyBtn.disabled = false;
+        setBusy(false);
         applyBtn.textContent = '创建歌单';
         toast('写入失败：' + error.message, 'error');
       });
@@ -10697,9 +10761,9 @@ function renderLivestreamSummary(root) {
     return h('div', { class: 'card', style: 'margin-bottom:12px' },
       h('div', { class: 'row-title' }, '生成预览与创建歌单'),
       h('div', { class: 'toolbar', style: 'margin-top:8px' },
-        h('span', { class: 'muted small' }, '来源'), kindSel, valueInput,
-        eventSel),
-      textArea,
+        h('span', { class: 'muted small' }, '来源'),
+        h('span', { class: 'muted small' }, '线下活动曲目'),
+        h('span', { class: 'muted small' }, '活动'), eventInput, eventOptions),
       h('div', { class: 'toolbar', style: 'margin-top:8px' },
         h('span', { class: 'muted small' }, '歌单名称'), nameInput),
       h('div', { class: 'toolbar', style: 'margin-top:8px' },
@@ -11404,6 +11468,280 @@ function renderMusicTag(root) {
     host.replaceChildren(h('div', { class: 'card' },
       h('div', { class: 'row-title' }, title),
       h('div', { class: 'muted small', style: 'margin-top:8px' }, message)));
+  }
+
+  function renderCertificates(host) {
+    var page = h('div');
+    var tabs = h('div', { class: 'tabs' });
+    var recordsPanel = h('div');
+    var desktopPanel = h('div', { class: 'hidden' });
+    var recordsTab = h('button', { class: 'tab active', type: 'button' }, '证书记录');
+    var desktopTab = h('button', { class: 'tab', type: 'button' }, '证书信息');
+    function selectTab(records) {
+      recordsPanel.classList.toggle('hidden', !records);
+      desktopPanel.classList.toggle('hidden', records);
+      recordsTab.classList.toggle('active', records);
+      desktopTab.classList.toggle('active', !records);
+    }
+    recordsTab.addEventListener('click', function () { selectTab(true); });
+    desktopTab.addEventListener('click', function () { selectTab(false); });
+    tabs.appendChild(desktopTab);
+    tabs.appendChild(recordsTab);
+    renderDesktopOnly(desktopPanel, '证书信息',
+      '证书字段编辑、自绘模板和图片合成请在桌面端使用；已保存的证书记录可在本页批量加密导出。');
+    page.appendChild(tabs);
+    page.appendChild(recordsPanel);
+    page.appendChild(desktopPanel);
+    host.replaceChildren(page);
+    setLoading(recordsPanel, '正在读取证书记录…');
+    api('/api/certificates/history').then(function (data) {
+      if (!page.isConnected) return;
+      var records = data.records || [];
+      var maxRecords = Number(data.max_records) || 42;
+      var selected = new Set();
+      var currentPage = 1;
+      var busy = false;
+      var exportId = '';
+      var pollTimer = null;
+      var query = h('input', { class: 'input grow', type: 'search',
+        placeholder: '按作品 / 认证号筛选', 'aria-label': '筛选证书记录' });
+      var selectAll = h('button', { class: 'btn', type: 'button' }, '全选当前筛选');
+      var clear = h('button', { class: 'btn', type: 'button' }, '清除选择');
+      var count = h('span', { class: 'muted small', role: 'status' });
+      var exportButton = h('button', { class: 'btn primary', type: 'button', disabled: true }, '加密导出');
+      var cancelButton = h('button', { class: 'btn hidden', type: 'button' }, '取消导出');
+      var list = h('div', { class: 'artifact-list' });
+      var pagination = h('div', { class: 'toolbar', style: 'margin-top:8px' });
+      var status = h('div', { class: 'small', role: 'status', style: 'margin-top:8px' });
+      var bar = h('div', { class: 'progress is-indeterminate hidden', role: 'progressbar',
+        'aria-label': '证据包导出进度', 'aria-valuemin': '0', 'aria-valuemax': '100' }, h('i'));
+      var card = h('div', { class: 'card' },
+        h('div', { class: 'toolbar', style: 'margin-bottom:8px' }, query, selectAll, clear),
+        list, pagination,
+        h('div', { class: 'toolbar', style: 'margin-top:8px' }, count,
+          h('span', { class: 'spacer' }), cancelButton, exportButton), bar, status,
+        h('div', { class: 'muted small', style: 'margin-top:8px' },
+          '所选记录合并为一个 AES-256 加密 ZIP，每条记录单独归档；每次最多 '
+          + maxRecords + ' 条，整包不超过 128 个条目、64 MiB。旧记录缺少的材料会在清单中注明。'));
+      recordsPanel.replaceChildren(card);
+      if (!data.available) status.textContent = '加密导出组件不可用，请在全局设置中检查依赖后重试。';
+
+      function filtered() {
+        var text = query.value.trim().toLocaleLowerCase();
+        return records.filter(function (record) {
+          return !text || [record.title, record.archive_no].join(' ').toLocaleLowerCase().indexOf(text) >= 0;
+        });
+      }
+      function syncSelection() {
+        var visible = new Set(filtered().map(function (record) { return record.id; }));
+        var hiddenCount = Array.from(selected).filter(function (id) { return !visible.has(id); }).length;
+        count.textContent = '已选 ' + selected.size + ' / ' + records.length + ' 条'
+          + (hiddenCount ? '（含筛选外 ' + hiddenCount + ' 条）' : '');
+        exportButton.disabled = busy || !data.available || selected.size === 0;
+        clear.disabled = busy || selected.size === 0;
+        selectAll.disabled = busy || filtered().length === 0;
+        query.disabled = busy;
+      }
+      function draw() {
+        var matches = filtered();
+        var pages = Math.max(1, Math.ceil(matches.length / 200));
+        currentPage = Math.min(currentPage, pages);
+        list.replaceChildren();
+        if (!matches.length) {
+          list.appendChild(empty(records.length ? '当前筛选没有匹配记录，清空筛选后可查看全部。'
+            : '还没有证书记录，请先在桌面端生成证书。'));
+        }
+        matches.slice((currentPage - 1) * 200, currentPage * 200).forEach(function (record) {
+          var check = h('input', { type: 'checkbox', checked: selected.has(record.id), disabled: busy,
+            'aria-label': '选择证书记录：' + (record.title || record.archive_no || '未命名作品') });
+          check.addEventListener('change', function () {
+            if (check.checked) {
+              if (selected.size >= maxRecords) {
+                check.checked = false;
+                status.textContent = '每次最多导出 ' + maxRecords + ' 条，请先清除部分选择。';
+              } else selected.add(record.id);
+            } else selected.delete(record.id);
+            syncSelection();
+          });
+          list.appendChild(h('label', { class: 'artifact-row', style: 'align-items:flex-start;padding:8px 0' },
+            check, h('div', { style: 'flex:1;min-width:0' },
+              h('div', { class: 'ellipsis', title: record.title || '' }, record.title || '未命名作品'),
+              h('div', { class: 'muted small' }, (record.archive_no || '未编号') + ' · 修订 '
+                + (record.revision || 1) + ' · ' + fmtTime(record.saved_at)),
+              h('div', { class: 'muted small' }, '候选附件 ' + (record.file_count || 0)
+                + ' 个；' + (record.warnings || []).join(' ')))));
+        });
+        pager(pagination, currentPage, pages, matches.length, function (number) {
+          if (!busy) { currentPage = number; draw(); }
+        });
+        pagination.querySelectorAll('button').forEach(function (button) { button.disabled = busy || button.disabled; });
+        syncSelection();
+      }
+      query.addEventListener('input', function () { currentPage = 1; draw(); });
+      selectAll.addEventListener('click', function () {
+        var ids = filtered().map(function (record) { return record.id; });
+        var combined = new Set(Array.from(selected).concat(ids));
+        if (combined.size > maxRecords) {
+          status.textContent = '当前选择合计 ' + combined.size + ' 条，超过每次 ' + maxRecords
+            + ' 条上限；请缩小筛选范围或清除部分选择后重试。';
+          return;
+        }
+        selected = combined;
+        draw();
+      });
+      clear.addEventListener('click', function () { selected.clear(); draw(); });
+
+      function downloadBundle(payload) {
+        var headers = { 'Content-Type': 'application/json' };
+        if (token) headers['X-WebUI-Token'] = token;
+        return fetch('/api/certificates/evidence/export', {
+          method: 'POST', headers: headers, body: JSON.stringify(payload), cache: 'no-store'
+        }).then(function (response) {
+          if (response.status === 403) clearStaleSession();
+          if (!response.ok) return response.json().catch(function () { return {}; }).then(function (error) {
+            throw new Error(error.error || '导出未能完成，请重试');
+          });
+          return response.blob().then(function (blob) {
+            var disposition = response.headers.get('Content-Disposition') || '';
+            var name = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+            var filename = 'certificate-evidence.zip';
+            if (name) { try { filename = decodeURIComponent(name[1]); } catch (ignore) {} }
+            var url = URL.createObjectURL(blob);
+            var link = h('a', { href: url, download: filename });
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+          });
+        });
+      }
+      function pollProgress() {
+        if (!busy || !exportId || !page.isConnected) return;
+        api('/api/certificates/evidence/progress?export_id=' + encodeURIComponent(exportId))
+          .then(function (progress) {
+            if (!busy) return;
+            var total = Number(progress.total) || 0;
+            var done = Number(progress.done) || 0;
+            bar.classList.toggle('is-indeterminate', !total);
+            var percent = total ? Math.min(100, Math.floor(done / total * 100)) : 0;
+            bar.firstChild.style.width = percent + '%';
+            if (total) bar.setAttribute('aria-valuenow', String(percent));
+            else bar.removeAttribute('aria-valuenow');
+            status.textContent = progress.status === 'cancelling' ? '取消中…'
+              : total ? '加密导出中：' + done + ' / ' + total : '正在核验证书记录与附件…';
+          }).catch(function () {
+            if (busy) status.textContent = '暂时无法读取进度，导出请求仍在等待；可重试取消。';
+          }).finally(function () {
+            if (busy && page.isConnected) pollTimer = setTimeout(pollProgress, 500);
+          });
+      }
+      cancelButton.addEventListener('click', function () {
+        if (!exportId) return;
+        cancelButton.disabled = true;
+        post('/api/certificates/evidence/cancel', { export_id: exportId }).then(function (result) {
+          status.textContent = result.cancelled ? '取消中…' : '证据包已生成，正在接收文件。';
+        }).catch(function (error) {
+          status.textContent = '取消未确认：' + error.message + '；导出请求仍在等待，请重试。';
+          cancelButton.disabled = false;
+        });
+      });
+      function beginExport(ids, password) {
+        busy = true;
+        exportId = '';
+        bar.classList.remove('hidden');
+        bar.classList.add('is-indeterminate');
+        cancelButton.classList.remove('hidden');
+        cancelButton.disabled = true;
+        status.textContent = '正在准备加密导出…';
+        draw();
+        post('/api/certificates/evidence/prepare', {}).then(function (prepared) {
+          exportId = prepared.export_id;
+          cancelButton.disabled = false;
+          pollProgress();
+          var payload = { ids: ids, password: password, confirmed: true, export_id: exportId };
+          password = '';
+          return downloadBundle(payload);
+        }).then(function () {
+          status.textContent = '已完成：' + ids.length + ' 条证书记录的加密证据包已交给浏览器保存；请保管好密码。';
+        }).catch(function (error) {
+          status.textContent = error.message.indexOf('取消') >= 0 ? '已取消证据导出，未保存文件。'
+            : '证据导出失败：' + error.message + '；请检查所选记录后重试。';
+        }).finally(function () {
+          password = '';
+          busy = false;
+          exportId = '';
+          clearTimeout(pollTimer);
+          cancelButton.classList.add('hidden');
+          bar.classList.add('hidden');
+          draw();
+        });
+      }
+      function confirmExport() {
+        if (busy || !selected.size) return;
+        var ids = records.filter(function (record) { return selected.has(record.id); })
+          .map(function (record) { return record.id; });
+        var overlay = h('div', { class: 'preview-overlay', role: 'dialog', 'aria-modal': 'true',
+          'aria-label': '加密导出证据' });
+        var form = h('form', { class: 'preview-box', style: 'width:720px;max-width:100%;min-width:0' });
+        var password = h('input', { class: 'input', type: 'password', autocomplete: 'new-password',
+          minlength: '12', maxlength: '128', required: true, 'aria-label': '导出密码', style: 'width:100%' });
+        var confirmation = h('input', { class: 'input', type: 'password', autocomplete: 'new-password',
+          minlength: '12', maxlength: '128', required: true, 'aria-label': '确认密码', style: 'width:100%' });
+        var error = h('div', { class: 'small', role: 'status' });
+        var cancel = h('button', { class: 'btn', type: 'button' }, '取消');
+        var submit = h('button', { class: 'btn primary', type: 'submit' }, '加密导出 ' + ids.length + ' 条');
+        var previousFocus = document.activeElement;
+        function close() {
+          password.value = '';
+          confirmation.value = '';
+          document.removeEventListener('keydown', onKey);
+          overlay.remove();
+          if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+        }
+        function onKey(event) {
+          if (event.key === 'Escape') { event.preventDefault(); close(); }
+          if (event.key === 'Tab') {
+            if (event.shiftKey && document.activeElement === password) {
+              event.preventDefault(); submit.focus();
+            } else if (!event.shiftKey && document.activeElement === submit) {
+              event.preventDefault(); password.focus();
+            }
+          }
+        }
+        cancel.addEventListener('click', close);
+        form.addEventListener('submit', function (event) {
+          event.preventDefault();
+          if (password.value.length < 12 || password.value.length > 128 || !password.value.trim()) {
+            error.textContent = '密码需为 12–128 个字符，不能全为空白。'; password.focus(); return;
+          }
+          if (password.value !== confirmation.value) {
+            error.textContent = '两次输入的密码不一致，请重新输入。'; confirmation.focus(); return;
+          }
+          var secret = password.value;
+          close();
+          beginExport(ids, secret);
+          secret = '';
+        });
+        var titles = records.filter(function (record) { return selected.has(record.id); })
+          .slice(0, 4).map(function (record) { return record.title || record.archive_no || '未命名作品'; });
+        form.appendChild(h('div', { class: 'preview-caption' }, '加密导出证据'));
+        form.appendChild(h('div', { style: 'padding:12px;overflow:auto;min-height:0;display:grid;gap:12px' },
+          h('div', null, '将导出所选 ' + ids.length + ' 条证书记录，合并为一个加密证据包。'),
+          h('div', { class: 'muted small' }, titles.join(' / ') + (ids.length > 4 ? ' 等' : '')),
+          h('label', null, '导出密码 *', password), h('label', null, '确认密码 *', confirmation),
+          error, h('div', { class: 'muted small' },
+            '* 为必填。软件不保存密码，也无法找回。旧记录缺失的材料会注明；包内每条记录的内容与附件分别归档。')));
+        form.appendChild(h('div', { style: 'padding:12px;display:flex;gap:8px;justify-content:flex-end' }, cancel, submit));
+        overlay.appendChild(form);
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onKey);
+        password.focus();
+      }
+      exportButton.addEventListener('click', confirmExport);
+      draw();
+    }).catch(function (error) {
+      if (page.isConnected) setError(recordsPanel, error, function () { renderCertificates(host); });
+    });
   }
 
   function renderPerformance(root) {

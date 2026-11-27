@@ -17,7 +17,11 @@ class MusicPlaylistService:
 
     def capabilities(self) -> dict:
         return {"platforms": webui_music_playlist.capabilities(),
-                "events": webui_music_playlist.events()}
+                "events": webui_music_playlist.events(),
+                "playlist_name_prefix":
+                    webui_music_playlist.service.PLAYLIST_NAME_PREFIX,
+                "playlist_name_max_length":
+                    webui_music_playlist.service.MAX_PLAYLIST_NAME_LENGTH}
 
     def _submit(self, kind: str, payload: dict, handler) -> dict:
         if self.jobs is None:
@@ -29,9 +33,7 @@ class MusicPlaylistService:
         return {"job": job.id}
 
     def start_preview(self, payload: dict) -> dict:
-        payload = dict(payload)
-        if not str(payload.get("name") or "").strip():
-            raise ValueError("请填写歌单名称")
+        payload = webui_music_playlist.prepare_preview_payload(payload)
         if not payload.get("platforms"):
             raise ValueError("请至少选择一个目标平台")
         return self._submit("playlist_preview", payload,

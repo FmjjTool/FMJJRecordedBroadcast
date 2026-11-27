@@ -37,6 +37,7 @@ class WindowTransitions(QObject):
         self.window = window
         self.enabled = bool(enabled)
         self.dismissing = False
+        self.dismiss_kind = None
         self._animation = None
         self._overlay = None
         self._dismiss_callback = None
@@ -65,6 +66,7 @@ class WindowTransitions(QObject):
     def cancel(self):
         """托盘恢复等显式显示请求可取消尚未完成的隐藏。"""
         self.dismissing = False
+        self.dismiss_kind = None
         self._dismiss_callback = None
         self._reveal()
 
@@ -97,7 +99,7 @@ class WindowTransitions(QObject):
         self.window.setWindowOpacity(0.0)
         self._fade(1.0, self.SHOW_MS, self._reveal)
 
-    def dismiss(self, callback):
+    def dismiss(self, callback, *, kind="hide"):
         """确认通过后再淡出。返回 False 时由调用方立即执行原操作。"""
         if self.dismissing:
             return True
@@ -106,6 +108,7 @@ class WindowTransitions(QObject):
             return False
         self._reveal()
         self.dismissing = True
+        self.dismiss_kind = kind
         self._dismiss_callback = callback
         self._fade(0.0, self.HIDE_MS, self._finish_dismiss)
         return True
@@ -113,6 +116,7 @@ class WindowTransitions(QObject):
     def _finish_dismiss(self):
         callback, self._dismiss_callback = self._dismiss_callback, None
         self.dismissing = False
+        self.dismiss_kind = None
         self._stop_animation()
         # 先 hide/close，再复位透明度，避免淡出终点闪回完整窗口。
         if callback is not None:
@@ -151,11 +155,16 @@ class WindowTransitions(QObject):
         else:
             self.window.showNormal()
 
-    def _animate_resize(self, serial, start):
+    def _animate_resize(self, serial, start, attempt=0):
         overlay = self._overlay
         if serial != self._serial or overlay is None:
             return
         end = QRect(self.window.frameGeometry())
+        # 部分窗口后端先发状态事件，再异步更新工作区几何；下一帧再取终点，
+        # 避免把原尺寸当终点后在动画结束时突然跳到最大化尺寸。
+        if end == start and attempt < 3:
+            QTimer.singleShot(16, lambda: self._animate_resize(serial, start, attempt + 1))
+            return
         overlay.after = self.window.grab()
         animation = QVariantAnimation(self)
         animation.setDuration(self.RESIZE_MS)
