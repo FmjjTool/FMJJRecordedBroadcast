@@ -5,7 +5,7 @@
   window.renderTcdocVersions = function (host, helpers, options) {
     var h = helpers.h, api = helpers.api, withToken = helpers.withToken;
     var cycleSort = helpers.cycleSort, sortRows = helpers.sortRows;
-    var docKey = options.doc_key, request = 0, versions = [], opened = null;
+    var docKey = options.doc_key, request = 0, versions = [], opened = null, busy = false;
     var page = 1, order = { order: '', asc: true };
     var search = h('input', { class: 'input', type: 'search',
       placeholder: '按采集时间或版本号搜索', 'aria-label': '搜索采集版本' });
@@ -151,11 +151,12 @@
           + (item.complete ? '' : ' · 部分采集')));
       });
       if (Array.from(select.options).some(function (item) { return item.value === keep; })) select.value = keep;
-      select.disabled = !select.options.length; open.disabled = !select.options.length;
+      select.disabled = busy || !select.options.length; open.disabled = busy || !select.options.length;
       select.title = select.selectedOptions.length ? select.selectedOptions[0].textContent : '';
     }
     function load() {
       var serial = ++request;
+      opened = null; content.replaceChildren();
       refresh.disabled = true; open.disabled = true; select.disabled = true;
       note.textContent = '正在读取采集版本…';
       api('/api/tcdoc/versions?doc_key=' + encodeURIComponent(docKey)).then(function (data) {
@@ -171,6 +172,7 @@
     open.addEventListener('click', function () {
       if (!select.value) return;
       var versionId = select.value, serial = ++request;
+      busy = true; search.disabled = true;
       open.disabled = true; refresh.disabled = true; select.disabled = true;
       content.replaceChildren(); note.textContent = '正在打开采集版本…';
       api('/api/tcdoc/versions/open?doc_key=' + encodeURIComponent(docKey)
@@ -184,7 +186,7 @@
       }).catch(function (error) {
         if (active(serial)) note.textContent = '打开采集版本失败：' + error.message + '，可重试或选择其他版本';
       }).finally(function () {
-        if (active(serial)) { refresh.disabled = false; filter(); }
+        if (active(serial)) { busy = false; search.disabled = false; refresh.disabled = false; filter(); }
       });
     });
     search.addEventListener('input', filter);

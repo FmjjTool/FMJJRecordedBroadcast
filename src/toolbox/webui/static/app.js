@@ -10022,8 +10022,7 @@ function renderLivestreamSummary(root) {
         id: 'shopping-input',
         placeholder: '店铺 / 商品链接或分享文案；搜索闲鱼时输入关键词，如「封茗囧菌 周边」'
       });
-      var btn = h('button', { class: 'btn primary', type: 'button' }, '开始解析');
-      var searchBtn = h('button', { class: 'btn', type: 'button' }, '搜索闲鱼');
+      var btn = h('button', { class: 'btn primary', type: 'button' }, '搜索并解析');
       var jobHost = h('div');
       var resultHost = h('div', { style: 'margin-top:8px' });
       var running = false;
@@ -10039,8 +10038,7 @@ function renderLivestreamSummary(root) {
         var hasSelection = platforms.length;
         var hasXianyu = platforms.indexOf('xianyu') !== -1;
         btn.disabled = running || !hasSelection;
-        searchBtn.disabled = running || !hasXianyu;
-        btn.textContent = running ? '解析中…' : '开始解析';
+        btn.textContent = running ? '搜索并解析中…' : '搜索并解析';
         input.disabled = running;
         if (saveBtn) saveBtn.disabled = running || !hasXianyu || !selected.size;
         if (selectionCount) selectionCount.textContent = '已勾选 ' + selected.size + ' / ' + xianyuRows.length + ' 件';
@@ -10049,7 +10047,7 @@ function renderLivestreamSummary(root) {
         if (platformPicker) {
           platformPicker.setBusy(running);
           platformHint.textContent = hasSelection
-            ? '链接按勾选平台自动识别；关键词可点「搜索闲鱼」'
+            ? '链接自动识别；闲鱼关键词与商品链接均点「搜索并解析」'
             : '请至少勾选一个平台';
         }
       }
@@ -10279,22 +10277,24 @@ function renderLivestreamSummary(root) {
       btn.addEventListener('click', function () {
         if (running || !platformPicker || !platformPicker.selected().length) return;
         if (!input.value.trim()) { toast('请粘贴链接或分享文案', 'warning'); return; }
+        var text = input.value.trim();
+        var isXianyuLink = /(?:https?:\/\/)?(?:www\.|h5\.m\.)?goofish\.com(?:[/:?\s]|$)|https?:\/\/2\.taobao\.com\/item|https?:\/\/h5\.m\.taobao\.com\/app\/idleFish-F2e\//i.test(text);
+        if (platformPicker.selected().indexOf('xianyu') !== -1 && !isXianyuLink &&
+            !/(?:taobao\.com|tmall\.com|tb\.cn|douyin\.com|jinritemai\.com|b23\.tv|bilibili\.com)/i.test(text)) {
+          runShoppingJob('/api/tools/shopping/xianyu/search', {
+            platforms: platformPicker.selected(), text: text, limit: 30
+          }, '搜索并解析闲鱼', showResult);
+          return;
+        }
         runShoppingJob('/api/tools/shopping/parse', {
-          platforms: platformPicker.selected(), text: input.value
-        }, '解析', showResult);
-      });
-      searchBtn.addEventListener('click', function () {
-        if (running || searchBtn.disabled) return;
-        if (!input.value.trim()) { toast('请先输入闲鱼搜索关键词', 'warning'); return; }
-        runShoppingJob('/api/tools/shopping/xianyu/search', {
-          platforms: platformPicker.selected(), text: input.value, limit: 30
-        }, '搜索闲鱼', showResult);
+          platforms: platformPicker.selected(), text: text
+        }, '搜索并解析', showResult);
       });
       return h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('label', { class: 'row-title', for: 'shopping-input' }, '链接 / 闲鱼关键词'),
         input, platformHost, platformHint,
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
-          h('span', { style: 'flex:1' }), searchBtn, btn),
+          h('span', { style: 'flex:1' }), btn),
         resultHost, jobHost);
     }
 
