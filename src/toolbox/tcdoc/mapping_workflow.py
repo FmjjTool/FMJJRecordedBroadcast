@@ -289,6 +289,18 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
             by_title = {item["fieldTitle"]: item for item in current_fields.values()}
             for number in selected:
                 _check_cancelled(is_cancelled, receipt)
+                if receipt["row_nos"]:
+                    # 跨进程锁只约束本软件，云端其它编辑者仍可在两行之间改数据。
+                    # 后续行写前再次读取，不能覆盖用户确认后才发生的变动。
+                    latest_fields = client.get_fields(file_id, sheet_id)
+                    latest_by_id = {str(item["fieldID"]): item for item in latest_fields}
+                    latest_records = client.get_records(file_id, sheet_id, log)
+                    latest = compare(headers, rows, mapping, latest_by_id, key_col, latest_records)
+                    current = next((item for item in latest if item["row_no"] == number), {})
+                    if _fingerprint(previews[number]) != _fingerprint(current):
+                        raise MappingError(
+                            f"本地第 {number} 行的匹配或云端内容已变化，已停止后续写入；请重新比对后确认")
+                    fresh[number] = current
                 action = fresh[number]
                 values = deepcopy(action["values"])
                 if not values:

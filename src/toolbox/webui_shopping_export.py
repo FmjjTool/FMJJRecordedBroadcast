@@ -76,6 +76,8 @@ def _local_image(model, root: Path | None, remaining: int):
     root = Path(root)
     directory, name = Path(model.local_dir), str(model.image_file)
     if (not name or Path(name).name != name or "/" in name or "\\" in name
+            or any(char in name for char in '<>:"|?*')
+            or any(ord(char) < 32 for char in name)
             or ".." in directory.parts):
         return None
     path = directory / name
@@ -300,16 +302,18 @@ class ShoppingExports:
             _cancel(is_cancelled)
             if not 0 < _regular(target).st_size <= MAX_OUTPUT_BYTES:
                 raise ShoppingExportError("商品 Excel 内容过大，请减少本次解析数量")
-            published = workspace / f"购物解析_{_PLATFORMS[snapshot.platform]}.xlsx"
-            if published.exists() or published.is_symlink():
+            destination = workspace / f"购物解析_{_PLATFORMS[snapshot.platform]}.xlsx"
+            if destination.exists() or destination.is_symlink():
                 raise ShoppingExportError("任务目录已有导出文件，请重新创建导出任务")
-            os.replace(target, published)
+            os.replace(target, destination)
+            published = destination
             _cancel(is_cancelled)
             outcome = {"schema_version": 1, "count": snapshot.count,
                        "platform": snapshot.platform,
                        "summary": f"已导出本次全部 {snapshot.count} 件{_PLATFORMS[snapshot.platform]}商品，可下载 Excel"}
             if on_progress:
                 on_progress("商品 Excel 已生成", 1.0)
+            _cancel(is_cancelled)
             return outcome, published
         except Exception as error:
             if published is not None:

@@ -14491,7 +14491,7 @@ function renderMusicTag(root) {
             table.querySelector('thead').addEventListener('contextmenu', function (event) {
               event.preventDefault();
               var menu = h('div', { class: 'card', role: 'menu',
-                style: 'position:fixed;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
+                style: 'position:fixed;pointer-events:auto;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
                   + 'px;top:' + Math.max(0, Math.min(event.clientY, window.innerHeight - 80)) + 'px' },
                 h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
                   onclick: function () { menu.remove(); fit(); } }, '列宽自适应'),
@@ -14512,12 +14512,17 @@ function renderMusicTag(root) {
           }
 
           function openChanges() {
-            if (changesOverlay && changesOverlay.isConnected) return;
+            if (changesOverlay && changesOverlay.isConnected) {
+              changesOverlay.querySelector('button').focus();
+              return;
+            }
             var previousFocus = document.activeElement;
             var overlay = h('div', { class: 'preview-overlay', role: 'dialog',
-              'aria-modal': 'true', 'aria-label': '最近变更' });
+              'aria-modal': 'false', 'aria-label': '最近变更',
+              style: 'background:transparent;pointer-events:none' });
             changesOverlay = overlay;
-            var box = h('div', { class: 'preview-box', style: 'width:1040px;max-width:100%;min-width:0' });
+            var box = h('div', { class: 'preview-box',
+              style: 'width:1040px;max-width:100%;min-width:0;pointer-events:auto' });
             var description = h('div', { class: 'muted small' });
             var changeHost = h('div');
             var note = h('span', { class: 'muted small', style: 'flex:1' });
@@ -14535,15 +14540,8 @@ function renderMusicTag(root) {
             }
             closeBtn.addEventListener('click', close);
             refreshBtn.addEventListener('click', loadChanges);
-            overlay.addEventListener('click', function (event) { if (event.target === overlay) close(); });
             overlay.addEventListener('keydown', function (event) {
               if (event.key === 'Escape') { event.preventDefault(); close(); }
-              if (event.key !== 'Tab') return;
-              var focusable = Array.from(box.querySelectorAll('button:not([disabled]),[tabindex="0"]'));
-              var first = focusable[0];
-              var last = focusable[focusable.length - 1];
-              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
             });
             box.appendChild(h('div', { class: 'preview-caption' },
               h('span', null, '最近变更 · ' + (current.name || docKey))));
@@ -15288,6 +15286,20 @@ function renderMusicTag(root) {
   }
 
   function renderTcdocWriteback(host) {
+    var body = h('div');
+    var mode = state.tcdoc.mappingMode || 'local';
+    var tabs = h('div', { class: 'tabs', style: 'margin-bottom:12px' });
+    [['local', '本地表格比对'], ['collected', '本地采集记录']].forEach(function (item) {
+      tabs.appendChild(h('button', { class: 'tab' + (mode === item[0] ? ' active' : ''),
+        type: 'button', onclick: function () { state.tcdoc.mappingMode = item[0]; renderTcdocWriteback(host); } }, item[1]));
+    });
+    host.replaceChildren(tabs, body);
+    if (mode === 'collected') renderTcdocCollectedWriteback(body);
+    else window.renderTcdocMapping(body, { h: h, api: api, post: post, toast: toast,
+      pager: pager, cycleSort: cycleSort, watchJob: watchJob, empty: empty });
+  }
+
+  function renderTcdocCollectedWriteback(host) {
     host.replaceChildren(
       h('div', { class: 'card-title' }, '写回（白名单两表 · 单条新增）'),
       h('div', { class: 'loading' }, '正在读取写回状态…'));

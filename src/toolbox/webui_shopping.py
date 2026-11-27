@@ -215,7 +215,11 @@ def _parse_douyin(text: str, say, is_cancelled, on_models=None) -> dict:
         raise ValueError(f"解析失败：{exc}") from exc
     captured = ([replace(product, local_dir="", image_file="")
                  for product in products] if on_models is not None else None)
-    image_root = ds.shop_dir() if on_models is not None and products else None
+    try:
+        image_root = ds.shop_dir() if on_models is not None and products else None
+    except Exception:
+        # An unavailable optional picture root must not discard parsed rows.
+        image_root = None
     saved = 0
     for index, product in enumerate(products):
         if is_cancelled and is_cancelled():
