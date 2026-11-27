@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import config as cfg_mod
 
@@ -140,6 +141,61 @@ def build_state_dict(text: str | None = None) -> dict:
     return {"cookies": [dict(c, expires=-1, httpOnly=False, secure=True,
                              sameSite="Lax") for c in cookie_list(text)],
             "origins": []}
+
+
+def capture_login_state(context, previous: dict | None = None, *, cookies=None) -> dict:
+    """被动采集登录窗内存状态，不开新页、不导航、不读取或写入已存凭据。
+
+    Playwright 的完整 storage_state 会为已访问但不在当前顶层页的来源创建
+    临时页面。扫码跨域期间反复调用会切走用户正在操作的页。这里只读现有
+    腾讯域页面/框架，暂时跳转或框架销毁时沿用本窗口上次成功的来源快照。
+    """
+    def allowed_origin(value):
+        try:
+            url = urlsplit(str(value or ""))
+            host = (url.hostname or "").lower()
+            if (url.scheme == "https" and url.port in (None, 443)
+                    and not url.username and not url.password
+                    and (host == "qq.com" or host.endswith(".qq.com"))):
+                return f"https://{host}"
+        except ValueError:
+            pass
+        return ""
+
+    origins = {}
+    for row in (previous or {}).get("origins") or []:
+        if isinstance(row, dict) and (origin := allowed_origin(row.get("origin"))):
+            origins[origin] = {"origin": origin, "localStorage": [
+                dict(item) for item in row.get("localStorage") or []
+                if isinstance(item, dict)]}
+    captured = set()
+    for page in context.pages:
+        for frame in page.frames:
+            origin = allowed_origin(frame.url)
+            if not origin or origin in captured:
+                continue
+            try:
+                snapshot = frame.evaluate("""() => ({
+                    origin: location.origin,
+                    localStorage: Object.keys(localStorage).map(name =>
+                        ({name, value: localStorage.getItem(name)}))
+                })""")
+                if (not isinstance(snapshot, dict)
+                        or allowed_origin(snapshot.get("origin")) != origin):
+                    continue
+                entries = snapshot.get("localStorage")
+                if not isinstance(entries, list):
+                    continue
+                origins[origin] = {"origin": origin, "localStorage": [
+                    {"name": item["name"], "value": item["value"]}
+                    for item in entries if isinstance(item, dict)
+                    and isinstance(item.get("name"), str)
+                    and isinstance(item.get("value"), str)]}
+                captured.add(origin)
+            except Exception:  # 导航或框架销毁不打断扫码，也不另开页面补采
+                continue
+    rows = context.cookies() if cookies is None else cookies
+    return {"cookies": [dict(row) for row in rows], "origins": list(origins.values())}
 
 
 # ==================== 登录后回写 ====================

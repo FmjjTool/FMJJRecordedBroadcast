@@ -806,7 +806,7 @@ class CookieManagerDialog(QDialog):
         v.addWidget(hint)
 
         # 旧持久 profile 时代留下的登录态一次性迁移（必须在 profile 创建前读库）
-        if _import_legacy_profile(plat, auth_keys):
+        if plat != "tcdoc" and _import_legacy_profile(plat, auth_keys):
             self._whoami_cache.pop(plat, None)
             self._reload()
             self._notify()
@@ -1285,7 +1285,9 @@ class CookieManagerDialog(QDialog):
                         "Object.defineProperty(navigator, 'webdriver', "
                         "{get: () => undefined});")
                     # 回种已存 Cookie：页面自动保持登录，用户可直接点「已获取」
-                    stored = auth.load_cookies().get(plat, "")
+                    # 腾讯文档重新登录使用干净的临时上下文：扁平串已经丢失域信息，
+                    # 回种到 .qq.com 会让旧票与扫码新票并存，干扰跨域登录跳转。
+                    stored = "" if plat == "tcdoc" else auth.load_cookies().get(plat, "")
                     if plat == "kuaishou":
                         # 快手特例：过期的登录态票（web*_st/passToken/userId）与
                         # QQ 互联残留（pt_*/p_*/qrsig 等）回种后会同名覆盖新登录
@@ -1357,7 +1359,8 @@ class CookieManagerDialog(QDialog):
                                 pass
                             continue
                         try:
-                            for c in ctx.cookies():
+                            captured_cookies = ctx.cookies()
+                            for c in captured_cookies:
                                 n, val = c.get("name"), c.get("value")
                                 if n and val:
                                     prev = jar.get(n)
@@ -1366,12 +1369,13 @@ class CookieManagerDialog(QDialog):
                                         if prev not in alts:
                                             alts.append(prev)
                                     jar[n] = val
-                            # 腾讯文档：登录信息有一部分在 localStorage，
-                            # 只存 Cookie 会「看着登录了、打开文档又要登录」，
-                            # 所以每 6 秒抓一份完整 storage_state 备着
+                            # 只读取当前页面/框架：完整 storage_state 会临时开页，
+                            # 扫码跨域期间每 6 秒调用会反复切走正在操作的标签页。
                             if plat == "tcdoc" and poll_i % 4 == 0:
                                 try:
-                                    state["storage_state"] = ctx.storage_state()
+                                    from toolbox.tcdoc.session import capture_login_state
+                                    state["storage_state"] = capture_login_state(
+                                        ctx, state.get("storage_state"), cookies=captured_cookies)
                                 except Exception:
                                     pass
                             post_to_main(_refresh_cap)

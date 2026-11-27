@@ -12927,15 +12927,24 @@ function renderMusicTag(root) {
         openBtn.addEventListener('click', function () {
           if (current.url) window.open(current.url, '_blank', 'noopener');
         });
+        var versionsBtn = h('button', { class: 'btn', type: 'button',
+          disabled: !data.selected }, '采集版本');
+        versionsBtn.addEventListener('click', function () {
+          state.tcdoc.tab = 'versions';
+          tabs.querySelectorAll('.tab').forEach(function (button) { button.classList.remove('active'); });
+          renderTab();
+        });
 
         function start(url, label) {
           collectBtn.disabled = true;
           syncBtn.disabled = true;
           post(url, {}).then(function (job) {
-            watchJob(jobHost, job.job, function () {
+            watchJob(jobHost, job.job, function (completedJob) {
               collectBtn.disabled = false;
               syncBtn.disabled = false;
-              toast(label + '完成', 'success');
+              var versionFailures = (completedJob.result || {}).version_failures || 0;
+              toast(versionFailures ? label + '已保存，但有 ' + versionFailures
+                + ' 篇采集版本保存失败，请检查空间后重试' : label + '完成', versionFailures ? 'warning' : 'success');
               renderTcdoc(root);
             }, {
               cancelable: true,
@@ -12985,7 +12994,7 @@ function renderMusicTag(root) {
           h('div', { class: 'card', style: 'margin-bottom:12px' },
             h('div', { class: 'toolbar' },
               h('span', { class: 'muted small' }, '文档'), docSelect,
-              openBtn, collectBtn, syncBtn,
+              openBtn, versionsBtn, collectBtn, syncBtn,
               h('span', { class: 'spacer' }),
               data.auto ? h('span', { class: 'badge ok' }, '自动维护已开启')
                 : h('span', { class: 'badge' }, '自动维护已关闭')),
@@ -13000,6 +13009,18 @@ function renderMusicTag(root) {
 
         function renderTab() {
           tabHost.replaceChildren();
+          if (state.tcdoc.tab === 'versions') {
+            window.renderTcdocVersions(tabHost,
+              { h: h, api: api, withToken: withToken, cycleSort: cycleSort, sortRows: sortRows },
+              { doc_key: data.selected, onLatest: function () {
+                state.tcdoc.tab = 'sync';
+                tabs.querySelectorAll('.tab').forEach(function (button, index) {
+                  button.classList.toggle('active', TABS[index][0] === 'sync');
+                });
+                renderTab();
+              } });
+            return;
+          }
           if (state.tcdoc.tab === 'sync') {
             if (isTableDoc) renderSyncTab();
             else renderBodyTab();
@@ -13781,7 +13802,8 @@ function renderMusicTag(root) {
               + (images.failed ? ' · ' + images.failed + ' 张失败，可重新抓取重试' : '')
               + (capture.skipped ? ' · ' + capture.skipped + ' 篇抓取失败，已保留旧存档' : '')
               + (capture.complete === false ? ' · 页面列表未完整读取，缺失页面旧存档保留' : '')
-              + (capture.snapshot_failed ? ' · Markdown 快照写入失败，正文已存入数据库' : '');
+              + (capture.snapshot_failed ? ' · Markdown 快照写入失败，正文已存入数据库' : '')
+              + (capture.version_failed ? ' · 采集版本保存失败，请检查磁盘空间后重新抓取' : '');
             draw();
           }
 

@@ -167,6 +167,8 @@ class TCDocService:
                     job.log("页面列表未完整读取，缺失页面的旧存档保留")
                 if capture.get("snapshot_failed"):
                     job.log("正文与图片已存入数据库，Markdown 快照写入失败")
+                if capture.get("version_failed"):
+                    job.log("正文与图片已存入数据库，采集版本保存失败，请检查磁盘空间后重试")
                 return result
             except BodyImagesCancelled as exc:
                 raise JobCancelled("正文抓取已取消") from exc
@@ -379,8 +381,12 @@ class TCDocService:
                 job.log(f"{title}…")
                 result = action(on_status=lambda text: job.log(str(text)))
                 count = len(result) if isinstance(result, list) else 0
+                version_failures = sum(bool(item.get("version_error")) for item in result
+                                       if isinstance(item, dict)) if isinstance(result, list) else 0
+                if version_failures:
+                    job.log(f"当前数据已保存，但 {version_failures} 篇采集版本保存失败，请检查磁盘空间后重试")
                 job.log(f"{title}完成，处理 {count} 项")
-                return {"count": count}
+                return {"count": count, "version_failures": version_failures}
             finally:
                 self._lock.release()
         try:

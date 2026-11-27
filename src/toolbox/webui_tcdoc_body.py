@@ -85,6 +85,7 @@ def fetch(doc_key: str, on_status=None, is_cancelled=None) -> dict:
         "skipped": int(saved.get("skipped") or 0),
         "complete": bool(saved.get("complete", True)),
         "snapshot_failed": bool(saved.get("file_error")),
+        "version_failed": bool(saved.get("version_error")),
     }
     return outcome
 
