@@ -18,8 +18,8 @@ class LiveRecordPage(BasePage):
         from gui_qt.live_record_window import LiveRecordWindow
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         self.window = LiveRecordWindow(app, embedded=True)
         layout.addWidget(self.window)
         # 主窗口 / 托盘退出按这个引用做录制收尾，必须指向内嵌实例

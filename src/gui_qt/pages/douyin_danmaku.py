@@ -22,8 +22,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMenu, QPlainTextEdit, QPushButton, QSlider, QTableWidget,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
+    QMenu, QPlainTextEdit, QPushButton, QSizePolicy, QSlider, QTableWidget,
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -697,10 +697,10 @@ class DouyinDanmakuPage(BasePage):
         vv = QVBoxLayout(self.video_card)
         vv.setContentsMargins(12, 12, 12, 12)
         vv.setSpacing(12)
+        vv.setSizeConstraint(QLayout.SetMinimumSize)
         head = QHBoxLayout()
-        self.video_title = QLabel("回放（拖入 zip 回放包，弹幕与视频同步）",
-                                  styleSheet="font-weight: bold;")
-        self.video_title.setWordWrap(True)
+        self.video_title = QLabel("回放", styleSheet="font-weight: bold;")
+        self.video_title.setToolTip("拖入 zip 回放包，弹幕与视频同步")
         head.addWidget(self.video_title)
         head.addStretch(1)
         self.video_status_lbl = QLabel("", styleSheet="color: palette(placeholder-text); font-size: 11px;")
@@ -710,7 +710,8 @@ class DouyinDanmakuPage(BasePage):
         self.video_label = QLabel("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setWordWrap(True)
-        self.video_label.setMinimumHeight(260)
+        self.video_label.setMinimumHeight(160)
+        self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.video_label.setStyleSheet(
             "background: palette(window); border-radius: 4px; color: palette(placeholder-text); font-size: 14px;")
         vv.addWidget(self.video_label, 1)
@@ -829,7 +830,7 @@ class DouyinDanmakuPage(BasePage):
         self.video_card.setVisible(replay)
         self.replay_row_widget.setVisible(replay)
         if replay:
-            self.video_title.setText("回放（拖入 zip 回放包，弹幕与视频同步）")
+            self.video_title.setText("回放")
             if not self._replay:
                 self.video_label.setText("将 zip 回放包拖入窗口\n或点击「导入回放包」")
         else:
