@@ -373,7 +373,7 @@ class TaobaoExports:
                     missing = len(expected - download.downloaded)
                     message = "详情与 Excel 已保存"
                     if missing:
-                        message += f"；{missing} 张图片未下载，保留原图链接"
+                        message += f"；{missing} 张图片未下载，可稍后重试"
                     rows.append({"item_id": item_id, "status": "completed",
                                  "message": message, "filename": filename, "missing_images": missing})
                     if on_log:
