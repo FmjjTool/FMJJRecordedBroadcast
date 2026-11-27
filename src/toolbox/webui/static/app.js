@@ -3330,32 +3330,51 @@ function renderLivestreamSummary(root) {
 
       var wikiJobHost = h('div', { style: 'margin-bottom:12px' });
       var deployBtn = h('button', { class: 'btn primary', type: 'button' },
-        '一键部署并启动');
+        '更新全部仓库并启动 Wiki 网站');
+      var repoSelect = h('select', {
+        class: 'select',
+        title: '单独更新只同步代码，不构建或启动服务'
+      });
+      repoSelect.appendChild(h('option', { value: 'all' }, '全部仓库（3）'));
+      (data.repo_options || []).forEach(function (repo) {
+        repoSelect.appendChild(h('option', {
+          value: repo.name,
+          title: repo.description || ''
+        }, repo.label + '（' + repo.name + '）'));
+      });
+      repoSelect.disabled = !data.github.logged_in;
+      var pullBtn = h('button', { class: 'btn', type: 'button' },
+        '更新所选仓库');
+      pullBtn.disabled = !data.github.logged_in;
       var rebuildBtn = h('button', { class: 'btn', type: 'button' },
         '重建站点数据');
       var startBtn = h('button', { class: 'btn', type: 'button' },
-        '启动服务');
+        '启动 Wiki 网站 + API');
       var stopBtn = h('button', { class: 'btn', type: 'button' },
-        '停止服务');
+        '停止 Wiki 网站 + API');
       var collectBtn = h('button', { class: 'btn', type: 'button' },
         '采集今日');
       var openSiteBtn = h('button', { class: 'btn', type: 'button' },
         '打开站点');
       var wikiBusy = false;
 
-      function wikiAction(button, url, body, confirmText) {
+      function wikiAction(button, url, body, confirmText, extraControls) {
         if (wikiBusy) return;
         if (confirmText && !window.confirm(confirmText)) return;
         wikiBusy = true;
         var label = button.textContent;
-        button.disabled = true;
+        var controls = [button].concat(extraControls || []);
+        controls.forEach(function (control) { control.disabled = true; });
         button.textContent = '执行中…';
+        function unlock() {
+          controls.forEach(function (control) { control.disabled = false; });
+          button.textContent = label;
+        }
         post(url, body || {}).then(function (result) {
           if (!result || !result.job) {
             toast((result && result.summary) || '已完成', 'success');
             wikiBusy = false;
-            button.disabled = false;
-            button.textContent = label;
+            unlock();
             renderLocalWiki(root);
             return;
           }
@@ -3367,8 +3386,7 @@ function renderLivestreamSummary(root) {
             cancelable: true,
             onSettled: function (job) {
               wikiBusy = false;
-              button.disabled = false;
-              button.textContent = label;
+              unlock();
               if (job.status === 'error') {
                 toast('执行失败：' + (job.error || '未知错误'), 'error');
               }
@@ -3376,16 +3394,24 @@ function renderLivestreamSummary(root) {
           });
         }).catch(function (error) {
           wikiBusy = false;
-          button.disabled = false;
-          button.textContent = label;
+          unlock();
           toast('执行失败：' + error.message, 'error');
         });
       }
 
+      pullBtn.addEventListener('click', function () {
+        var selected = repoSelect.options[repoSelect.selectedIndex];
+        var label = selected ? selected.textContent : '所选仓库';
+        wikiAction(pullBtn, '/api/tools/localwiki/repositories/pull', {
+          repositories: repoSelect.value, confirmed: true
+        }, '仅更新“' + label + '”的源码，不会安装依赖、重建数据或启动服务。确认继续？',
+        [repoSelect]);
+      });
       deployBtn.addEventListener('click', function () {
         wikiAction(deployBtn, '/api/tools/localwiki/deploy', { confirmed: true },
-          '一键部署会：拉取 webwiki / webwiki-api 最新代码 → 安装 Python 与'
-          + ' Node 依赖 → 重建站点数据 → 构建前端 → 重启本地站点服务。'
+          '一键部署会：更新小程序主源、Wiki API、Wiki 网站前端 3 个仓库 → '
+          + '安装 Python 与 Node 依赖 → 重建站点数据 → 构建前端 → '
+          + '启动 Wiki 网站（网页 + API）。小程序主源只同步源码，不会在这里运行。'
           + '需要桌面端已登录 GitHub。确认继续？');
       });
       rebuildBtn.addEventListener('click', function () {
@@ -3403,6 +3429,7 @@ function renderLivestreamSummary(root) {
       collectBtn.addEventListener('click', function () {
         wikiAction(collectBtn, '/api/tools/localwiki/collect', {});
       });
+      openSiteBtn.textContent = '打开 Wiki 网站';
       openSiteBtn.addEventListener('click', function () {
         if (service.url) window.open(service.url, '_blank', 'noopener');
       });
@@ -3432,6 +3459,10 @@ function renderLivestreamSummary(root) {
               + (d.live ? ' / 直播记录 ' + num(d.live) : ''))
             : '-')),
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
+          h('span', { class: 'muted small' }, '更新范围'), repoSelect, pullBtn),
+        h('div', { class: 'muted small', style: 'margin-bottom:8px' },
+          data.note || '小程序主源只同步源码；Wiki 网站需同时启动网页与 API。'),
+        h('div', { class: 'toolbar' },
           deployBtn, rebuildBtn, startBtn, stopBtn, collectBtn, openSiteBtn,
           h('span', { class: 'muted small' }, '改端口仍在桌面端')),
         wikiJobHost));

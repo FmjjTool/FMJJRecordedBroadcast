@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from toolbox import webui_localwiki
+from toolbox.webui.jobs import JobCancelled
 
 
 class LocalWikiService:
@@ -17,6 +18,13 @@ class LocalWikiService:
         if not payload.get("confirmed"):
             raise ValueError("一键部署会拉取代码并重建站点，请先确认")
         return self._submit("wiki_deploy", payload, webui_localwiki.deploy)
+
+    def start_repo_pull(self, payload: dict) -> dict:
+        payload = dict(payload)
+        if not payload.get("confirmed"):
+            raise ValueError("请先确认要更新所选仓库")
+        return self._submit("wiki_repo_pull", payload,
+                            webui_localwiki.pull_repositories)
 
     def start_rebuild(self, payload: dict) -> dict:
         payload = dict(payload)
@@ -40,8 +48,15 @@ class LocalWikiService:
     def _submit(self, kind: str, payload: dict, handler) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
-        job = self.jobs.submit(
-            kind,
-            lambda task: handler(payload, on_log=task.log,
-                                 is_cancelled=lambda: bool(task.cancel_requested)))
+
+        def run(task):
+            try:
+                return handler(payload, on_log=task.log,
+                               is_cancelled=lambda: bool(task.cancel_requested))
+            except Exception as exc:
+                if task.cancel_requested:
+                    raise JobCancelled(str(exc)) from exc
+                raise
+
+        job = self.jobs.submit(kind, run)
         return {"job": job.id}

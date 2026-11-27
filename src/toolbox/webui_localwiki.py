@@ -1,4 +1,4 @@
-"""WebUI 资料站：部署状态、站点访问统计、源文档链接，以及部署 / 启停 / 采集。
+"""WebUI 资料站：仓库同步、站点启停、访问统计与源文档链接。
 
 可执行：一键部署并启动（拉取私有仓库 → 装依赖 → 重建站点数据 → 构建前端 → 启动）、
 重建站点数据、启动 / 停止服务、采集今日统计、保存后台密码。
@@ -40,24 +40,25 @@ def _ts(value) -> str:
     return str(value or "")
 
 
-def _repo_rows(gitops) -> list[dict]:
+def _repo_rows(gitops, wiki_cfg) -> list[dict]:
     rows = []
     for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
+        label = wiki_cfg.REPO_LABELS.get(name, name)
         try:
             state = gitops.repo_state(name)
         except Exception as exc:
-            rows.append({"name": name, "exists": False,
-                         "text": f"{name}：{str(exc)[:60]}"})
+            rows.append({"name": name, "label": label, "exists": False,
+                         "text": f"{label}：{str(exc)[:60]}"})
             continue
         if state.get("exists"):
             extra = "（有本地改动）" if state.get("dirty") else ""
-            rows.append({"name": name, "exists": True,
+            rows.append({"name": name, "label": label, "exists": True,
                          "commit": state.get("commit") or "?",
                          "dirty": bool(state.get("dirty")),
-                         "text": f"{name}@{state.get('commit') or '?'}{extra}"})
+                         "text": f"{label}（{name}）@{state.get('commit') or '?'}{extra}"})
         else:
-            rows.append({"name": name, "exists": False,
-                         "text": f"{name}：未拉取"})
+            rows.append({"name": name, "label": label, "exists": False,
+                         "text": f"{label}（{name}）：未拉取"})
     return rows
 
 
@@ -69,7 +70,7 @@ def overview() -> dict:
     except Exception:
         creds = {}
     logged_in = bool(creds.get("token"))
-    repos = _repo_rows(gitops)
+    repos = _repo_rows(gitops, wiki_cfg)
     try:
         data = deploy.data_status()
     except Exception:
@@ -117,6 +118,7 @@ def overview() -> dict:
     return {
         "github": {"logged_in": logged_in},
         "repos": repos,
+        "repo_options": list(wiki_cfg.REPO_OPTIONS),
         "data": {
             "exists": bool(data.get("exists")),
             "mtime": _ts(data.get("mtime")),
@@ -163,12 +165,12 @@ def overview() -> dict:
         },
         "docs": docs,
         "has_password": bool(analytics.has_password()),
-        "note": "可一键部署并启动、重建数据、启停服务与采集今日；改端口仍在桌面端。",
+        "note": "小程序主源只同步源码；Wiki 网站由网页 + API 组成，需一起启动。",
     }
 
 
 def deploy(payload: dict, on_log=None, is_cancelled=None) -> dict:
-    """一键部署并启动：拉代码 → 装依赖 → 重建站点数据 → 构建前端 → 启动服务。"""
+    """一键部署并启动：更新三仓库 → 装依赖 → 重建 / 构建 → 启动网页 + API。"""
     analytics, wiki_cfg, wiki_creds, deploy_mod, _gitops, _images, server = \
         _webwiki()
     log = on_log or (lambda _msg: None)
@@ -194,6 +196,29 @@ def deploy(payload: dict, on_log=None, is_cancelled=None) -> dict:
     url = svc.start(log)
     return {"url": url, "status": svc.status(),
             "summary": "部署完成，站点已启动：" + url}
+
+
+def pull_repositories(payload: dict, on_log=None, is_cancelled=None) -> dict:
+    """更新单个或全部仓库，只同步代码，不构建或启动服务。"""
+    _analytics, wiki_cfg, wiki_creds, _deploy, gitops, _images, _server = _webwiki()
+    if not payload.get("confirmed"):
+        raise ValueError("请先确认要更新所选仓库")
+    creds = wiki_creds.load() or {}
+    token = str(creds.get("token") or "")
+    if not token:
+        raise ValueError("尚未登录 GitHub，请先在桌面端资料站登录")
+    root = wiki_cfg.root_dir()
+    log = on_log or (lambda _msg: None)
+
+    def safe_log(message):
+        text = str(message).replace(str(root), "资料站目录")
+        log(text)
+
+    summary = gitops.pull_repositories(
+        payload.get("repositories"), token, safe_log, root,
+        is_cancelled=is_cancelled)
+    return {"repositories": summary,
+            "summary": "仓库已更新：" + summary + "。网站服务未启动。"}
 
 
 def rebuild(payload: dict, on_log=None, is_cancelled=None) -> dict:

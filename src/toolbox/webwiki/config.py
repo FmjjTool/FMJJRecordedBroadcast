@@ -36,6 +36,17 @@ REPO_BRANCHES = {
     "webwiki-api": "main",
 }
 
+# 仓库同步和可运行的网站服务是两个不同范围；此映射供桌面与 WebUI 共用。
+REPO_OPTIONS = (
+    {"name": "mandisa-miniprogram", "label": "小程序主源",
+     "description": "仅同步和查看源码，不在本地资料站启动"},
+    {"name": "webwiki-api", "label": "Wiki API",
+     "description": "本地 Wiki 网站的数据接口"},
+    {"name": "webwiki", "label": "Wiki 网站前端",
+     "description": "本地 Wiki 网站的页面"},
+)
+REPO_LABELS = {item["name"]: item["label"] for item in REPO_OPTIONS}
+
 # ==================== 目录 ====================
 
 def root_dir() -> Path:

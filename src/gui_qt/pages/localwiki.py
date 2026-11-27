@@ -1,8 +1,9 @@
 """本地资料站：同步小程序主源与 Web 投影，读取监控数据重建并一键起站。
 
-页面只做服务启动器：
-- GitHub 登录状态由统一管理入口维护，未登录时锁定拉取/部署
-- 拉取代码 → 安装依赖 → 读取腾讯文档监控本地表格重建站点库 → 构建前端 → 启动站点
+页面提供仓库同步与本地 Wiki 网站启停：
+- 仓库可单独或全部更新；小程序主源只同步 / 查看源码，不在本地资料站启动
+- Wiki 网站由前端和 API 组成，启动时一起运行
+- 一键流程更新全部仓库 → 安装依赖 → 重建站点库 → 构建前端 → 启动 Wiki 网站
 - 启动后自动打开系统浏览器，也可随时点「打开网站」
 - 数据复用「腾讯文档监控」已同步的 tables.db，不重复联网拉取
 - 站点访问监控：查询 mandisa.wiki 后台统计（内部 analytics API），按日期落本地库并支持每日定时
@@ -155,15 +156,49 @@ class LocalWikiPage(BasePage):
         return card
 
     def _build_actions_card(self):
-        card, box = self._card("部署与启动", "登录后点「一键部署」即可全自动完成")
-        self.deploy_btn = QPushButton("一键部署并启动")
+        card, box = self._card(
+            "项目同步与网站启动",
+            "小程序主源可单独更新；Wiki 网站由前端与 API 一起运行")
+        self.deploy_btn = QPushButton("更新全部仓库并启动 Wiki 网站")
         self.deploy_btn.setObjectName("wikiPrimary")
         self.deploy_btn.setMinimumHeight(40)
         self.deploy_btn.setToolTip(
-            "拉取代码 → 安装依赖 → 读取腾讯文档监控数据重建站点库 → 构建前端 → 启动站点")
+            "更新小程序主源、Wiki API 和 Wiki 网站前端 → 安装依赖 → "
+            "重建站点数据 → 构建前端 → 启动 Wiki 网站（网页 + API）")
         self.deploy_btn.clicked.connect(self._deploy)
         box.addWidget(self.deploy_btn)
         self._task_buttons.append(self.deploy_btn)
+
+        scope_help = QLabel(
+            "一键流程会更新全部 3 个仓库；网站已运行时会先停止旧服务再启动。"
+            "小程序仓库只同步源码，不会在这里运行。")
+        scope_help.setObjectName("wikiMuted")
+        scope_help.setWordWrap(True)
+        box.addWidget(scope_help)
+
+        repo_row = QHBoxLayout()
+        repo_row.setSpacing(8)
+        repo_row.addWidget(QLabel("更新范围"))
+        self.repo_scope = QComboBox()
+        self.repo_scope.setMinimumWidth(250)
+        self.repo_scope.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.repo_scope.setMinimumContentsLength(14)
+        self.repo_scope.addItem("全部仓库（3）", "all")
+        for option in wiki_cfg.REPO_OPTIONS:
+            label = f"{option['label']}（{option['name']}）"
+            self.repo_scope.addItem(label, option["name"])
+        self.repo_scope.setToolTip(
+            "单独更新只同步所选代码，不安装依赖、不重建数据，也不启动服务")
+        repo_row.addWidget(self.repo_scope)
+        self.pull_btn = QPushButton("更新所选仓库")
+        self.pull_btn.setObjectName("wikiButton")
+        self.pull_btn.setMinimumHeight(34)
+        self.pull_btn.clicked.connect(self._pull)
+        repo_row.addWidget(self.pull_btn)
+        repo_row.addStretch(1)
+        box.addLayout(repo_row)
+        self._task_buttons.append(self.pull_btn)
 
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
@@ -187,16 +222,14 @@ class LocalWikiPage(BasePage):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
         buttons = [
-            ("拉取/更新代码", self._pull),
             ("安装依赖", self._install_deps),
             ("重建站点数据", self._sync_docs),
-            ("构建前端", self._build_frontend),
-            ("▶ 启动服务", self._start_service),
-            ("打开网站", self._open_site),
-            ("停止服务", self._stop_service),
+            ("构建 Wiki 前端", self._build_frontend),
+            ("启动 Wiki 网站 + API", self._start_service),
+            ("打开 Wiki 网站", self._open_site),
+            ("停止 Wiki 网站 + API", self._stop_service),
             ("打开目录", self._open_dir),
         ]
-        self.pull_btn = None
         self.deps_btn = None
         self.sync_btn = None
         self.build_btn = None
@@ -211,8 +244,8 @@ class LocalWikiPage(BasePage):
             btn.clicked.connect(slot)
             grid.addWidget(btn, index // 3, index % 3)
             self._task_buttons.append(btn)
-            key = ("pull", "deps", "sync", "build",
-                   "start", "open", "stop", "dir")[index]
+            key = ("deps", "sync", "build", "start",
+                   "open", "stop", "dir")[index]
             setattr(self, f"{key}_btn", btn)
         for column in range(3):
             grid.setColumnStretch(column, 1)
@@ -535,16 +568,17 @@ class LocalWikiPage(BasePage):
 
         lines = []
         for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
+            label = wiki_cfg.REPO_LABELS.get(name, name)
             try:
                 state = gitops.repo_state(name)
             except Exception as exc:  # noqa: BLE001
-                lines.append(f"{name}：{exc}")
+                lines.append(f"{label}：{exc}")
                 continue
             if state.get("exists"):
                 extra = "（有本地改动）" if state.get("dirty") else ""
-                lines.append(f"{name}@{state.get('commit') or '?'}{extra}")
+                lines.append(f"{label}@{state.get('commit') or '?'}{extra}")
             else:
-                lines.append(f"{name}：未拉取")
+                lines.append(f"{label}：未拉取")
         self.repo_status.setText("　".join(lines))
 
         status = deploy.data_status()
@@ -560,7 +594,8 @@ class LocalWikiPage(BasePage):
                 text += f" · 本地图片 {local_images} 张优先"
             self.data_status.setText(text)
         else:
-            self.data_status.setText("尚未重建（点「重建站点数据」或「一键部署」）")
+            self.data_status.setText(
+                "尚未重建（点「重建站点数据」或「更新全部仓库并启动 Wiki 网站」）")
         self.path_label.setText(str(wiki_cfg.root_dir()))
         self._update_service_label()
         self._refresh_actions()
@@ -588,6 +623,7 @@ class LocalWikiPage(BasePage):
         idle = not self._busy
 
         self.pull_btn.setEnabled(idle and auth_ok)
+        self.repo_scope.setEnabled(idle and auth_ok)
         self.deps_btn.setEnabled(idle and api_ok and web_ok)
         self.sync_btn.setEnabled(idle and api_ok and venv_ok)
         self.build_btn.setEnabled(idle and web_ok and node_ok)
@@ -681,7 +717,11 @@ class LocalWikiPage(BasePage):
         if not self._require_auth():
             return
         token = wiki_creds.token()
-        self._start_task("拉取代码", lambda log: gitops.pull_all(token, log))
+        root = wiki_cfg.root_dir()
+        repositories = self.repo_scope.currentData()
+        self._start_task(
+            "更新仓库",
+            lambda log: gitops.pull_repositories(repositories, token, log, root))
 
     def _install_deps(self):
         root = wiki_cfg.root_dir()
@@ -722,11 +762,13 @@ class LocalWikiPage(BasePage):
             self._update_service_label()
             self._refresh_actions()
 
-        self._start_task("启动服务", work, on_ok=after)
+        self._start_task("启动 Wiki 网站 + API", work, on_ok=after)
 
     def _open_site(self):
         if not self.service.running:
-            QMessageBox.information(self, "打开网站", "服务还没启动，请先点「▶ 启动服务」。")
+            QMessageBox.information(
+                self, "打开 Wiki 网站",
+                "Wiki 网站尚未启动，请先点「启动 Wiki 网站 + API」。")
             return
         server.open_site(self.service.url)
 
@@ -735,7 +777,7 @@ class LocalWikiPage(BasePage):
             self.service.stop(log)
             return "服务已停止"
 
-        self._start_task("停止服务", work)
+        self._start_task("停止 Wiki 网站 + API", work)
 
     DEPLOY_RETRIES = 1  # 首次失败后自动重新部署的次数
 
@@ -754,7 +796,7 @@ class LocalWikiPage(BasePage):
             self._update_service_label()
             self._refresh_actions()
 
-        self._start_task("一键部署",
+        self._start_task("更新全部仓库并启动 Wiki 网站",
                          lambda log: self._deploy_with_retry(root, token, log),
                          on_ok=after, on_error=self._deploy_failed)
 
@@ -778,13 +820,13 @@ class LocalWikiPage(BasePage):
             f"请查看下方日志里中断的那一步再重试。")
 
     def _deploy_once(self, root, token, log):
-        """拉取代码 → 安装依赖 → 重建站点数据 → 构建前端 → 启动服务。"""
+        """更新全部仓库 → 安装依赖 → 重建数据 → 构建 Wiki → 启动网页 + API。"""
         if self.service.running:
             log("检测到服务正在运行，先停止旧服务…")
             self.service.stop(log)
         self.service = server.SiteService(root)
         steps = (
-            ("拉取代码", lambda: self._deploy_pull(root, token, log)),
+            ("更新全部仓库", lambda: self._deploy_pull(root, token, log)),
             ("安装依赖", lambda: (deploy.ensure_python_env(root, log),
                                  deploy.ensure_node_deps(root, log))),
             ("重建站点数据", lambda: deploy.sync_docs(root, log)),
@@ -799,14 +841,13 @@ class LocalWikiPage(BasePage):
             run()
         if self._deploy_cancel:
             raise _DeployCancelled(total - 1, total)
-        post_to_main(self._deploy_progress_step, total, total, "启动服务")
-        log(f"[{total}/{total}] 启动服务")
+        post_to_main(self._deploy_progress_step, total, total,
+                     "启动 Wiki 网站 + API")
+        log(f"[{total}/{total}] 启动 Wiki 网站 + API")
         return self._deploy_start(root, log)
 
     def _deploy_pull(self, root, token, log):
-        gitops.ensure_repo("mandisa-miniprogram", token, log, root)
-        gitops.ensure_repo("webwiki-api", token, log, root)
-        gitops.ensure_repo("webwiki", token, log, root)
+        gitops.pull_repositories("all", token, log, root)
 
     def _deploy_start(self, root, log):
         try:
