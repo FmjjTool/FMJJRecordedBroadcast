@@ -28,13 +28,25 @@ class CollectToolCancelled(Exception):
     """抓取任务被取消。"""
 
 
+def _comments_mode(payload: dict, platform: str) -> str:
+    """兼容旧客户端自动识别；显式模式只接受当前平台支持的值。"""
+    mode = str(payload.get("mode") or "").strip()
+    if mode not in ("", "video", "author"):
+        raise ValueError("不支持的抓取模式，请选择视频或作者")
+    if mode == "author" and platform != "douyin":
+        raise ValueError("当前平台仅支持视频模式")
+    return mode
+
+
 def ensure_comments(payload: dict) -> None:
     """抓取前校验（请求线程执行，失败直接 400）。"""
     platform = str(payload.get("platform") or "douyin").strip()
     if platform not in _COMMENT_BACKENDS:
         raise ValueError("未知平台，只支持抖音 / B站 / 微博")
+    mode = _comments_mode(payload, platform)
     if not str(payload.get("url") or "").strip():
-        raise ValueError("请输入视频链接或 ID")
+        raise ValueError("请输入作者主页链接或 sec_uid" if mode == "author"
+                         else "请输入视频链接或 ID")
     if not payload.get("png", True) and not payload.get("raw", True):
         raise ValueError("请至少选择一种导出内容（长图 / 原始数据）")
 
@@ -63,9 +75,11 @@ def comments_run(payload: dict, on_progress=None, on_log=None,
     platform = str(payload.get("platform") or "douyin").strip()
     if platform not in _COMMENT_BACKENDS:
         raise ValueError("未知平台，只支持抖音 / B站 / 微博")
+    mode = _comments_mode(payload, platform)
     text = str(payload.get("url") or "").strip()
     if not text:
-        raise ValueError("请输入视频链接或 ID")
+        raise ValueError("请输入作者主页链接或 sec_uid" if mode == "author"
+                         else "请输入视频链接或 ID")
     try:
         pages = int(payload.get("pages") or 5)
     except (TypeError, ValueError):
@@ -94,6 +108,10 @@ def comments_run(payload: dict, on_progress=None, on_log=None,
     kind, vid = be.parse_input(text)
     if not kind or not vid:
         raise ValueError("无法识别输入（需要视频链接或 ID）")
+    if mode == "author" and kind != "sec_uid":
+        raise ValueError("作者模式需要抖音作者主页链接或 sec_uid")
+    if mode == "video" and kind == "sec_uid":
+        raise ValueError("视频模式需要视频链接或 ID；作者主页请切换为作者模式")
     _log(on_log, f"{platform_name} · 识别到 {kind}：{vid}")
 
     plan = []

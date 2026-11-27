@@ -879,6 +879,7 @@ class TcDocMappingPanel(QWidget):
             if not quiet:
                 QMessageBox.information(self, "无法匹配", "请先载入本地文件并连接字段")
             return
+        previous_key = self.key_combo.currentData()
         suggested = workflow.suggest_mapping(self.local_headers, self.fields)
         matched = 0
         for header in self.local_headers:
@@ -893,6 +894,9 @@ class TcDocMappingPanel(QWidget):
                 combo.setCurrentIndex(index)
                 matched += 1
         self._rebuild_key_combo()
+        if not previous_key:
+            key = workflow.suggest_key(self.local_headers, self.mapping, self.field_by_id)
+            self.key_combo.setCurrentIndex(self.key_combo.findData(key))
         if not quiet:
             self.log(f"同名匹配 {matched} 列")
 
