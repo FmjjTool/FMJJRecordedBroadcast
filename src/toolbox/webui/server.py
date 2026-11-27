@@ -37,6 +37,7 @@ _STATIC = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/music_pictures.js": ("music_pictures.js", "text/javascript; charset=utf-8"),
     "/music_match.js": ("music_match.js", "text/javascript; charset=utf-8"),
+    "/music_rename.js": ("music_rename.js", "text/javascript; charset=utf-8"),
     "/tcdoc_versions.js": ("tcdoc_versions.js", "text/javascript; charset=utf-8"),
     "/performance_reports.js": ("performance_reports.js", "text/javascript; charset=utf-8"),
     "/cover_automation.js": ("cover_automation.js", "text/javascript; charset=utf-8"),

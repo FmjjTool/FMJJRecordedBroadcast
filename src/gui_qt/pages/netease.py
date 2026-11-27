@@ -399,6 +399,10 @@ class NeteasePage(BasePage):
             "下载失败或仅试听时，自动到其他平台找同名曲：酷我→酷狗→酷狗概念版→网易云\n"
             "（酷狗概念版需扫码登录；网易云需已登录）")
         bottom.addWidget(self.fallback_check)
+        self.cover_check = QCheckBox("下载封面")
+        self.cover_check.setChecked(self._load_cover_download())
+        self.cover_check.toggled.connect(self._save_cover_download)
+        bottom.addWidget(self.cover_check)
         bottom.addWidget(QLabel("音质:"))
         self.quality_menu = QComboBox()
         bottom.addWidget(self.quality_menu)
@@ -455,6 +459,28 @@ class NeteasePage(BasePage):
             save_convert_config(cfg)
         except Exception:
             pass
+
+    @staticmethod
+    def _load_cover_download() -> bool:
+        try:
+            return bool(load_convert_config().get("music_download_cover", True))
+        except Exception:
+            return True
+
+    def _save_cover_download(self, checked):
+        try:
+            cfg = load_convert_config()
+            cfg["music_download_cover"] = bool(checked)
+            save_convert_config(cfg)
+        except Exception:
+            pass
+
+    def _set_single_download_selection(self, row, checkbox):
+        """让单曲详情复用统一的「下载选中」操作。"""
+        checkbox.setChecked(True)
+        checkbox.setToolTip("单曲已加入下载选中")
+        self.results = [row]
+        self.check_boxes = [checkbox]
 
     # ===================== 导出位置（默认/固定 双选项） =====================
     def _on_export_loc_changed(self, index):
@@ -1253,10 +1279,9 @@ class NeteasePage(BasePage):
         txt = QLabel("\n".join(lines))
         txt.setWordWrap(True)
         h.addWidget(txt, 1)
-        dl_btn = QPushButton("立即下载")
-        dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 12px; border-radius: 4px;")
-        dl_btn.clicked.connect(self._download_single_song)
-        h.addWidget(dl_btn, 0, Qt.AlignBottom)
+        selected = QCheckBox("选中")
+        self._set_single_download_selection(_song_to_row(song), selected)
+        h.addWidget(selected, 0, Qt.AlignBottom)
         self.detail_layout.addWidget(info_card)
 
         lyric = song.lyrics or ""
@@ -1285,7 +1310,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("单曲解析完成，可立即下载或查看歌词")
+        self.status_label.setText("单曲解析完成，已加入下载选中，可取消勾选")
 
     def _render_single_song_netease(self, song):
         self.single_song_id = song.get("id")
@@ -1304,11 +1329,9 @@ class NeteasePage(BasePage):
         )
         txt = QLabel(info_text)
         h.addWidget(txt, 1)
-        # 单曲下载按钮（独立）
-        dl_btn = QPushButton("立即下载")
-        dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 6px 12px; border-radius: 4px;")
-        dl_btn.clicked.connect(self._download_single_song)
-        h.addWidget(dl_btn, 0, Qt.AlignBottom)
+        selected = QCheckBox("选中")
+        self._set_single_download_selection(song, selected)
+        h.addWidget(selected, 0, Qt.AlignBottom)
         self.detail_layout.addWidget(info_card)
 
         # 歌词
@@ -1339,7 +1362,7 @@ class NeteasePage(BasePage):
             lbl = QLabel("（暂无歌词）")
             lbl.setStyleSheet("color: #888; padding: 8px;")
             self.detail_layout.addWidget(lbl)
-        self.status_label.setText("单曲解析完成，可立即下载或查看歌词")
+        self.status_label.setText("单曲解析完成，已加入下载选中，可取消勾选")
 
     # ===================== 渲染：歌单解析 =====================
     def _render_playlist(self, pl):
@@ -1716,84 +1739,7 @@ class NeteasePage(BasePage):
 
         run_bg(work, done)
 
-    # ===================== 下载：单曲立即下载 =====================
-    def _download_single_song(self):
-        if self.platform == "netease":
-            self._download_single_netease()
-            return
-        song = self.single_song
-        if not song:
-            self.app.toast("请先解析单曲", "warning")
-            return
-        quality = self.quality_menu.currentData() or ""
-        use_fallback = self.fallback_check.isChecked()
-        self.download_btn.setEnabled(False)
-        self.status_label.setText("下载中..." if not use_fallback else "下载中（失败将自动换源）...")
-
-        def work():
-            from music.downloader import download_song_smart
-            from toolbox.config_manager import get_music_download_dir
-            out_dir = str(get_music_download_dir())
-            try:
-                return download_song_smart(song, out_dir, quality, fallback=use_fallback)
-            except Exception as e:
-                from music.downloader import DownloadResult
-                return DownloadResult(error_message=str(e))
-
-        def done(result, err):
-            self.download_btn.setEnabled(True)
-            if err:
-                self.status_label.setText(f"{err}")
-                return
-            via = f"（经{result.via_platform}换源）" if result.via_platform else ""
-            actual = f" · {result.quality}" if result.quality else ""
-            if result.success:
-                if result.is_preview:
-                    self.status_label.setText(f"仅试听片段：{os.path.basename(result.file_path)}{actual}{via}")
-                else:
-                    self.status_label.setText(f"已下载 {os.path.basename(result.file_path)}{actual}{via}")
-            else:
-                self.status_label.setText(f"{result.error_message[:80]}")
-
-        run_bg(work, done)
-
-    def _download_single_netease(self):
-        if not self.single_song_id:
-            self.app.toast("请先解析单曲", "warning")
-            return
-        quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
-        sid = int(self.single_song_id)
-        self.download_btn.setEnabled(False)
-        self.status_label.setText("下载中...")
-
-        def work():
-            from netease import MusicDownloader
-            from toolbox.config_manager import get_music_download_dir
-            from auth import get_netease_cookie
-            out_dir = str(get_music_download_dir())
-            dl = MusicDownloader(download_dir=out_dir, cookie_string=get_netease_cookie())
-            try:
-                r = dl.download_music_file(sid, quality)
-                if r and r.success:
-                    return (True, os.path.basename(r.file_path), "")
-                return (False, "", (r.error_message if r else "失败"))
-            except Exception as e:
-                return (False, "", str(e))
-
-        def done(result, err):
-            self.download_btn.setEnabled(True)
-            if err:
-                self.status_label.setText(f"{err}")
-                return
-            ok, fname, fmsg = result
-            if ok:
-                self.status_label.setText(f"已下载 {fname}")
-            else:
-                self.status_label.setText(f"{fmsg[:60]}")
-
-        run_bg(work, done)
-
-    # ===================== 下载：批量下载（歌曲/专辑） =====================
+    # ===================== 下载：批量下载（单曲/歌曲/专辑） =====================
     def _download_selected(self):
         selected = [self.results[i] for i, cb in enumerate(self.check_boxes)
                     if cb.isChecked() and i < len(self.results)]
@@ -1809,6 +1755,7 @@ class NeteasePage(BasePage):
 
         quality = self.quality_menu.currentData() or ""
         use_fallback = self.fallback_check.isChecked()
+        include_cover = self.cover_check.isChecked()
         self.download_btn.setEnabled(False)
         self.status_label.setText("下载中..." if not use_fallback else "下载中（失败将自动换源）...")
         from gui_qt.download_float import get_float
@@ -1855,7 +1802,8 @@ class NeteasePage(BasePage):
                                     platform=self.platform)
                 name = f"{item.get('name', '')} - {item.get('artists', '')}".strip(" -")
                 card.handle_event("start", name[:40] or f"歌曲 {song.song_id}")
-                r = download_song_smart(song, out_dir, quality, fallback=use_fallback)
+                r = download_song_smart(song, out_dir, quality, fallback=use_fallback,
+                                        include_cover=include_cover)
                 card.handle_event("done", name[:40] or f"歌曲 {song.song_id}",
                                   bool(r and r.success))
                 return r
@@ -1908,6 +1856,7 @@ class NeteasePage(BasePage):
     def _download_selected_multi(self, selected):
         """五平台勾选批量下载：网易云走 MusicDownloader，其余走 download_song_smart。"""
         use_fallback = self.fallback_check.isChecked()
+        include_cover = self.cover_check.isChecked()
         self.download_btn.setEnabled(False)
         self.status_label.setText(
             "下载中（五平台混合，失败将自动换源）..." if use_fallback
@@ -1935,7 +1884,8 @@ class NeteasePage(BasePage):
                         from netease import MusicDownloader
                         dl = MusicDownloader(download_dir=out_dir,
                                              cookie_string=get_netease_cookie())
-                        r = dl.download_music_file(int(item.get("id")), "jymaster")
+                        r = dl.download_music_file(
+                            int(item.get("id")), "jymaster", include_cover=include_cover)
                         ok = bool(r and r.success)
                         if not ok:
                             err = getattr(r, "error_message", "") or "失败"
@@ -1950,7 +1900,8 @@ class NeteasePage(BasePage):
                                 duration=(item.get("duration") or 0) // 1000,
                                 cover_url=item.get("picUrl") or "",
                                 platform=key)
-                        r = download_song_smart(song, out_dir, "", fallback=use_fallback)
+                        r = download_song_smart(song, out_dir, "", fallback=use_fallback,
+                                                include_cover=include_cover)
                         ok = bool(r and r.success and not r.is_preview)
                         preview = bool(r and r.success and r.is_preview)
                         via = bool(getattr(r, "via_platform", ""))
@@ -2006,6 +1957,7 @@ class NeteasePage(BasePage):
 
     def _download_selected_netease(self, selected):
         quality = [k for k, v in QUALITY_NAMES.items() if v == self.quality_menu.currentText()][0]
+        include_cover = self.cover_check.isChecked()
         # 歌手主页/专辑搜索结果：行上带 _kind=album 的展开成整张专辑
         album_rows = [r for r in selected if r.get("_kind") == "album"]
         song_rows = [r for r in selected if r.get("_kind") != "album"]
@@ -2050,7 +2002,7 @@ class NeteasePage(BasePage):
                 card.handle_event("start", name)
                 try:
                     dl = MusicDownloader(download_dir=out_dir, cookie_string=cookie_string)
-                    r = dl.download_music_file(sid, quality)
+                    r = dl.download_music_file(sid, quality, include_cover=include_cover)
                     okf = bool(r and r.success)
                     errm = (r.error_message if r else "失败")
                 except Exception as e:

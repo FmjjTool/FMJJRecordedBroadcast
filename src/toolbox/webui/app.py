@@ -558,7 +558,9 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/music/search", start_music_search)
 
     def start_music_download(req):
-        return music_download.start_download(dict(req.json or {}))
+        payload = dict(req.json or {})
+        payload.setdefault("include_cover", True)
+        return music_download.start_download(payload)
     server.post("/api/tools/music/download", start_music_download)
     server.get("/api/music-tag", lambda req: music_tag.overview(
         req.q_int("limit", 120, 1, 300)))
@@ -572,6 +574,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/music-tag/history",
                lambda req: music_tag.history(req.q("rel", "")))
     server.get("/api/music-tag/match/options", lambda req: music_tag.match_options())
+    server.get("/api/music-tag/rename/options", lambda req: music_tag.rename_options())
+    server.post("/api/tools/music-tag/rename/preview",
+                lambda req: music_tag.start_rename_preview(dict(req.json or {})))
+    server.post("/api/tools/music-tag/rename/apply",
+                lambda req: music_tag.start_rename_apply(dict(req.json or {})))
     server.post("/api/tools/music-tag/match/preview",
                 lambda req: music_tag.start_match_preview(dict(req.json or {})))
     server.post("/api/tools/music-tag/match/apply",

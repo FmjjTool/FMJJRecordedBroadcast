@@ -11031,6 +11031,7 @@ function renderLivestreamSummary(root) {
       toast('音质列表读取失败，当前使用最高可用', 'warning');
     });
     var fallbackBox = h('input', { type: 'checkbox', checked: 'checked' });
+    var coverBox = h('input', { type: 'checkbox', checked: 'checked' });
     var downloadBtn = h('button', {
       class: 'btn', type: 'button', disabled: true
     }, '下载选中（0）');
@@ -11147,8 +11148,10 @@ function renderLivestreamSummary(root) {
       busy = true;
       downloadBtn.disabled = true;
       downloadBtn.textContent = '下载中…';
+      fallbackBox.disabled = coverBox.disabled = true;
       post('/api/tools/music/download', {
-        items: picked, quality: qualitySel.value, fallback: fallbackBox.checked
+        items: picked, quality: qualitySel.value, fallback: fallbackBox.checked,
+        include_cover: coverBox.checked
       }).then(function (result) {
         watchJob(jobHost, result.job, function (job) {
           var outcome = job.result || {};
@@ -11181,6 +11184,7 @@ function renderLivestreamSummary(root) {
           cancelable: true,
           onSettled: function (job) {
             busy = false;
+            fallbackBox.disabled = coverBox.disabled = false;
             syncSelection();
             if (job.status === 'error') {
               toast('下载失败：' + (job.error || '未知错误'), 'error');
@@ -11189,6 +11193,7 @@ function renderLivestreamSummary(root) {
         });
       }).catch(function (error) {
         busy = false;
+        fallbackBox.disabled = coverBox.disabled = false;
         syncSelection();
         toast('下载失败：' + error.message, 'error');
       });
@@ -11206,6 +11211,7 @@ function renderLivestreamSummary(root) {
         qualitySel,
         h('label', { class: 'muted small' },
           fallbackBox, ' 失败 / 试听时自动换源'),
+        h('label', { class: 'muted small' }, coverBox, ' 下载封面'),
         h('span', { style: 'flex:1' }), downloadBtn),
       resultHost, jobHost);
   }
@@ -11268,11 +11274,19 @@ function renderMusicTag(root) {
       var matchHost = h('div');
       var matchPanel = null;
       var matchBusy = false;
+      var renameHost = h('div');
+      var renamePanel = null;
+      var renameBusy = false;
       var scanBusy = false;
       var matchButton = h('button', { class: 'btn', type: 'button' }, '自动匹配');
+      var renameButton = h('button', { class: 'btn', type: 'button' }, '按标签批量改名');
 
-      function prepareMatch() {
-        if (scanBusy) { toast('音乐文件仍在扫描，请结束后再匹配', 'info'); return false; }
+      function syncBatchButtons() {
+        addFileBtn.disabled = addFolderBtn.disabled = matchButton.disabled = renameButton.disabled
+          = scanBusy || matchBusy || renameBusy;
+      }
+      function prepareBatch() {
+        if (scanBusy || matchBusy || renameBusy) { toast('当前任务尚未结束，请稍后重试', 'info'); return false; }
         if (!canLeaveEditor()) return false;
         ++editorVersion;
         editorHost.replaceChildren();
@@ -11282,15 +11296,15 @@ function renderMusicTag(root) {
         return true;
       }
       matchButton.addEventListener('click', function () {
-        if (matchBusy) return;
+        if (matchBusy || renameBusy || scanBusy) return;
+        renameHost.replaceChildren(); renamePanel = null;
         if (!matchPanel) matchPanel = window.createMusicMatchPanel(matchHost, {
           h: h, api: api, post: post, watchJob: watchJob, toast: toast,
           cycleSort: cycleSort, sortRows: sortRows,
-          getFiles: function () { return files; }, canStart: prepareMatch,
+          getFiles: function () { return files; }, canStart: prepareBatch,
           onBusy: function (value) {
             matchBusy = value;
-            addFileBtn.disabled = addFolderBtn.disabled = value || scanBusy;
-            matchButton.disabled = value || scanBusy;
+            syncBatchButtons();
           },
           onSaved: function (result) {
             (result.rows || []).forEach(function (row) {
@@ -11300,6 +11314,31 @@ function renderMusicTag(root) {
           }
         });
         matchHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+      renameButton.addEventListener('click', function () {
+        if (matchBusy || renameBusy || scanBusy) return;
+        matchHost.replaceChildren(); matchPanel = null;
+        if (!renamePanel) renamePanel = window.createMusicRenamePanel(renameHost, {
+          h: h, api: api, post: post, watchJob: watchJob, toast: toast,
+          cycleSort: cycleSort, sortRows: sortRows,
+          getFiles: function () { return files; }, canStart: prepareBatch,
+          onBusy: function (value) { renameBusy = value; syncBatchButtons(); },
+          onRenamed: function (result) {
+            (result.rows || []).forEach(function (row) {
+              if (row.moved !== true && row.status !== 'done') return;
+              var file = files.find(function (item) { return item.rel === row.rel; });
+              if (file && row.target_rel) {
+                file.rel = row.target_rel;
+                file.name = row.target_rel.split('/').pop();
+              }
+            });
+            ++editorVersion; selected = ''; editorHost.replaceChildren();
+            canLeaveEditor = function () { return true; };
+            if (matchPanel) matchPanel.refreshFiles();
+            renderFiles();
+          }
+        });
+        renameHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
 
       var relInput = h('input', {
@@ -11318,22 +11357,21 @@ function renderMusicTag(root) {
       }
 
       function scan(folder) {
-        if (scanBusy || matchBusy) return;
+        if (scanBusy || matchBusy || renameBusy) return;
         scanBusy = true;
-        addFileBtn.disabled = true;
-        addFolderBtn.disabled = true;
-        matchButton.disabled = true;
+        syncBatchButtons();
         post('/api/tools/music-tag/scan', { path: relInput.value, folder: folder })
           .then(function (result) {
             mergeFiles(result.files || []);
             if (matchPanel) matchPanel.refreshFiles();
+            if (renamePanel) renamePanel.refreshFiles();
             renderFiles();
             toast('已加入 ' + (result.files || []).length + ' 个文件', 'success');
           }).catch(function (error) {
             toast('扫描失败：' + error.message, 'error');
           }).then(function () {
             scanBusy = false;
-            addFileBtn.disabled = addFolderBtn.disabled = matchButton.disabled = matchBusy;
+            syncBatchButtons();
           });
       }
       addFileBtn.addEventListener('click', function () { scan(false); });
@@ -11358,7 +11396,7 @@ function renderMusicTag(root) {
           tr.appendChild(h('td', null, row.year || '-'));
           tr.appendChild(h('td', null, row.genre || '-'));
           tr.addEventListener('click', function () {
-            if (matchBusy) { toast('自动匹配任务尚未结束，请稍后编辑标签', 'info'); return; }
+            if (matchBusy || renameBusy) { toast('批量任务尚未结束，请稍后编辑标签', 'info'); return; }
             if (selected === row.rel || !canLeaveEditor()) return;
             selected = row.rel;
             renderFiles();
@@ -11813,9 +11851,10 @@ function renderMusicTag(root) {
       root.appendChild(h('div', { class: 'card', style: 'margin-bottom:12px' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '音乐文件'),
-        h('div', { class: 'toolbar' }, matchButton),
+        h('div', { class: 'toolbar' }, matchButton, renameButton),
         tableHost));
       root.appendChild(matchHost);
+      root.appendChild(renameHost);
       root.appendChild(editorHost);
       root.appendChild(jobHost);
 

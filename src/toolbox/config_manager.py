@@ -648,6 +648,20 @@ def get_export_subdir(category: str) -> Path:
     return path
 
 
+def get_music_download_dir_readonly() -> Path:
+    """读取已选择的歌曲目录，不建目录、探写、迁移或在失败时切换输出位置。"""
+    data = _read_json(get_config_dir_readonly() / "config.json")
+    data = data if isinstance(data, dict) else {}
+    cfg = data.get("convert", {})
+    cfg = cfg if isinstance(cfg, dict) else {}
+    custom = cfg.get("music_download_custom_dir", "")
+    if cfg.get("music_download_use_custom") and custom:
+        return Path(custom)
+    export = data.get("export_dir", "")
+    root = Path(export) if export else get_app_root() / "download"
+    return root / EXPORT_CATEGORIES["music"]
+
+
 def get_music_download_dir() -> Path:
     """歌曲下载目录：优先「固定位置」（音乐下载页双选项），否则统一导出目录/歌曲文件。"""
     cfg = load_convert_config()

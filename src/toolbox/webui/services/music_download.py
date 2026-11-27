@@ -35,6 +35,9 @@ class MusicDownloadService:
 
     def start_download(self, payload: dict) -> dict:
         payload = dict(payload)
+        if type(payload.get("include_cover", True)) is not bool:
+            raise ValueError("封面选项无效，请重新选择")
+        payload.setdefault("include_cover", True)
         rows = payload.get("items") or []
         if not isinstance(rows, list) or not rows:
             raise ValueError("请先勾选要下载的歌曲")

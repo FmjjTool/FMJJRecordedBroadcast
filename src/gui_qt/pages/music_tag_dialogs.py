@@ -29,6 +29,7 @@ from music import tag_history, tag_search, tags_io
 from music.tag_match_rules import (
     NUMBER_FIELDS, TEXT_MATCH_FIELDS, build_query, build_update_plan,
 )
+from music.tag_rename_rules import render_rename_pattern
 
 PICTURE_TYPE_NAMES = tags_io.PICTURE_TYPE_NAMES
 
@@ -892,27 +893,6 @@ class LyricSearchDialog(QDialog):
 
 
 # ==================== 批量改名 ====================
-
-def render_rename_pattern(pattern: str, tags: dict) -> str:
-    track = str(tags.get("track") or "")
-    disc = str(tags.get("disc") or "")
-    mapping = {
-        "@1": str(tags.get("title") or ""),
-        "@2": str(tags.get("artist") or ""),
-        "@3": str(tags.get("album") or ""),
-        "@4": disc,
-        "@5": track,
-        "@6": str(tags.get("year") or ""),
-        "@7": str(tags.get("comment") or ""),
-        "@8": str(tags.get("albumartist") or ""),
-    }
-    out = pattern
-    for key in sorted(mapping, reverse=True):
-        out = out.replace(key, mapping[key])
-    out = re.sub(r"[\\/]", ";", out)
-    out = re.sub(r'[\s":*?<>|]', " ", out).strip()
-    return out
-
 
 class BatchRenameDialog(QDialog):
     def __init__(self, parent, rows: list[dict]):

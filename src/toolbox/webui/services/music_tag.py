@@ -10,6 +10,17 @@ class MusicTagService:
         self.jobs = jobs
         from toolbox.webui_music_match import MusicMatchPlans
         self.match_plans = MusicMatchPlans()
+        from toolbox.webui_music_rename import MusicRenamePlans
+        self.rename_plans = MusicRenamePlans()
+
+    def rename_options(self) -> dict:
+        return self.rename_plans.options()
+
+    def start_rename_preview(self, payload: dict) -> dict:
+        return self._start_match("tag_rename_preview", payload, self.rename_plans.preview)
+
+    def start_rename_apply(self, payload: dict) -> dict:
+        return self._start_match("tag_rename_apply", payload, self.rename_plans.apply)
 
     def match_options(self) -> dict:
         return self.match_plans.options()

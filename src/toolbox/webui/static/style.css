@@ -685,4 +685,19 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
 .music-match-table th:nth-child(3) { width: 78px; }
 .music-match-table td.ellipsis { white-space: normal; overflow-wrap: anywhere; }
 .music-match-columns { justify-content: flex-end; margin-top: 8px; }
+.music-rename-panel { margin-bottom: 12px; }
+.music-rename-panel > .row-title, .music-rename-panel > .small { margin-bottom: 8px; }
+.music-rename-files { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 8px; max-height: 240px; overflow: auto; margin-bottom: 12px; }
+.music-rename-files .check { min-width: 0; }
+.music-rename-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 8px; }
+.music-rename-settings label { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.music-rename-settings .input { width: min(320px, 100%); min-width: 100px; }
+.music-rename-settings .select { width: 160px; max-width: 100%; }
+.music-rename-tokens { margin-bottom: 12px; }
+.music-rename-table { min-width: 0; table-layout: fixed; }
+.music-rename-table th { cursor: pointer; }
+.music-rename-table th:first-child { width: 40px; cursor: default; }
+.music-rename-table th:nth-child(2), .music-rename-table th:nth-child(3) { width: 34%; }
+.music-rename-table td { white-space: normal; overflow-wrap: anywhere; }
+.music-rename-actions { justify-content: flex-end; margin-top: 8px; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }
