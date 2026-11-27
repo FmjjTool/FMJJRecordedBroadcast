@@ -28,14 +28,36 @@ class ArtifactService:
     def start_wechat(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
-        from toolbox import webui_collect_tools
+        from toolbox import webui_collect_tools, webui_wechat, wechat_library
+        from toolbox.webui.jobs import JobCancelled
         webui_collect_tools.ensure_wechat(dict(payload))
-        job = self.jobs.submit(
-            "wechat_parse",
-            lambda task: webui_collect_tools.wechat_run(
-                dict(payload), on_progress=self._progress(task),
-                on_log=task.log,
-                is_cancelled=lambda: bool(task.cancel_requested)))
+
+        def worker(task):
+            def progress(done, total, text):
+                task.update(webui_wechat.safe_message(text, "处理中"),
+                            float(done) / total if total else None)
+
+            try:
+                if task.cancel_requested:
+                    raise JobCancelled()
+                result = webui_collect_tools.wechat_run(
+                    dict(payload), on_progress=progress,
+                    on_log=lambda text: task.log(webui_wechat.safe_message(text, "处理中")),
+                    is_cancelled=lambda: bool(task.cancel_requested))
+                if task.cancel_requested:
+                    raise JobCancelled()
+                return {"ok": int(result.get("ok") or 0),
+                        "failed": int(result.get("failed") or 0),
+                        "summary": webui_wechat.safe_message(result.get("summary"), "导出完成")}
+            except (JobCancelled, webui_collect_tools.CollectToolCancelled):
+                raise JobCancelled() from None
+            except Exception as exc:
+                if task.cancel_requested:
+                    raise JobCancelled() from None
+                raise ValueError(webui_wechat.safe_message(
+                    wechat_library.user_error(exc))) from None
+
+        job = self.jobs.submit("wechat_parse", worker)
         return {"job": job.id}
 
     def bili_emote_search(self, payload: dict) -> dict:

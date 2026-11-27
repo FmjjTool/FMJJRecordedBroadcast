@@ -2128,7 +2128,10 @@ class _WechatReadingSessionDialog(QDialog):
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
         buttons.accepted.connect(self._use_session)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(buttons)
+        layout.addLayout(button_row)
         self.finished.connect(lambda _result: self.address.clear())
         screen = self.screen() or QApplication.primaryScreen()
         available = screen.availableGeometry() if screen else None
