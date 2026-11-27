@@ -80,9 +80,17 @@ def _is_link(path: Path) -> bool:
 def _scoped(path: Path, root: Path) -> Path:
     """限定根目录，拒绝路径中任意链接 / Windows reparse point。"""
     root, path = Path(root).absolute(), Path(path).absolute()
+    def resolved(value):
+        # Windows 目录在并发创建前后可能分别返回普通路径和 \\?\ 长路径。
+        value = str(value.resolve())
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+        return Path(value)
     try:
         relative = path.relative_to(root)
-        path.resolve().relative_to(root.resolve())
+        resolved(path).relative_to(resolved(root))
     except (ValueError, OSError) as exc:
         raise VersionError("采集版本路径无效") from exc
     cursor = root
@@ -280,7 +288,8 @@ def capture_tables(doc: dict, *, path=None, complete: bool = True) -> dict:
                     row = by_id.get(image["record_id"])
                     if row is not None:
                         row["images"].append({"field": image["field"], "index": image["idx"],
-                                              **assets.add(image["local_path"], source="tables", status=image["status"])})
+                                              **assets.add(image["local_path"], source="tables",
+                                                           status="downloaded" if image["status"] == "done" else image["status"])})
             sheets.append(sheet)
         conn.rollback()
     if not sheets:

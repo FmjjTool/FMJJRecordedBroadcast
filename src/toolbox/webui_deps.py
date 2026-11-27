@@ -105,6 +105,29 @@ _PYTHON_DEPENDENCIES = (
 )
 
 
+def _python_status(key: str) -> dict:
+    """Keep ordinary checks lightweight; AES requires a fresh import check."""
+    from toolbox import dependency_installer
+
+    if key == "pyzipper":
+        return dependency_installer.dependency_status(key)
+    import importlib
+    from importlib.metadata import version
+
+    name = {"PIL": "Pillow", "bs4": "BeautifulSoup4",
+            "websocket": "websocket-client"}.get(key, key)
+    distribution = {"bs4": "beautifulsoup4"}.get(key, name)
+    module = {"playwright": "playwright.sync_api", "lxml": "lxml.etree"}.get(key, key)
+    status = {"name": name, "installed": False, "supported": not getattr(sys, "frozen", False),
+              "version": "", "reason": ""}
+    try:
+        importlib.import_module(module)
+        status.update(installed=True, version=version(distribution))
+    except Exception:
+        status["reason"] = "依赖尚未安装" if status["supported"] else "未内置，请重装软件"
+    return status
+
+
 def prepare_install(key: str) -> str:
     key = str(key or "")
     if key not in {row[0] for row in _PYTHON_DEPENDENCIES}:
@@ -123,12 +146,11 @@ def install(key: str, *, on_progress=None, is_cancelled=None) -> dict:
 
 def dependency_status() -> dict:
     """逐项检测依赖可用性（只读）。"""
-    from toolbox import dependency_installer
     from toolbox.livestream_summary import optional_runtime
 
     items = []
     for key, usage, optional in _PYTHON_DEPENDENCIES:
-        snapshot = dependency_installer.dependency_status(key)
+        snapshot = _python_status(key)
         installed = bool(snapshot.get("installed"))
         items.append({"key": key, "name": snapshot.get("name") or key,
                       "usage": usage, "optional": optional, "ok": installed,

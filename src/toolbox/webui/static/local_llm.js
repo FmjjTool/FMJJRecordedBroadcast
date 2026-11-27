@@ -95,6 +95,13 @@
     var toast = helpers.toast, watchJob = helpers.watchJob;
     var busy = false;
 
+    function componentChanged(event) {
+      if (!host.isConnected) {
+        global.removeEventListener('fmjj-local-components-changed', componentChanged);
+      } else if (event.detail !== host && !busy) load();
+    }
+    global.addEventListener('fmjj-local-components-changed', componentChanged);
+
     function load() {
       host.replaceChildren(h('div', { class: 'card' }, '正在检测可选本地推理组件…'));
       api('/api/system/llm').then(function (data) {
@@ -137,6 +144,7 @@
                 busy = false;
                 if (job.status === 'done') {
                   load();
+                  global.dispatchEvent(new CustomEvent('fmjj-local-components-changed', { detail: host }));
                 } else {
                   syncActions();
                   stateLine.textContent = job.status === 'cancelled'
@@ -257,6 +265,13 @@
     var jobHost = h('div');
     host.replaceChildren(controls, stateLine, jobHost);
 
+    function componentChanged(event) {
+      if (!host.isConnected) {
+        global.removeEventListener('fmjj-local-components-changed', componentChanged);
+      } else if (event.detail !== host && !busy) load();
+    }
+    global.addEventListener('fmjj-local-components-changed', componentChanged);
+
     function sync() {
       Array.prototype.forEach.call(controls.querySelectorAll('button,select'), function (control) {
         control.disabled = busy || !snapshot || !snapshot.supported
@@ -276,12 +291,23 @@
           stateLine.textContent = (job.result || {}).summary || '已完成';
         }, {
           cancelable: true, indeterminate: true,
+          onPollError: function (error, resume) {
+            stateLine.textContent = '读取任务进度失败：' + error.message + '。任务可能仍在运行，请重试连接。';
+            var reconnect = h('button', { class: 'btn', type: 'button' }, '重试连接');
+            reconnect.addEventListener('click', function () {
+              reconnect.remove();
+              stateLine.textContent = '正在重新读取任务进度…';
+              resume();
+            });
+            jobHost.appendChild(reconnect);
+          },
           onSettled: function (job) {
             busy = false;
             sync();
             if (job.status === 'done') {
               helpers.toast((job.result || {}).summary || '已完成', 'success');
               load();
+              global.dispatchEvent(new CustomEvent('fmjj-local-components-changed', { detail: host }));
               if (helpers.onChanged) helpers.onChanged();
             } else {
               stateLine.textContent = job.status === 'cancelled' ? '已取消，可重新开始'
@@ -301,6 +327,8 @@
     function draw(data) {
       snapshot = data;
       if (helpers.onStatus) helpers.onStatus(data);
+      var previousChoice = controls.querySelector('select');
+      var selectedChoice = previousChoice ? previousChoice.value : '';
       controls.replaceChildren();
       var isRuntime = kind === 'runtime';
       var choices = h('select', {
@@ -311,6 +339,9 @@
         choices.appendChild(h('option', { value: item.id }, item.label + ' · '
           + sizeText(item.download_size || item.size)));
       });
+      if (selectedChoice && Array.prototype.some.call(choices.options, function (option) {
+        return option.value === selectedChoice;
+      })) choices.value = selectedChoice;
       var download = h('button', { class: 'btn', type: 'button' }, '下载');
       download.dataset.available = String(choices.options.length > 0);
       download.addEventListener('click', function () {

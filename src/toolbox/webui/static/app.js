@@ -318,7 +318,8 @@
     var cancelBtn = options.cancelable
       ? h('button', { class: 'btn', type: 'button' }, '取消任务')
       : null;
-    var bar = h('div', { class: 'progress' }, h('i'));
+    var bar = h('div', { class: 'progress' + (options.indeterminate ? ' is-indeterminate' : '') },
+      h('i', options.indeterminate ? { style: 'width:35%' } : {}));
     var resultLine = h('div', { class: 'muted small', style: 'margin:2px 0 6px' });
     var log = h('pre', { class: 'job-log' });
     head.appendChild(status);
@@ -387,6 +388,7 @@
         status.textContent = '任务状态读取失败';
         log.textContent = error.message;
         link.replaceChildren(h('span', { class: 'badge warn' }, error.message));
+        if (options.onPollError) options.onPollError(error, tick);
       });
     }
     tick();
@@ -8190,27 +8192,29 @@ function renderLivestreamSummary(root) {
         + '可在桌面端「全局设置 → 窗口过渡」关闭，切换立即保存并生效，仅影响本窗口。'
         + '此设置只作用于桌面主窗口，浏览器端仅提供说明。');
 
-      var deps = h('div', { class: 'card', style: 'margin-top:12px', 'data-dependency-settings': 'true' });
-      deps.appendChild(h('div', { class: 'row-title' }, '依赖与组件'));
+      var deps = h('details', { class: 'card', style: 'margin-top:12px', 'data-dependency-settings': 'true' });
+      deps.appendChild(h('summary', { class: 'row-title', style: 'cursor:pointer' }, '依赖与组件'));
       var depHost = h('div', { style: 'margin-top:8px' });
       deps.appendChild(depHost);
       var depState = h('div', { class: 'small', role: 'status', 'aria-live': 'polite' });
       var depJobHost = h('div');
-      deps.appendChild(depState);
-      deps.appendChild(depJobHost);
+      var depFeedback = h('div', { style: 'flex-basis:100%;min-width:0' }, depState, depJobHost);
+      deps.appendChild(depFeedback);
       host.appendChild(deps);
       var localLLMHost = h('div');
       host.appendChild(localLLMHost);
       window.FMJJLocalLLM.mountSettings(localLLMHost, {
         h: h, api: api, post: post, watchJob: watchJob, toast: toast
       });
-      var depBusy = false, depInstallButtons = [];
+      var depBusy = false, depInstallButtons = [], activeDependencyKey = '';
       function syncDependencyActions() {
         depInstallButtons.forEach(function (button) { button.disabled = depBusy; });
       }
       function installDependency(item, button) {
         if (depBusy) return;
         depBusy = true;
+        activeDependencyKey = item.key;
+        button.closest('[data-dependency-key]').appendChild(depFeedback);
         syncDependencyActions();
         depState.textContent = '正在准备安装 ' + item.name + '…';
         depJobHost.replaceChildren(h('div', { class: 'progress is-indeterminate',
@@ -8221,6 +8225,16 @@ function renderLivestreamSummary(root) {
             toast(depState.textContent, 'success');
           }, {
             cancelable: true, indeterminate: true,
+            onPollError: function (error, resume) {
+              depState.textContent = '读取安装进度失败：' + error.message + '。任务可能仍在运行，请重试连接。';
+              var reconnect = h('button', { class: 'btn', type: 'button' }, '重试连接');
+              reconnect.addEventListener('click', function () {
+                reconnect.remove();
+                depState.textContent = '正在重新读取安装进度…';
+                resume();
+              });
+              depJobHost.appendChild(reconnect);
+            },
             onSettled: function (job) {
               depBusy = false;
               syncDependencyActions();
@@ -8278,6 +8292,7 @@ function renderLivestreamSummary(root) {
               }
             }, item.local_llm_kind);
           }
+          if (item.key === activeDependencyKey) row.appendChild(depFeedback);
           depHost.appendChild(row);
         });
         syncDependencyActions();

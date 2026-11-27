@@ -376,6 +376,8 @@ class _DocPreviewPanel(QWidget):
                     save_note += " · 页面列表未完整读取，缺失页面旧存档保留"
                 if save.get("file_error"):
                     save_note += " · Markdown 快照未能更新"
+                if save.get("version_error"):
+                    save_note += " · 采集版本保存失败，请检查磁盘空间后重新抓取"
             else:
                 save_note = " · 自动存档失败" if result.get("save_error") else ""
             count = f"共 {len(pages)} 篇 · " if len(pages) > 1 else ""
@@ -643,6 +645,7 @@ class TcDocPage(BasePage):
         self._last_reload_at = 0.0
         self._preload_requested = False
         self._preload_indexes = []
+        self._version_dialog = None
         self._preload_timer = QTimer(self)
         self._preload_timer.setSingleShot(True)
         self._preload_timer.timeout.connect(self._preload_next_panel)
@@ -686,7 +689,10 @@ class TcDocPage(BasePage):
         self.dir_btn.setToolTip(
             "打开 download/腾讯文档数据/（报表/、表格数据/、正文存档/、图片/、数据库与日志）")
         self.dir_btn.clicked.connect(self._open_data_dir)
-        for btn in (self.collect_btn, self.dir_btn):
+        self.versions_btn = QPushButton("采集版本")
+        self.versions_btn.setToolTip("按采集时间和版本号选择并打开本地历史快照")
+        self.versions_btn.clicked.connect(self._open_versions)
+        for btn in (self.versions_btn, self.collect_btn, self.dir_btn):
             row.addWidget(btn)
         cv.addLayout(row)
 
@@ -755,6 +761,25 @@ class TcDocPage(BasePage):
         layout.addWidget(self.status_label)
 
     # ==================== 界面拼装辅助 ====================
+
+    def _open_versions(self):
+        doc = self.current_doc()
+        if not doc:
+            self.app.toast("请先选择腾讯文档", "warning")
+            return
+        from gui_qt.tcdoc_versions import TcDocVersionsDialog
+        from shiboken6 import isValid
+        dialog = self._version_dialog
+        if dialog is None or not isValid(dialog) or dialog._closed:
+            dialog = TcDocVersionsDialog(doc, self)
+            self._version_dialog = dialog
+        elif dialog._doc.get("key") != doc.get("key"):
+            # 已打开的旧文档历史保持独立，新的入口只切换到所选文档。
+            dialog = TcDocVersionsDialog(doc, self)
+            self._version_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _ensure_panel(self, index):
         if index not in self._panels:
@@ -1865,6 +1890,11 @@ class TcDocPage(BasePage):
                 return
             if item.get("tables_error"):
                 self.app.toast(item["tables_error"][:120], "warning")
+                return
+            if item.get("version_error"):
+                self.status_label.setText(
+                    "当前表格已保存，但采集版本保存失败，请检查磁盘空间后重新同步")
+                self._refresh_bridge_hint()
                 return
             if item.get("tables_unchanged"):
                 image_stats = item.get("images") or {}
