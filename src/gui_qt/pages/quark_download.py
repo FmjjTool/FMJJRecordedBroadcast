@@ -245,13 +245,13 @@ class QuarkDownloadPage(BasePage):
         action_row.addWidget(self.progress, 1)
 
         self.status_label = ElidedLabel("空闲", role="caption")
-        # ElidedLabel 默认水平策略是 Ignored（配合 stretch 使用）；这里要给固定
-        # 宽度、由布局预留空间，必须换回 Preferred，否则状态文字会溢出工具条
+        # 状态随可用宽度伸缩，窄窗口优先保留操作与进度；全文仍可悬停查看。
         self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred,
                                         QSizePolicy.Policy.Preferred)
-        self.status_label.setFixedWidth(240)
+        self.status_label.setMinimumWidth(80)
+        self.status_label.setMaximumWidth(240)
         self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        action_row.addWidget(self.status_label)
+        action_row.addWidget(self.status_label, 1)
         layout.addLayout(action_row)
         return bar
 

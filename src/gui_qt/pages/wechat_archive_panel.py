@@ -1,7 +1,7 @@
 """公众号资料和文章归档的 L2 表现层；数据与任务只经 wechat_library。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QDate, Qt, QUrl
+from PySide6.QtCore import QDate, QSignalBlocker, QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDateEdit,
@@ -54,7 +54,12 @@ class WechatArchivePanel(QWidget):
         self._articles = []
         self._checked = set()
         self._versions = {1: 0, 2: 0}
-        self._loaded = set()
+        self._loading_timers = {}
+        for index in (1, 2):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda i=index: self._show_loading(i))
+            self._loading_timers[index] = timer
         self._filling = False
         self._job_buttons = []
         install_columns()
@@ -246,7 +251,6 @@ class WechatArchivePanel(QWidget):
             button.setEnabled(not busy)
 
     def refresh_all(self):
-        self._loaded.clear()
         self.refresh(1)
         self.refresh(2)
 
@@ -256,6 +260,7 @@ class WechatArchivePanel(QWidget):
         from toolbox import wechat_library as library
         self._versions[index] += 1
         version = self._versions[index]
+        self._loading_timers[index].start(1000)
         if index == 1:
             keyword = self.account_keyword.text().strip()
             sort, order = self._account_sort
@@ -268,9 +273,14 @@ class WechatArchivePanel(QWidget):
             query = lambda: library.list_articles(**filters, offset=offset, limit=PAGE_SIZE)
         run_bg(query, lambda result, error: self._show_result(index, version, result, error), owner=self.owner)
 
+    def _show_loading(self, index):
+        empty = self.account_empty if index == 1 else self.article_empty
+        empty.setText("读取中…")
+
     def _show_result(self, index, version, result, error):
         if version != self._versions[index]:
             return
+        self._loading_timers[index].stop()
         table = self.accounts_table if index == 1 else self.articles_table
         empty = self.account_empty if index == 1 else self.article_empty
         if error:
@@ -279,7 +289,6 @@ class WechatArchivePanel(QWidget):
         result = result or {}
         rows = result.get("items") or []
         total = int(result.get("total") or 0)
-        self._loaded.add(index)
         selected_biz = (self._account_record() or {}).get("biz") if index == 1 else None
         self._filling = True
         table.setRowCount(len(rows))
@@ -317,14 +326,22 @@ class WechatArchivePanel(QWidget):
 
     def _update_account_options(self, rows):
         selected = self._filter_biz()
-        current = {self.account_filter.itemData(i) for i in range(self.account_filter.count())}
-        for record in rows:
-            if record.get("biz") not in current:
-                self.account_filter.addItem(record.get("name") or record["biz"], record["biz"])
-        if selected:
-            index = self.account_filter.findData(selected)
-            if index >= 0:
-                self.account_filter.setCurrentIndex(index)
+        combo = self.account_filter
+        blocker = QSignalBlocker(combo)
+        try:
+            current = {combo.itemData(i): i for i in range(combo.count())}
+            for record in rows:
+                biz = record["biz"]
+                label = record.get("name") or biz
+                if biz in current:
+                    combo.setItemText(current[biz], label)
+                else:
+                    current[biz] = combo.count()
+                    combo.addItem(label, biz)
+            if selected and selected in current:
+                combo.setCurrentIndex(current[selected])
+        finally:
+            del blocker
 
     def _update_pager(self, kind):
         offset = self._account_offset if kind == 1 else self._article_offset

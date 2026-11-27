@@ -9,9 +9,10 @@
 - 取消按钮：打断当前文章（网络请求间检测），已完成的导出保留
 """
 import os
+import tempfile
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
     QPlainTextEdit, QProgressBar, QPushButton, QTextEdit, QVBoxLayout,
@@ -110,6 +111,7 @@ class WechatArticlePage(BasePage):
         self._tab_changed(self.tabs.currentIndex())
 
     def _tab_changed(self, index):
+        self.start_btn.setVisible(index == 0)
         if index > 0:
             self.library_panel.refresh(index)
 
@@ -340,7 +342,6 @@ class WechatArticlePage(BasePage):
         pdf_jobs = result.get("pdf_jobs") or []
         processed_pdf = 0
         if pdf_jobs and not self._cancel and not result.get("cancelled"):
-            from gui_qt.pdf_render import render_pdf
             for index, job in enumerate(pdf_jobs, 1):
                 if self._cancel:
                     break
@@ -349,7 +350,7 @@ class WechatArticlePage(BasePage):
                 if self._cancel:
                     break
                 try:
-                    render_pdf(job["html"], job["path"])
+                    self._render_pdf_atomic(job["html"], job["path"])
                     self._save_pdf_result(job["id"], True)
                 except Exception:
                     pdf_failed += 1
@@ -383,6 +384,26 @@ class WechatArticlePage(BasePage):
             self._download_batch = None
         self.library_panel.refresh_all()
 
+    @staticmethod
+    def _render_pdf_atomic(html, path):
+        """Qt 只写本次临时文件，校验通过后才替换已有导出。"""
+        from gui_qt.pdf_render import render_pdf
+        target = os.path.abspath(path)
+        fd, temporary = tempfile.mkstemp(
+            prefix=".wechat-pdf-", suffix=".pdf", dir=os.path.dirname(target))
+        os.close(fd)
+        try:
+            render_pdf(html, temporary)
+            with open(temporary, "rb") as stream:
+                if stream.read(5) != b"%PDF-" or os.fstat(stream.fileno()).st_size <= 5:
+                    raise OSError("PDF 渲染未生成有效文件")
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
     def _save_pdf_result(self, article_id, success, error=""):
         from toolbox import wechat_library
         try:
@@ -394,4 +415,8 @@ class WechatArticlePage(BasePage):
         self.status_label.setText(text)
 
     def _log(self, msg):
-        self.log_text.append(str(msg))
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(str(msg) + "\n")
+        self.log_text.setTextCursor(cursor)
+        self.log_text.ensureCursorVisible()

@@ -38,8 +38,8 @@ FIELDS = {
     },
     "account": {
         "biz": {"type": "str", "label": "公众号标识", "default": "", "max_length": 256, "required": True, "readonly": True},
-        "name": {"type": "str", "label": "公众号名称", "default": "", "max_length": 200},
-        "remark": {"type": "str", "label": "备注", "default": "", "max_length": 1000},
+        "name": {"type": "str", "label": "公众号名称", "default": "", "max_length": 160},
+        "remark": {"type": "str", "label": "备注", "default": "", "max_length": 500},
     },
     "collect": {
         "text": {"type": "text", "label": "文章链接", "default": "", "max_length": 60000, "required": True, "placeholder": "粘贴 mp.weixin.qq.com 文章链接，一行一个"},
@@ -75,7 +75,7 @@ def normalize(group: str, payload: dict | None = None) -> dict:
         allowed = spec.get("allow", [item["value"] for item in spec.get("options", [])])
         if kind == "int":
             try:
-                if isinstance(value, bool):
+                if isinstance(value, (bool, float)):
                     raise ValueError
                 value = int(value)
             except (TypeError, ValueError):
@@ -105,7 +105,7 @@ def normalize(group: str, payload: dict | None = None) -> dict:
                 raise WebWechatError(f"{label}选项无效")
             if kind == "date" and value:
                 try:
-                    date.fromisoformat(value)
+                    value = date.fromisoformat(value).isoformat()
                 except ValueError:
                     raise WebWechatError(f"{label}格式不正确") from None
         if spec.get("required") and not value:

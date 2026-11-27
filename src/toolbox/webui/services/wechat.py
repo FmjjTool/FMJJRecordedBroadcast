@@ -47,8 +47,6 @@ class WechatService:
 
         def worker(task):
             def progress(done, total, text):
-                if task.cancel_requested:
-                    raise JobCancelled()
                 task.update(webui_wechat.safe_message(text, "处理中"),
                             float(done) / total if total else None)
 

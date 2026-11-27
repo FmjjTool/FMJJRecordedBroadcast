@@ -315,16 +315,77 @@ def fetch_article(url: str, session: Optional[requests.Session] = None) -> Wecha
     return art
 
 
+_CSS_LENGTH = r"(?:0|[0-9]{1,4}(?:\.[0-9]{1,3})?(?:px|pt|em|rem|%))"
+_CSS_COLOR = r"(?:#[0-9a-f]{3,8}|[a-z]{1,24}|rgba?\([0-9.,% ]+\))"
+
+
+def _clean_style(style):
+    """保留有限的正文排版属性；拒绝 CSS 转义、外部资源与动态表达式。"""
+    result = []
+    for declaration in str(style or "")[:8192].split(";"):
+        if ":" not in declaration:
+            continue
+        prop, value = (part.strip() for part in declaration.split(":", 1))
+        prop = prop.lower()
+        if (not re.fullmatch(r"[a-z-]+", prop)
+                or re.search(r"[\\<>@]|/\*|\*/|url|expression|behavior|binding", value, re.I)):
+            continue
+        value = re.sub(r"\s*!important\s*$", "", value, flags=re.I).strip()
+        lower = value.lower()
+        valid = False
+        if prop in ("color", "background-color") or re.fullmatch(r"border(?:-(?:top|right|bottom|left))?-color", prop):
+            valid = bool(re.fullmatch(_CSS_COLOR, lower))
+        elif prop == "font-family":
+            valid = bool(re.fullmatch(r"[A-Za-z0-9_\u3400-\u9fff, \"'-]{1,200}", value))
+        elif prop == "font-weight":
+            valid = lower in ("normal", "bold", "bolder", "lighter") or bool(re.fullmatch(r"[1-9]00", lower))
+        elif prop == "font-style":
+            valid = lower in ("normal", "italic", "oblique")
+        elif prop in ("font-size", "text-indent", "letter-spacing", "word-spacing",
+                      "width", "height", "min-width", "max-width", "min-height", "max-height"):
+            valid = lower in ("normal", "auto") or bool(re.fullmatch(_CSS_LENGTH, lower))
+        elif prop == "line-height":
+            valid = lower == "normal" or bool(re.fullmatch(r"[0-9]{1,2}(?:\.[0-9]{1,3})?|" + _CSS_LENGTH, lower))
+        elif re.fullmatch(r"(?:margin|padding)(?:-(?:top|right|bottom|left))?|border(?:-(?:top|right|bottom|left))?-(?:width|radius)|border-radius", prop):
+            valid = bool(re.fullmatch(_CSS_LENGTH + r"(?: +" + _CSS_LENGTH + r"){0,3}", lower))
+        elif re.fullmatch(r"border(?:-(?:top|right|bottom|left))?", prop):
+            valid = lower in ("none", "0") or bool(re.fullmatch(
+                _CSS_LENGTH + r" +(?:solid|dashed|dotted|double) +" + _CSS_COLOR, lower))
+        else:
+            choices = {
+                "text-align": {"left", "right", "center", "justify", "start", "end"},
+                "text-decoration": {"none", "underline", "line-through", "overline"},
+                "text-transform": {"none", "uppercase", "lowercase", "capitalize"},
+                "white-space": {"normal", "pre", "pre-wrap", "pre-line", "nowrap"},
+                "word-break": {"normal", "break-all", "keep-all", "break-word"},
+                "overflow-wrap": {"normal", "break-word", "anywhere"},
+                "vertical-align": {"baseline", "sub", "super", "top", "text-top", "middle", "bottom", "text-bottom"},
+                "display": {"block", "inline", "inline-block", "table", "table-row", "table-cell"},
+                "list-style-type": {"none", "disc", "circle", "square", "decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman"},
+                "list-style-position": {"inside", "outside"},
+                "box-sizing": {"border-box", "content-box"},
+                "float": {"none", "left", "right"},
+                "clear": {"none", "left", "right", "both"},
+            }
+            valid = lower in choices.get(prop, set())
+        if valid:
+            result.append(prop + ":" + value)
+    return ";".join(result)
+
+
 def _clean_content(soup, content, art):
     for node in content.find_all(string=lambda value: isinstance(value, Comment)):
         node.extract()
-    for tag in content.find_all(["script", "style", "object", "embed", "form", "input", "svg", "link", "meta"]):
+    for tag in content.find_all(["script", "style", "object", "embed", "form", "input",
+                                 "svg", "math", "link", "meta", "base", "source",
+                                 "track", "frame", "frameset", "applet", "portal"]):
         tag.decompose()
     for selector in (".qr_code_pc", ".qr_code_pc_outer", "mp-common-profile",
                      "mp-common-product", ".reward_area", "#js_sponsor_ad_area"):
         for tag in content.select(selector):
             tag.decompose()
-    for tag_name, replacement in (("iframe", "视频内容"), ("mpvoice", "语音消息")):
+    for tag_name, replacement in (("iframe", "视频内容"), ("video", "视频内容"),
+                                  ("audio", "语音消息"), ("mpvoice", "语音消息")):
         for tag in content.find_all(tag_name):
             paragraph = soup.new_tag("p")
             paragraph.string = replacement
@@ -345,6 +406,9 @@ def _clean_content(soup, content, art):
             if attr not in allowed:
                 del tag[attr]
                 continue
+            if (attr == "src" and tag.name != "img") or (attr == "href" and tag.name != "a"):
+                del tag[attr]
+                continue
             value = tag[attr]
             if isinstance(value, list):
                 value = " ".join(value)
@@ -354,8 +418,10 @@ def _clean_content(soup, content, art):
                     del tag[attr]
                     continue
             if attr == "style":
-                value = ";".join(item for item in value.split(";") if not re.search(
-                    r"(?i)(url\s*\(|expression|@import|visibility\s*:|position\s*:)", item))
+                value = _clean_style(value)
+                if not value:
+                    del tag[attr]
+                    continue
             tag[attr] = _redact_text(value)
     for node in list(content.find_all(string=True)):
         cleaned = _redact_text(str(node))
@@ -436,6 +502,9 @@ def fetch_history_page(biz, offset, session_snapshot) -> dict:
                 link = _upstream_article_url(urljoin("https://mp.weixin.qq.com", link))
             except WechatAdapterError:
                 raise ParseChanged("历史图文地址格式发生变化", phase="history") from None
+            link_biz = dict(parse_qsl(urlsplit(link).query)).get("__biz")
+            if link_biz and link_biz != biz:
+                raise ParseChanged("历史列表返回了其他公众号的图文，已停止", phase="history")
             if link in seen:
                 continue
             seen.add(link)

@@ -276,23 +276,18 @@ class LivestreamSummaryPage(BasePage):
         self.chunk_spin.setToolTip("长转录按此字数分块；应为模型指令和输出保留足够上下文。")
         options_row.addWidget(self.chunk_spin, alignment=Qt.AlignLeft)
         options_row.addStretch(1)
-        card.content_layout.addLayout(options_row)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        buttons.addStretch(1)
         self.test_btn = QPushButton("测试连接")
         self.test_btn.setProperty("variant", "secondary")
         self.test_btn.setToolTip("本地模式将加载所选模型并执行一次短测试")
         self.test_btn.clicked.connect(self._test_connection)
         self._register_icon(self.test_btn, "pulse")
-        buttons.addWidget(self.test_btn)
+        options_row.addWidget(self.test_btn)
         self.save_btn = QPushButton("保存设置")
         self.save_btn.setProperty("variant", "primary")
         self.save_btn.clicked.connect(self._save_settings)
         self._register_icon(self.save_btn, "save", "primary")
-        buttons.addWidget(self.save_btn)
-        card.content_layout.addLayout(buttons)
+        options_row.addWidget(self.save_btn)
+        card.content_layout.addLayout(options_row)
         return card
 
     def _build_result_card(self) -> ToolSectionCard:
