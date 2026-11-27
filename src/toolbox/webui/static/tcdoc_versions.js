@@ -37,7 +37,8 @@
         }
         var url = imageUrl(item.asset_id);
         var img = h('img', { src: url, alt: caption, loading: 'lazy',
-          style: 'max-width:100%;max-height:600px;object-fit:contain' });
+          width: item.width || 640, height: item.height || 360,
+          style: 'display:block;max-width:100%;height:auto;max-height:600px;object-fit:contain' });
         img.addEventListener('error', function () {
           img.replaceWith(h('p', { class: 'small' }, caption + '：读取失败，请重新打开版本'));
         }, { once: true });

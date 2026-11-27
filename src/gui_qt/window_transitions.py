@@ -1,191 +1,145 @@
-"""主窗口的短时过渡；只处理外壳，不改变页面或任务的生命周期。"""
+"""Windows 原生窗口过渡；不模拟快照、透明度或逐帧窗口几何。
 
-from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, QRect, QTimer, Qt, QVariantAnimation
-from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QWidget
+显示/隐藏/关闭保留 Qt 的正常窗口生命周期；DWM 决定系统过渡效果。
+最大化、最小化和还原直接使用 ShowWindow，避免旧 Qt 对无边框窗口的
+MoveWindow 特殊分支。开关只控制当前 HWND，不改系统全局动画设置。
+"""
+
+import ctypes
+import sys
+from ctypes import wintypes
+
+from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QApplication
 
 
-class _WindowSnapshot(QWidget):
-    """动画期间绘制窗口快照，避免每帧重排真实页面。"""
+_GWL_STYLE = -16
+_NATIVE_FRAME_STYLE = 0x00C00000 | 0x00040000 | 0x00020000 | 0x00010000 | 0x00080000
+_SWP_FRAMECHANGED = 0x0020 | 0x0001 | 0x0002 | 0x0004 | 0x0010
+_WM_NCCALCSIZE = 0x0083
+_DWMWA_TRANSITIONS_FORCEDISABLED = 3
+_SW_MINIMIZE = 6
+_SW_MAXIMIZE = 3
+_SW_RESTORE = 9
 
-    def __init__(self, window, before):
-        super().__init__(window, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.before = before
-        self.after = before
-        self.progress = 0.0
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        painter.drawPixmap(self.rect(), self.before)
-        painter.setOpacity(self.progress)
-        painter.drawPixmap(self.rect(), self.after)
+class _NCCALCSIZE_PARAMS(ctypes.Structure):
+    _fields_ = [("rgrc", wintypes.RECT * 3), ("lppos", ctypes.c_void_p)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+
+class _WindowsApi:
+    """明确声明指针宽度，避免64位 HWND 被 ctypes 默认 int 截断。"""
+
+    def __init__(self):
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        self.get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.get_style.restype = ctypes.c_ssize_t
+        self.set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        self.set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        self.set_style.restype = ctypes.c_ssize_t
+        self.set_pos = user32.SetWindowPos
+        self.set_pos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self.set_pos.restype = wintypes.BOOL
+        self.show = user32.ShowWindow
+        self.show.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.show.restype = wintypes.BOOL
+        self.is_zoomed = user32.IsZoomed
+        self.is_zoomed.argtypes = [wintypes.HWND]
+        self.is_zoomed.restype = wintypes.BOOL
+        self.monitor_from_window = user32.MonitorFromWindow
+        self.monitor_from_window.argtypes = [wintypes.HWND, wintypes.DWORD]
+        self.monitor_from_window.restype = wintypes.HMONITOR
+        self.monitor_info = user32.GetMonitorInfoW
+        self.monitor_info.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MONITORINFO)]
+        self.monitor_info.restype = wintypes.BOOL
+        self.set_attribute = ctypes.WinDLL("dwmapi").DwmSetWindowAttribute
+        self.set_attribute.argtypes = [wintypes.HWND, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD]
+        self.set_attribute.restype = ctypes.c_long
 
 
 class WindowTransitions(QObject):
-    """集中持有动画；禁用、重复点击或中断后始终恢复可见的真实窗口。"""
-
-    SHOW_MS = 180
-    HIDE_MS = 140
-    RESIZE_MS = 200
+    """为无边框主窗保留系统窗口能力，状态与还原位置由 Windows 管理。"""
 
     def __init__(self, window, enabled=True):
         super().__init__(window)
         self.window = window
         self.enabled = bool(enabled)
-        self.appearing = False
-        self.dismissing = False
-        self.dismiss_kind = None
-        self._animation = None
-        self._overlay = None
-        self._dismiss_callback = None
-        self._serial = 0
+        self._api = None
+        if sys.platform == "win32" and QApplication.platformName() == "windows":
+            try:
+                self._api = _WindowsApi()
+            except (AttributeError, OSError):
+                pass
 
     def prepare_show(self):
-        """首次 show 之前准备透明度，避免先完整闪出一帧。"""
-        if self.enabled and not self.window.isVisible():
-            self.window.setWindowOpacity(0.0)
-
-    def _stop_animation(self):
-        animation, self._animation = self._animation, None
-        if animation is not None:
-            animation.stop()
-            animation.deleteLater()
-
-    def _reveal(self):
-        self.appearing = False
-        self._serial += 1
-        self._stop_animation()
-        self.window.setWindowOpacity(1.0)
-        overlay, self._overlay = self._overlay, None
-        if overlay is not None:
-            overlay.hide()
-            overlay.deleteLater()
-
-    def cancel(self):
-        """托盘恢复等显式显示请求可取消尚未完成的隐藏。"""
-        self.dismissing = False
-        self.dismiss_kind = None
-        self._dismiss_callback = None
-        self._reveal()
+        """首次显示前保留系统frame样式，非客户区由 nativeEvent 隐去。"""
+        if self._api is None:
+            return False
+        hwnd = int(self.window.winId())
+        style = self._api.get_style(hwnd, _GWL_STYLE)
+        if not style:
+            return False
+        wanted = style | _NATIVE_FRAME_STYLE
+        if style != wanted:
+            ctypes.set_last_error(0)
+            self._api.set_style(hwnd, _GWL_STYLE, wanted)
+            if ctypes.get_last_error():
+                return False
+            self._api.set_pos(hwnd, None, 0, 0, 0, 0, _SWP_FRAMECHANGED)
+        disabled = wintypes.BOOL(not self.enabled)
+        self._api.set_attribute(hwnd, _DWMWA_TRANSITIONS_FORCEDISABLED,
+                                ctypes.byref(disabled), ctypes.sizeof(disabled))
+        return True
 
     def set_enabled(self, enabled):
         self.enabled = bool(enabled)
-        if not self.enabled:
-            if self.dismissing:
-                self._finish_dismiss()
-            else:
-                self._reveal()
+        self.prepare_show()
 
-    def _fade(self, target, duration, finished):
-        self._stop_animation()
-        animation = QPropertyAnimation(self.window, b"windowOpacity", self)
-        animation.setDuration(duration)
-        animation.setStartValue(self.window.windowOpacity())
-        animation.setEndValue(target)
-        animation.setEasingCurve(QEasingCurve.OutCubic)
-        animation.finished.connect(finished)
-        self._animation = animation
-        animation.start()
+    def minimize(self):
+        if self.window.isVisible() and self.prepare_show():
+            self._api.show(int(self.window.winId()), _SW_MINIMIZE)
+        else:
+            self.window.showMinimized()
 
-    def appear(self):
-        # showMaximized/showNormal 也可能产生 showEvent；不得打断状态切换快照。
-        if self._overlay is not None or self.dismissing:
-            return
-        if not self.enabled or self.window.isMinimized():
-            self._reveal()
-            return
-        self.window.setWindowOpacity(0.0)
-        self.appearing = True
-        self._fade(1.0, self.SHOW_MS, self._reveal)
-
-    def dismiss(self, callback, *, kind="hide"):
-        """确认通过后再淡出。返回 False 时由调用方立即执行原操作。"""
-        if self.dismissing:
-            return True
-        if not self.enabled or not self.window.isVisible() or self.window.isMinimized():
-            self._reveal()
-            return False
-        self._reveal()
-        self.dismissing = True
-        self.dismiss_kind = kind
-        self._dismiss_callback = callback
-        self._fade(0.0, self.HIDE_MS, self._finish_dismiss)
-        return True
-
-    def _finish_dismiss(self):
-        callback, self._dismiss_callback = self._dismiss_callback, None
-        self.dismissing = False
-        self.dismiss_kind = None
-        self._stop_animation()
-        # 先 hide/close，再复位透明度，避免淡出终点闪回完整窗口。
-        if callback is not None:
-            callback()
-        self.window.setWindowOpacity(1.0)
-
-    def toggle_max_restore(self):
-        if self.dismissing:
-            return
-        self._reveal()
-        maximize = not self.window.isMaximized()
-        if (not self.enabled or not self.window.isVisible()
-                or self.window.isMinimized() or self.window.isFullScreen()):
-            self._set_maximized(maximize)
-            return
-
-        before = self.window.grab()
-        if before.isNull():
-            self._set_maximized(maximize)
-            return
-        start = QRect(self.window.frameGeometry())
-        overlay = self._overlay = _WindowSnapshot(self.window, before)
-        overlay.setGeometry(start)
-        overlay.show()
-        overlay.raise_()
-        self.window.setWindowOpacity(0.0)
-        # 只对快照做几何动画。真实窗口一次完成原生状态切换，normalGeometry
-        # 仍由 Qt 保存，贴边、任务栏工作区和跨屏位置不会被逐帧 resize 覆盖。
-        self._set_maximized(maximize)
-        serial = self._serial
-        QTimer.singleShot(0, lambda: self._animate_resize(serial, start))
-
-    def _set_maximized(self, maximized):
-        if maximized:
-            self.window.showMaximized()
+    def restore(self):
+        if self.window.isVisible() and self.prepare_show():
+            self._api.show(int(self.window.winId()), _SW_RESTORE)
         else:
             self.window.showNormal()
 
-    def _animate_resize(self, serial, start, attempt=0):
-        overlay = self._overlay
-        if serial != self._serial or overlay is None:
-            return
-        end = QRect(self.window.frameGeometry())
-        # 部分窗口后端先发状态事件，再异步更新工作区几何；下一帧再取终点，
-        # 避免把原尺寸当终点后在动画结束时突然跳到最大化尺寸。
-        if end == start and attempt < 3:
-            QTimer.singleShot(16, lambda: self._animate_resize(serial, start, attempt + 1))
-            return
-        overlay.after = self.window.grab()
-        animation = QVariantAnimation(self)
-        animation.setDuration(self.RESIZE_MS)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.OutCubic)
+    def toggle_max_restore(self):
+        if self.window.isVisible() and self.prepare_show():
+            hwnd = int(self.window.winId())
+            command = _SW_RESTORE if self._api.is_zoomed(hwnd) else _SW_MAXIMIZE
+            self._api.show(hwnd, command)
+        elif self.window.isMaximized():
+            self.window.showNormal()
+        else:
+            self.window.showMaximized()
 
-        def render(progress):
-            overlay.setGeometry(QRect(
-                round(start.x() + (end.x() - start.x()) * progress),
-                round(start.y() + (end.y() - start.y()) * progress),
-                round(start.width() + (end.width() - start.width()) * progress),
-                round(start.height() + (end.height() - start.height()) * progress),
-            ))
-            overlay.progress = progress
-            overlay.update()
-
-        animation.valueChanged.connect(render)
-        animation.finished.connect(self._reveal)
-        self._animation = animation
-        animation.start()
+    def native_event(self, message):
+        if self._api is None:
+            return False, 0
+        msg = wintypes.MSG.from_address(int(message))
+        if msg.message != _WM_NCCALCSIZE or not msg.wParam or not msg.lParam:
+            return False, 0
+        # 保留 WS_CAPTION/WS_THICKFRAME 给 DWM，但不显示第二套系统标题栏。
+        # 最大化时客户区取实际工作区，防止系统缩放边框遮住顶栏或任务栏。
+        if self._api.is_zoomed(msg.hwnd) and not self.window.isFullScreen():
+            monitor = self._api.monitor_from_window(msg.hwnd, 2)
+            info = _MONITORINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if self._api.monitor_info(monitor, ctypes.byref(info)):
+                params = _NCCALCSIZE_PARAMS.from_address(msg.lParam)
+                rect = params.rgrc[0]
+                rect.left, rect.top = info.rcWork.left, info.rcWork.top
+                rect.right, rect.bottom = info.rcWork.right, info.rcWork.bottom
+        return True, 0
