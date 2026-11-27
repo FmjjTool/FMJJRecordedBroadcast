@@ -571,6 +571,16 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
                lambda req: music_tag.detail(req.q("rel", "")))
     server.get("/api/music-tag/history",
                lambda req: music_tag.history(req.q("rel", "")))
+    server.get("/api/music-tag/pictures",
+               lambda req: music_tag.pictures(req.q("rel", "")))
+
+    def music_picture(req):
+        result = music_tag.picture(req.q("rel"), req.q_int("index", -1),
+                                   req.q("revision"), thumbnail=req.q("thumbnail") == "1")
+        if req.q("download") == "1":
+            return AttachmentResponse(result["data"], result["filename"], result["mime"])
+        return BytesResponse(result["data"], result["mime"])
+    server.get("/api/music-tag/picture", music_picture)
     server.get("/api/music-tag/encoding-profiles",
                lambda req: music_tag.encoding_profiles())
     server.post("/api/music-tag/encoding-preview",
@@ -578,7 +588,7 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
 
     def start_tag_write(req):
         return music_tag.start_write(dict(req.json or {}))
-    server.post("/api/tools/music-tag/write", start_tag_write)
+    server.post("/api/tools/music-tag/write", start_tag_write, max_body=32 * 1024 * 1024)
 
     server.post("/api/tools/music-tag/cover/extract",
                 lambda req: music_tag.start_extract_cover(dict(req.json or {})))

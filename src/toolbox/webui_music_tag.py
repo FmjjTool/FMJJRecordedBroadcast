@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,9 @@ _AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".wav", ".ogg", ".ape", ".wv",
 _MAX_FILES = 300
 _MAX_HISTORY = 60
 _MAX_SCAN = 500
+# Serialize Web writes through their version check, save and readback. Desktop
+# and other processes remain subject to optimistic file revision checks.
+_WRITE_LOCK = threading.RLock()
 FIELDS = {
     "title": {"type": "str", "default": "", "label": "标题"},
     "artist": {"type": "str", "default": "", "label": "艺术家"},
@@ -271,6 +275,25 @@ def encoding_profiles() -> dict:
                        for key in ENCODING_FIELDS]}
 
 
+def pictures(payload: dict) -> dict:
+    from toolbox.webui_music_pictures import snapshot
+
+    path = _resolve(payload.get("rel") or "")
+    return {"rel": path.relative_to(_root()).as_posix(), **snapshot(path)}
+
+
+def picture(payload: dict, *, thumbnail: bool = False) -> dict:
+    from toolbox.webui_music_pictures import read_picture
+
+    path = _resolve(payload.get("rel") or "")
+    data, mime = read_picture(path, payload.get("index"),
+                              payload.get("revision"), thumbnail=thumbnail)
+    extensions = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+                  "image/webp": ".webp", "image/bmp": ".bmp", "image/tiff": ".tiff"}
+    return {"data": data, "mime": mime,
+            "filename": path.stem + "_" + str(payload.get("index")) + extensions.get(mime, ".png")}
+
+
 def extract_cover(payload: dict, *, is_cancelled=lambda: False,
                   on_progress=lambda message, progress: None) -> dict:
     """Export the stored front cover next to one audio file, without changing tags."""
@@ -329,26 +352,44 @@ def extract_cover(payload: dict, *, is_cancelled=lambda: False,
 
 def write(payload: dict) -> dict:
     """写入标签：只处理提交的字段（空串表示清除该字段）。"""
+    with _WRITE_LOCK:
+        return _write_locked(payload)
+
+
+def _write_locked(payload: dict) -> dict:
     from music import tag_history
     from music.tags_io import load_tags, save_tags
 
     path = _resolve(payload.get("rel") or "")
     incoming = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     changed = {key: str(incoming[key]) for key in _FIELDS if key in incoming}
-    if not changed:
+    has_pictures = "pictures" in payload
+    if not changed and not has_pictures:
         raise ValueError("没有要写入的字段")
+    picture_list = None
+    if has_pictures:
+        from toolbox.webui_music_pictures import resolve_pictures
+        if payload.get("confirmed") is not True:
+            raise ValueError("请先确认写入所选音乐文件的图片")
+        picture_list = resolve_pictures(path, payload["pictures"], payload.get("picture_revision"))
     settings = _settings()
     before = load_tags(str(path), settings["connector"]) or {}
     after = dict(before)
     after.update(changed)
-    save_tags(str(path), after, id3_version=settings["id3_version"])
+    save_tags(str(path), after, id3_version=settings["id3_version"], pictures=picture_list)
     tag_history.record(str(path), before, after)
     fresh = load_tags(str(path), settings["connector"]) or {}
-    return {
+    result = {
         "rel": path.relative_to(_root()).as_posix(),
         "fields": {key: str(fresh.get(key) or "") for key in _FIELDS},
         "summary": f"已写入 {path.name}（{len(changed)} 个字段）",
     }
+    if has_pictures or payload.get("include_pictures") is True:
+        from toolbox.webui_music_pictures import snapshot
+        result["picture_state"] = snapshot(path)
+    if has_pictures:
+        result["summary"] = f"已写入 {path.name}（标签与 {len(picture_list)} 张图片）"
+    return result
 
 
 def lyric_candidates(payload: dict) -> dict:
@@ -383,6 +424,11 @@ def lyric_candidates(payload: dict) -> dict:
 
 def lyric_apply(payload: dict) -> dict:
     """按候选的来源与 ID 重新搜索并写入歌词（含翻译时合并到同一歌词块）。"""
+    with _WRITE_LOCK:
+        return _lyric_apply_locked(payload)
+
+
+def _lyric_apply_locked(payload: dict) -> dict:
     from music import tag_history, tag_search
     from music.tags_io import load_tags, save_tags
 

@@ -27,6 +27,13 @@ class MusicTagService:
     def encoding_profiles(self) -> dict:
         return webui_music_tag.encoding_profiles()
 
+    def pictures(self, rel: str) -> dict:
+        return webui_music_tag.pictures({"rel": rel})
+
+    def picture(self, rel: str, index: int, revision: str, *, thumbnail: bool = False) -> dict:
+        return webui_music_tag.picture({"rel": rel, "index": index, "revision": revision},
+                                      thumbnail=thumbnail)
+
     def _submit(self, kind: str, payload: dict, handler) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

@@ -11260,6 +11260,8 @@ function renderMusicTag(root) {
       root.replaceChildren();
       var files = (data.files || []).slice();
       var selected = '';
+      var editorVersion = 0;
+      var canLeaveEditor = function () { return true; };
       var editorHost = h('div');
       var jobHost = h('div');
       var tableHost = h('div');
@@ -11316,6 +11318,7 @@ function renderMusicTag(root) {
           tr.appendChild(h('td', null, row.year || '-'));
           tr.appendChild(h('td', null, row.genre || '-'));
           tr.addEventListener('click', function () {
+            if (selected === row.rel || !canLeaveEditor()) return;
             selected = row.rel;
             renderFiles();
             openEditor(row);
@@ -11323,16 +11326,18 @@ function renderMusicTag(root) {
           body.appendChild(tr);
         });
         tableHost.appendChild(h('div', { class: 'table-wrap' },
-          h('table', { class: 'db-table' }, h('thead', null, h('tr', null,
+          h('table', { class: 'db-table music-file-table' }, h('thead', null, h('tr', null,
             h('th', null, '文件名'), h('th', null, '标题'),
             h('th', null, '艺术家'), h('th', null, '专辑'),
             h('th', null, '年份'), h('th', null, '流派'))), body)));
       }
 
       function openEditor(row) {
+        var version = ++editorVersion;
         setLoading(editorHost, '正在读取标签…');
         api('/api/music-tag/detail?rel=' + encodeURIComponent(row.rel))
           .then(function (detail) {
+            if (version !== editorVersion) return;
             var fields = detail.fields || {};
             var fieldSchema = detail.field_schema || [];
             var inputs = {};
@@ -11356,6 +11361,8 @@ function renderMusicTag(root) {
             var lyricHost = h('div');
             var historyHost = h('div');
             var encodingHost = h('div');
+            var pictureHost = h('div');
+            var pictureEditor = null;
             var saveBtn = h('button', { class: 'btn primary', type: 'button' },
               '写入标签');
             var lyricBtn = h('button', { class: 'btn', type: 'button' },
@@ -11366,6 +11373,7 @@ function renderMusicTag(root) {
               '提取封面');
             var encodingBtn = h('button', { class: 'btn', type: 'button' },
               '编码修复');
+            var pictureBtn = h('button', { class: 'btn', type: 'button' }, '编辑图片');
             var busy = false;
             var persistedFields = Object.assign({}, fields);
 
@@ -11374,6 +11382,30 @@ function renderMusicTag(root) {
                 return inputs[key].value !== String(persistedFields[key] || '');
               }) || lyrics.value !== String(persistedFields.lyrics || '');
             }
+            canLeaveEditor = function () {
+              if (busy || (pictureEditor && pictureEditor.isReading())) {
+                toast('当前任务尚未结束，请稍后切换音乐文件', 'info');
+                return false;
+              }
+              return !(currentFormChanged() || (pictureEditor && pictureEditor.isDirty()))
+                || window.confirm('切换音乐文件将放弃当前未保存的修改。继续？');
+            };
+            function updatePictureBusy() {
+              if (pictureEditor) pictureEditor.setBusy(busy);
+              [saveBtn, lyricBtn, coverBtn, historyBtn, encodingBtn, pictureBtn].forEach(function (button) {
+                button.disabled = busy;
+              });
+              Object.keys(inputs).forEach(function (key) { inputs[key].disabled = busy; });
+              lyrics.disabled = busy;
+            }
+            pictureBtn.addEventListener('click', function () {
+              if (busy) return;
+              if (!pictureEditor) pictureEditor = window.createMusicPictureEditor(pictureHost, {
+                h: h, api: api, withToken: withToken, fmtBytes: fmtBytes, toast: toast,
+                rel: row.rel, isBusy: function () { return busy; }
+              });
+              pictureHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
 
             function showHistory(data) {
               var rows = data.rows || [];
@@ -11409,6 +11441,7 @@ function renderMusicTag(root) {
                   renderSnapshot(item);
                 });
                 loadBtn.addEventListener('click', function () {
+                  if (busy) return;
                   if (currentFormChanged() && !window.confirm(
                     '载入历史快照将替换当前未保存的修改。继续？')) return;
                   Object.keys(inputs).forEach(function (key) {
@@ -11430,6 +11463,7 @@ function renderMusicTag(root) {
             }
 
             historyBtn.addEventListener('click', function () {
+              if (busy) return;
               historyBtn.disabled = true;
               api('/api/music-tag/history?rel=' + encodeURIComponent(row.rel))
                 .then(showHistory)
@@ -11520,6 +11554,7 @@ function renderMusicTag(root) {
               if (!window.confirm('提取「' + row.name + '」的内嵌封面？\n\n'
                   + '图片写入同一音乐目录；同名图片已存在时会跳过，不会覆盖。')) return;
               busy = true;
+              updatePictureBusy();
               coverBtn.disabled = true;
               coverBtn.textContent = '提取中…';
               post('/api/tools/music-tag/cover/extract', {
@@ -11529,6 +11564,7 @@ function renderMusicTag(root) {
                   cancelable: true,
                   onSettled: function (job) {
                     busy = false;
+                    updatePictureBusy();
                     coverBtn.disabled = false;
                     coverBtn.textContent = '提取封面';
                     if (job.status === 'error') {
@@ -11541,6 +11577,7 @@ function renderMusicTag(root) {
                 });
               }).catch(function (error) {
                 busy = false;
+                updatePictureBusy();
                 coverBtn.disabled = false;
                 coverBtn.textContent = '提取封面';
                 toast('提取封面失败：' + error.message, 'error');
@@ -11549,7 +11586,13 @@ function renderMusicTag(root) {
 
             saveBtn.addEventListener('click', function () {
               if (busy) return;
+              var picturePayload;
+              try { picturePayload = pictureEditor && pictureEditor.payload(); }
+              catch (error) { toast(error.message, 'error'); return; }
+              if (picturePayload && !window.confirm('将图片修改写入「' + row.name
+                  + '」？\n\n保存后会替换文件中的内嵌图片列表，已移除的图片将不再保留。')) return;
               busy = true;
+              updatePictureBusy();
               saveBtn.disabled = true;
               saveBtn.textContent = '写入中…';
               var payloadFields = {};
@@ -11557,9 +11600,9 @@ function renderMusicTag(root) {
                 payloadFields[key] = inputs[key].value;
               });
               payloadFields.lyrics = lyrics.value;
-              post('/api/tools/music-tag/write', {
-                rel: row.rel, fields: payloadFields
-              }).then(function (result) {
+              post('/api/tools/music-tag/write', Object.assign({
+                rel: row.rel, fields: payloadFields, include_pictures: !!pictureEditor
+              }, picturePayload || {}, picturePayload ? { confirmed: true } : {})).then(function (result) {
                 watchJob(jobHost, result.job, function (job) {
                   var outcome = job.result || {};
                   toast(outcome.summary || '已写入', 'success');
@@ -11569,6 +11612,7 @@ function renderMusicTag(root) {
                   });
                   lyrics.value = fresh.lyrics || '';
                   persistedFields = Object.assign({}, fresh);
+                  if (pictureEditor && outcome.picture_state) pictureEditor.commit(outcome.picture_state);
                   var target = files.find(function (item) { return item.rel === row.rel; });
                   if (target) {
                     target.title = fresh.title || '';
@@ -11581,15 +11625,20 @@ function renderMusicTag(root) {
                 }, {
                   onSettled: function (job) {
                     busy = false;
+                    updatePictureBusy();
                     saveBtn.disabled = false;
                     saveBtn.textContent = '写入标签';
                     if (job.status === 'error') {
                       toast('写入失败：' + (job.error || '未知错误'), 'error');
                     }
+                  },
+                  onPollError: function (_error, retry) {
+                    setTimeout(retry, 1000);
                   }
                 });
               }).catch(function (error) {
                 busy = false;
+                updatePictureBusy();
                 saveBtn.disabled = false;
                 saveBtn.textContent = '写入标签';
                 toast('写入失败：' + error.message, 'error');
@@ -11599,6 +11648,7 @@ function renderMusicTag(root) {
             lyricBtn.addEventListener('click', function () {
               if (busy) return;
               busy = true;
+              updatePictureBusy();
               lyricBtn.disabled = true;
               lyricBtn.textContent = '搜索歌词…';
               post('/api/tools/music-tag/lyric/search', {
@@ -11617,6 +11667,13 @@ function renderMusicTag(root) {
                     var useBtn = h('button', { class: 'btn mini', type: 'button' },
                       '使用');
                     useBtn.addEventListener('click', function () {
+                      if (busy) return;
+                      if (pictureEditor && (pictureEditor.isDirty() || pictureEditor.isReading())) {
+                        toast('请先写入或取消图片修改，再使用歌词候选', 'info');
+                        return;
+                      }
+                      busy = true;
+                      updatePictureBusy();
                       useBtn.disabled = true;
                       post('/api/tools/music-tag/lyric/apply', {
                         rel: row.rel, source: cand.source,
@@ -11627,9 +11684,13 @@ function renderMusicTag(root) {
                         watchJob(jobHost, applied.job, function (done) {
                           var data = done.result || {};
                           lyrics.value = data.lyrics || '';
+                          persistedFields.lyrics = lyrics.value;
+                          if (pictureEditor) pictureEditor.reload();
                           toast(data.summary || '歌词已写入', 'success');
                         }, {
                           onSettled: function (failed) {
+                            busy = false;
+                            updatePictureBusy();
                             useBtn.disabled = false;
                             if (failed.status === 'error') {
                               toast('写入失败：' + (failed.error || ''), 'error');
@@ -11637,6 +11698,8 @@ function renderMusicTag(root) {
                           }
                         });
                       }).catch(function (error) {
+                        busy = false;
+                        updatePictureBusy();
                         useBtn.disabled = false;
                         toast('写入失败：' + error.message, 'error');
                       });
@@ -11654,6 +11717,7 @@ function renderMusicTag(root) {
                 }, {
                   onSettled: function (job) {
                     busy = false;
+                    updatePictureBusy();
                     lyricBtn.disabled = false;
                     lyricBtn.textContent = '抓取歌词';
                     if (job.status === 'error') {
@@ -11663,6 +11727,7 @@ function renderMusicTag(root) {
                 });
               }).catch(function (error) {
                 busy = false;
+                updatePictureBusy();
                 lyricBtn.disabled = false;
                 lyricBtn.textContent = '抓取歌词';
                 toast('搜索失败：' + error.message, 'error');
@@ -11678,12 +11743,15 @@ function renderMusicTag(root) {
                   '歌词'),
                 lyrics,
                 h('div', { class: 'toolbar', style: 'margin-top:8px' },
-                  lyricBtn, coverBtn, historyBtn, encodingBtn, saveBtn,
+                  lyricBtn, historyBtn, encodingBtn, saveBtn),
+                h('div', { class: 'toolbar', style: 'margin-top:8px' },
+                  pictureBtn, coverBtn,
                   h('span', { class: 'muted small' },
                     '写入前会自动记录标签历史。')),
-                lyricHost, historyHost, encodingHost));
+                pictureHost, lyricHost, historyHost, encodingHost));
             editorHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }).catch(function (error) {
+            if (version !== editorVersion) return;
             setError(editorHost, error, function () { openEditor(row); });
           });
       }
@@ -13208,8 +13276,8 @@ function renderMusicTag(root) {
           : '暂无采集记录。';
         var collectBtn = h('button', {
           class: 'btn primary', type: 'button'
-        }, '立即采集');
-        var syncBtn = h('button', { class: 'btn', type: 'button' }, '表格同步');
+        }, '采集指标');
+        var syncBtn = h('button', { class: 'btn', type: 'button' }, '同步表格数据');
         syncBtn.hidden = !isTableDoc;
         var openBtn = h('button', { class: 'btn', type: 'button' }, '打开链接');
         openBtn.disabled = !current.url;
@@ -13250,10 +13318,10 @@ function renderMusicTag(root) {
           });
         }
         collectBtn.addEventListener('click', function () {
-          start('/api/tcdoc/collect', '采集');
+          start('/api/tcdoc/collect', '指标采集');
         });
         syncBtn.addEventListener('click', function () {
-          start('/api/tcdoc/sync', '表格同步');
+          start('/api/tcdoc/sync', '表格数据同步');
         });
 
         var tabs = h('div', { class: 'tabs' });
@@ -14172,15 +14240,9 @@ function renderMusicTag(root) {
           }
           var rowsHost = h('div');
           var pagerHost = h('div', { class: 'col-pager' });
-          var syncNow = h('button', {
-            class: 'btn', type: 'button'
-          }, '同步表格');
-          syncNow.addEventListener('click', function () {
-            start('/api/tcdoc/sync', '表格同步');
-          });
           tabHost.appendChild(h('div', { class: 'toolbar' },
             h('span', { class: 'muted small' }, '工作表'), sheetSelect,
-            h('span', { style: 'flex:1' }), syncNow));
+            h('span', { style: 'flex:1' })));
           tabHost.appendChild(rowsHost);
           tabHost.appendChild(pagerHost);
           sheetSelect.addEventListener('change', function () {
@@ -14193,7 +14255,7 @@ function renderMusicTag(root) {
             var tabId = state.tcdoc.rowsTab;
             if (!tabId) {
               rowsHost.replaceChildren(empty(
-                '暂无表格同步数据。点「同步表格」抓取当前文档。'));
+                '暂无本地表格数据。请使用页面顶部「同步表格数据」。'));
               pagerHost.replaceChildren();
               return;
             }
@@ -14267,7 +14329,7 @@ function renderMusicTag(root) {
           var daily = (data.daily || []).slice().reverse();
           if (!daily.length) {
             tabHost.appendChild(empty(
-              '暂无采集历史。点「立即采集」开始第一次采集。'));
+                '暂无指标记录。点页面顶部「采集指标」开始第一次采集。'));
             return;
           }
           var body = h('tbody');

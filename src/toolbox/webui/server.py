@@ -35,6 +35,7 @@ _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/music_pictures.js": ("music_pictures.js", "text/javascript; charset=utf-8"),
     "/tcdoc_versions.js": ("tcdoc_versions.js", "text/javascript; charset=utf-8"),
     "/performance_reports.js": ("performance_reports.js", "text/javascript; charset=utf-8"),
     "/cover_automation.js": ("cover_automation.js", "text/javascript; charset=utf-8"),
@@ -114,6 +115,7 @@ class WebUIServer:
         self._on_stop = on_stop
         self._static_dir = Path(__file__).resolve().parent / "static"
         self._routes: dict[tuple[str, str], object] = {}
+        self._post_body_limits: dict[str, int] = {}
         self._dynamic: list[tuple[str, re.Pattern, object]] = []
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -136,7 +138,13 @@ class WebUIServer:
     def get(self, path: str, fn) -> None:
         self._routes[("GET", path)] = fn
 
-    def post(self, path: str, fn) -> None:
+    def post(self, path: str, fn, *, max_body: int | None = None) -> None:
+        if max_body is not None:
+            if type(max_body) is not int or not 0 < max_body <= 32 * 1024 * 1024:
+                raise ValueError("invalid request size limit")
+            self._post_body_limits[path] = max_body
+        else:
+            self._post_body_limits.pop(path, None)
         self._routes[("POST", path)] = fn
 
     def get_re(self, pattern: str, fn) -> None:
@@ -467,8 +475,24 @@ def _make_handler(app: WebUIServer):
                 try:
                     length = int(headers.get("content-length", "0") or 0)
                 except ValueError:
-                    length = 0
-                if length > _MAX_BODY:
+                    self.close_connection = True
+                    self._send(_error(400, "invalid body length"))
+                    return
+                if length < 0:
+                    self.close_connection = True
+                    self._send(_error(400, "invalid body length"))
+                    return
+                limit = app._post_body_limits.get(parsed.path, _MAX_BODY)
+                if limit > _MAX_BODY:
+                    # Larger, explicitly registered uploads authenticate before allocation.
+                    preflight = Request(method=method, path=parsed.path, query=query,
+                                        headers=headers)
+                    if not app._auth(preflight) or not app._origin_ok(preflight):
+                        self.close_connection = True
+                        self._send(_error(403, "forbidden"))
+                        return
+                if length > limit:
+                    self.close_connection = True
                     self._send(_error(413, "body too large"))
                     return
                 raw = self.rfile.read(length) if length else b""

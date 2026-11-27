@@ -661,4 +661,10 @@ td.ellipsis { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white
   min-width: 0;
 }
 .form-grid .input { width: 100%; }
+.music-picture-editor { margin-top: 12px; }
+.music-picture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.music-picture-item { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.music-picture-preview { display: block; width: 100%; height: 200px; object-fit: contain; background: var(--panel-2); border-radius: 6px; margin-bottom: 8px; }
+.music-picture-description { overflow-wrap: anywhere; margin: 8px 0; }
+.music-picture-item .toolbar { margin-bottom: 0; }
 .db-table tbody tr.selected { background: var(--hover, rgba(127, 127, 127, .12)); }

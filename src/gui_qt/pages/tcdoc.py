@@ -678,23 +678,44 @@ class TcDocPage(BasePage):
         self.link_btn.clicked.connect(self._open_doc_url)
         row.addWidget(self.link_btn)
         row.addStretch(1)
+        cv.addLayout(row)
 
-        self.collect_btn = QPushButton("立即采集")
-        self.collect_btn.setProperty("variant", "primary")
-        self.collect_btn.setToolTip(
-            "采集全部文档的浏览量 / 成员数 / 已查看浏览人（昵称 + 最近浏览时间），"
-            "写入历史记录与报表（不含表格同步）")
-        self.collect_btn.clicked.connect(self._collect)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        self.versions_btn = QPushButton("采集版本")
+        self.versions_btn.setToolTip("按采集时间和版本号选择并打开本地历史快照")
+        self.versions_btn.clicked.connect(self._open_versions)
+        actions.addWidget(self.versions_btn)
+
+        self.sync_btn = QPushButton("同步表格数据")
+        self.sync_btn.setToolTip(
+            "抓取当前文档的表格内容并更新本地快照；不采集浏览量等指标")
+        self.sync_btn.clicked.connect(self._sync_tables)
+        self.sync_btn.setVisible(False)
+        actions.addWidget(self.sync_btn)
+
+        self.images_btn = QPushButton("补采表格图片")
+        self.images_btn.setToolTip(
+            "为当前文档补采尚未下载的表格图片；已保存图片会自动跳过")
+        self.images_btn.clicked.connect(self._collect_images)
+        self.images_btn.setVisible(False)
+        actions.addWidget(self.images_btn)
+
         self.dir_btn = QPushButton("打开数据目录")
         self.dir_btn.setToolTip(
             "打开 download/腾讯文档数据/（报表/、表格数据/、正文存档/、图片/、数据库与日志）")
         self.dir_btn.clicked.connect(self._open_data_dir)
-        self.versions_btn = QPushButton("采集版本")
-        self.versions_btn.setToolTip("按采集时间和版本号选择并打开本地历史快照")
-        self.versions_btn.clicked.connect(self._open_versions)
-        for btn in (self.versions_btn, self.collect_btn, self.dir_btn):
-            row.addWidget(btn)
-        cv.addLayout(row)
+        actions.addWidget(self.dir_btn)
+
+        actions.addStretch(1)
+        self.collect_btn = QPushButton("采集指标")
+        self.collect_btn.setProperty("variant", "primary")
+        self.collect_btn.setToolTip(
+            "采集全部文档的浏览量、成员数与已查看浏览人，写入指标历史和报表；不抓取表格内容")
+        self.collect_btn.clicked.connect(self._collect)
+        actions.addWidget(self.collect_btn)
+        cv.addLayout(actions)
 
         # 自动维护：单独一条浅色带，开关在左、作用范围在右，不再和按钮挤一行
         auto_bar = QFrame()
@@ -706,7 +727,7 @@ class TcDocPage(BasePage):
         self.auto_cb.setToolTip(
             "开启后定时任务按勾选的子表同步；关闭后定时任务不再同步任何子表。"
             "计划任务本身保留，时间仍在「任务」页统一管理。"
-            "手动「立即采集 / 表格同步」不受影响。")
+            "手动「采集指标 / 同步表格数据」不受影响。")
         self.auto_cb.toggled.connect(self._on_auto_toggled)
         auto_row.addWidget(self.auto_cb)
         auto_row.addStretch(1)
@@ -1033,32 +1054,16 @@ class TcDocPage(BasePage):
         bar.addWidget(self.sheet_info)
         bar.addStretch(1)
 
-        self.sync_btn = QPushButton("同步表格")
-        self.sync_btn.setStyleSheet("background: #2e7d32; color: white;")
-        self.sync_btn.setToolTip(
-            "只同步当前文档的表格数据（纯 HTTP，不动浏览量），公开文档可免登录；"
-            "文档版本未变化时自动跳过")
-        self.sync_btn.clicked.connect(self._sync_tables)
-        bar.addWidget(self.sync_btn)
-
-        self.images_btn = QPushButton("采集图片")
-        self.images_btn.setToolTip(
-            "把当前文档全部表格图片字段里的图片增量下载到 图片/（已下载自动跳过）")
-        self.images_btn.clicked.connect(self._collect_images)
-        bar.addWidget(self.images_btn)
-
-        self.prev_btn = QPushButton("◀")
-        self.prev_btn.setToolTip("上一页")
-        self.prev_btn.setFixedWidth(34)
+        self.prev_btn = QPushButton("上一页")
+        self.prev_btn.setToolTip("显示上一页表格记录")
         self.prev_btn.clicked.connect(lambda: self._load_sheet_page(delta=-1))
         bar.addWidget(self.prev_btn)
         self.page_label = QLabel("-/-")
         self.page_label.setAlignment(Qt.AlignCenter)
         self.page_label.setMinimumWidth(66)
         bar.addWidget(self.page_label)
-        self.next_btn = QPushButton("▶")
-        self.next_btn.setToolTip("下一页")
-        self.next_btn.setFixedWidth(34)
+        self.next_btn = QPushButton("下一页")
+        self.next_btn.setToolTip("显示下一页表格记录")
         self.next_btn.clicked.connect(lambda: self._load_sheet_page(delta=1))
         bar.addWidget(self.next_btn)
 
@@ -1404,6 +1409,11 @@ class TcDocPage(BasePage):
         self.auto_cb.blockSignals(False)
         doc = self.current_doc() or {}
         key = str(doc.get("key") or "")
+        is_table_doc = bool(doc) and (doc.get("kind") or "").lower() in tables.SYNC_KINDS
+        self.sync_btn.setVisible(is_table_doc)
+        self.images_btn.setVisible(is_table_doc)
+        self.sync_btn.setEnabled(is_table_doc and not self._busy)
+        self.images_btn.setEnabled(is_table_doc and not self._busy)
         self.sync_tabs_btn.setEnabled(bool(key))
         if not key:
             self.sync_tabs_label.setText("子表范围：—")
@@ -1558,7 +1568,7 @@ class TcDocPage(BasePage):
             if err:
                 self.latest_label.setText(f"最新记录读取失败：{err}"[:200])
             elif not row:
-                self.latest_label.setText("该文档暂无记录，点「立即采集」开始")
+                self.latest_label.setText("该文档暂无指标记录，点「采集指标」开始")
             else:
                 views = "-" if row["views"] is None else row["views"]
                 self.latest_label.setText(
@@ -1697,14 +1707,14 @@ class TcDocPage(BasePage):
         elif (doc.get("kind") or "").lower() not in tables.SYNC_KINDS:
             self.sheet_hint.setText("该文档类型没有表格数据，内容 Tab 已自动切换为正文预览")
         elif not sheets:
-            self.sheet_hint.setText("该文档还没有本地表格数据，点「同步表格」开始")
+            self.sheet_hint.setText("该文档还没有本地表格数据，点顶部「同步表格数据」开始")
         elif skipped:
             names = "、".join(s["tab_name"] for s in skipped[:6])
             more = " 等" if len(skipped) > 6 else ""
             self.sheet_hint.setText(f"已跳过 {len(skipped)} 个非表格页：{names}{more}"
                                     "（普通表格 / 图表页 / 文章页不支持同步）")
         else:
-            self.sheet_hint.setText("点「同步表格」把文档里的表格内容抓到本地；"
+            self.sheet_hint.setText("点顶部「同步表格数据」把文档里的表格内容抓到本地；"
                                     "图片字段会自动增量下载到 图片/。")
 
     def _current_tab_id(self) -> str:
@@ -1915,12 +1925,12 @@ class TcDocPage(BasePage):
                 if image_stats.get("failed"):
                     image_note += f"（失败 {image_stats['failed']}）"
             self.status_label.setText(
-                f"表格同步完成：新增 {added}　修改 {updated}　删除 {removed}"
+                f"表格数据同步完成：新增 {added}　修改 {updated}　删除 {removed}"
                 f"{image_note}　Excel 已更新到 表格数据/")
             if item.get("images_error"):
                 self.status_label.setText(
                     self.status_label.text() + f"　{item['images_error']}")
-            self.app.toast(f"表格同步完成：+{added} ~{updated} -{removed}"
+            self.app.toast(f"表格数据同步完成：+{added} ~{updated} -{removed}"
                            + (f"，图片 +{image_stats.get('downloaded', 0)}"
                               if image_stats.get("downloaded") else ""), "success")
             self._refresh_bridge_hint()
