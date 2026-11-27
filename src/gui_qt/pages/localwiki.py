@@ -158,7 +158,7 @@ class LocalWikiPage(BasePage):
     def _build_actions_card(self):
         card, box = self._card(
             "项目同步与网站启动",
-            "分别更新三个仓库；启动时可选小程序、Wiki 网站或全部项目")
+            "仓库更新与项目启动分开；启动可选仅小程序、仅 Wiki 或两者")
         self.deploy_btn = QPushButton("一键更新全部并部署 Wiki 网站")
         self.deploy_btn.setObjectName("wikiPrimary")
         self.deploy_btn.setMinimumHeight(40)
@@ -202,20 +202,20 @@ class LocalWikiPage(BasePage):
 
         start_row = QHBoxLayout()
         start_row.setSpacing(8)
-        start_row.addWidget(QLabel("运行项目"))
+        start_row.addWidget(QLabel("启动范围"))
         self.start_scope = QComboBox()
-        self.start_scope.setMinimumWidth(160)
+        self.start_scope.setMinimumWidth(220)
         self.start_scope.setSizeAdjustPolicy(
             QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.start_scope.setMinimumContentsLength(8)
-        self.start_scope.addItem("微信小程序（开发者工具）", "miniapp")
-        self.start_scope.addItem("Wiki 网站（网页 + API）", "wiki")
-        self.start_scope.addItem("全部项目", "all")
+        for option in projects.PROJECT_OPTIONS:
+            self.start_scope.addItem(option["label"], option["value"])
+            self.start_scope.setItemData(
+                self.start_scope.count() - 1, option["description"], Qt.ToolTipRole)
         self.start_scope.setToolTip(
-            "小程序会在微信开发者工具中打开；Wiki 网站会同时启动网页与 API；"
-            "全部项目会执行两项操作")
+            "选择只打开小程序、只启动 Wiki 网站，或两项都运行")
         start_row.addWidget(self.start_scope)
-        self.start_selected_btn = QPushButton("运行所选项目")
+        self.start_selected_btn = QPushButton("启动所选项目")
         self.start_selected_btn.setObjectName("wikiButton")
         self.start_selected_btn.setMinimumHeight(34)
         self.start_selected_btn.clicked.connect(self._start_selected_projects)
@@ -223,8 +223,8 @@ class LocalWikiPage(BasePage):
         start_row.addStretch(1)
         box.addLayout(start_row)
         start_note = QLabel(
-            "小程序仅在本机开发者工具中打开，不会上传或发布；"
-            "Wiki 网站启动时会一起运行网页与 API。")
+            "仅小程序：在本机开发者工具打开；仅 Wiki：启动网页和 API；"
+            "全部：执行以上两项。这里不会更新仓库，也不会上传或发布小程序。")
         start_note.setObjectName("wikiMuted")
         start_note.setWordWrap(True)
         box.addWidget(start_note)
@@ -817,7 +817,7 @@ class LocalWikiPage(BasePage):
                 server.open_site(self.service.url)
             return False
 
-        title = "运行所选项目" if scope != "all" else "运行全部项目"
+        title = "启动所选项目" if scope != "all" else "启动全部项目"
         self._start_task(title, work, on_ok=after, on_error=failed)
 
     def _open_site(self):

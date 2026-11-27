@@ -65,7 +65,7 @@ def _repo_rows(gitops, wiki_cfg) -> list[dict]:
 
 
 def overview() -> dict:
-    analytics, wiki_cfg, wiki_creds, deploy, gitops, localimages, server = \
+    analytics, wiki_cfg, wiki_creds, deploy, gitops, localimages, _server = \
         _webwiki()
     try:
         creds = wiki_creds.load() or {}
@@ -82,7 +82,7 @@ def overview() -> dict:
     except Exception:
         local_images = 0
     try:
-        service = server.SiteService().status()
+        service = _service().status()
     except Exception:
         api_port, site_port = wiki_cfg.ports()
         service = {"running": False, "api_running": False,
@@ -168,7 +168,8 @@ def overview() -> dict:
         },
         "docs": docs,
         "has_password": bool(analytics.has_password()),
-        "note": "微信小程序主程序与 Wiki 网站是两个独立项目；可分别运行或运行全部。",
+        "note": ("微信小程序与 Wiki 网站可单独运行，也可同时运行；"
+                 "更新仓库和一键部署是另一组操作。"),
     }
 
 
@@ -250,9 +251,12 @@ def start_projects(payload: dict, on_log=None, is_cancelled=None) -> dict:
     _analytics, wiki_cfg, _creds, _deploy, _gitops, _images, _server = _webwiki()
     if is_cancelled is not None and is_cancelled():
         raise ValueError("运行项目已取消")
+    scope = payload.get("scope")
+    service = (_service() if scope in (wiki_projects.WIKI, wiki_projects.ALL)
+               else None)
     summary = wiki_projects.start_selected(
-        payload.get("scope"), wiki_cfg.root_dir(),
-        on_log or (lambda _msg: None), service=_service())
+        scope, wiki_cfg.root_dir(),
+        on_log or (lambda _msg: None), service=service)
     return {"summary": summary}
 
 

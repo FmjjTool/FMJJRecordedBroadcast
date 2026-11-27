@@ -3348,7 +3348,11 @@ function renderLivestreamSummary(root) {
       pullBtn.disabled = !data.github.logged_in;
       var rebuildBtn = h('button', { class: 'btn', type: 'button' },
         '重建站点数据');
-      var projectSelect = h('select', { class: 'select' });
+      var projectSelect = h('select', {
+        class: 'select',
+        style: 'min-width:220px',
+        title: '选择仅启动小程序、仅启动 Wiki 网站，或同时启动两者'
+      });
       (data.project_options || []).forEach(function (project) {
         projectSelect.appendChild(h('option', {
           value: project.value,
@@ -3356,13 +3360,17 @@ function renderLivestreamSummary(root) {
         }, project.label));
       });
       var startProjectBtn = h('button', { class: 'btn', type: 'button' },
-        '运行所选项目');
+        '启动所选项目');
       var stopBtn = h('button', { class: 'btn', type: 'button' },
         '停止 Wiki 网站 + API');
       var collectBtn = h('button', { class: 'btn', type: 'button' },
         '采集今日');
       var openSiteBtn = h('button', { class: 'btn', type: 'button' },
-        '打开站点');
+        '打开 Wiki 网站');
+      stopBtn.disabled = !(service.site_running || service.api_running);
+      stopBtn.title = stopBtn.disabled ? 'Wiki 网站和 API 当前均未运行' : '';
+      openSiteBtn.disabled = !service.site_running;
+      openSiteBtn.title = openSiteBtn.disabled ? '请先启动 Wiki 网站' : '';
       var wikiBusy = false;
 
       function wikiAction(button, url, body, confirmText, extraControls, cancelable) {
@@ -3396,6 +3404,7 @@ function renderLivestreamSummary(root) {
               unlock();
               if (job.status === 'error') {
                 toast('执行失败：' + (job.error || '未知错误'), 'error');
+                if (url.indexOf('/projects/start') >= 0) renderLocalWiki(root);
               }
             }
           });
@@ -3403,6 +3412,7 @@ function renderLivestreamSummary(root) {
           wikiBusy = false;
           unlock();
           toast('执行失败：' + error.message, 'error');
+          if (url.indexOf('/projects/start') >= 0) renderLocalWiki(root);
         });
       }
 
@@ -3438,7 +3448,6 @@ function renderLivestreamSummary(root) {
       collectBtn.addEventListener('click', function () {
         wikiAction(collectBtn, '/api/tools/localwiki/collect', {});
       });
-      openSiteBtn.textContent = '打开 Wiki 网站';
       openSiteBtn.addEventListener('click', function () {
         if (service.url) window.open(service.url, '_blank', 'noopener');
       });
@@ -3470,9 +3479,10 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'toolbar', style: 'margin-top:8px' },
           h('span', { class: 'muted small' }, '更新范围'), repoSelect, pullBtn),
         h('div', { class: 'muted small', style: 'margin-bottom:8px' },
-          data.note || '可选启动小程序、Wiki 网站或全部项目；小程序仅在开发者工具打开。'),
+          '运行范围：仅微信小程序会在本机开发者工具打开；仅 Wiki 网站会启动网页和 API；'
+            + '全部会执行两项。启动项目不会更新仓库，也不会上传或发布小程序。'),
         h('div', { class: 'toolbar', style: 'margin-bottom:8px' },
-          h('span', { class: 'muted small' }, '运行项目'), projectSelect, startProjectBtn),
+          h('span', { class: 'muted small' }, '启动范围'), projectSelect, startProjectBtn),
         h('div', { class: 'toolbar' },
           deployBtn, rebuildBtn, stopBtn, collectBtn, openSiteBtn,
           h('span', { class: 'muted small' }, '改端口仍在桌面端')),

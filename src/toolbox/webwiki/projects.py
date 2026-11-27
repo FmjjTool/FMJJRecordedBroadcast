@@ -11,12 +11,12 @@ WIKI = "wiki"
 ALL = "all"
 ALLOWED_SCOPES = (MINIAPP, WIKI, ALL)
 PROJECT_OPTIONS = (
-    {"value": MINIAPP, "label": "微信小程序（开发者工具）",
-     "description": "在本机微信开发者工具打开工程；不会上传或发布"},
-    {"value": WIKI, "label": "Wiki 网站（网页 + API）",
-     "description": "同时启动 Wiki 网页和 API 服务"},
-    {"value": ALL, "label": "全部项目",
-     "description": "打开小程序工程并启动 Wiki 网站（网页 + API）"},
+    {"value": MINIAPP, "label": "仅微信小程序",
+     "description": "只在本机微信开发者工具打开小程序工程；不会上传或发布"},
+    {"value": WIKI, "label": "仅 Wiki 网站",
+     "description": "只启动 Wiki 网页和 API 服务"},
+    {"value": ALL, "label": "全部（小程序 + Wiki 网站）",
+     "description": "打开小程序工程，并启动 Wiki 网页和 API 服务"},
 )
 
 
