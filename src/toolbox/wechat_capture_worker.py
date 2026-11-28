@@ -20,6 +20,12 @@ from toolbox.wechat_capture_windows import CaptureNativeError
 
 _MAX_COMMAND = 1024
 _MAX_TIMEOUT = 120
+_DIAGNOSTIC_FIELDS = (
+    "proxy_connections", "connect_requests", "wechat_connects",
+    "upstream_tls", "client_tls", "http_requests",
+    "valid_candidates",
+)
+_MAX_DIAGNOSTIC_COUNT = 1_000_000
 _SAFE_CODES = frozenset({
     "unsupported", "invalid_port", "invalid_certificate", "busy", "existing_proxy",
     "proxy_read_failed", "proxy_write_failed", "proxy_restore_failed",
@@ -225,7 +231,8 @@ class _Output:
         self.stream = stream
         self.failed = False
 
-    def emit(self, state, *, cleanup_ok=False, cleanup_failed=False, url=None, code=None):
+    def emit(self, state, *, cleanup_ok=False, cleanup_failed=False, url=None, code=None,
+             diagnostics=None):
         if self.failed:
             return False
         data = {"state": state, "busy": state in ("starting", "detecting", "restoring"),
@@ -234,6 +241,13 @@ class _Output:
             data["url"] = url
         if state == "error" and isinstance(code, str) and code in _SAFE_CODES:
             data["code"] = code
+        if diagnostics is not None:
+            if (not isinstance(diagnostics, dict)
+                    or set(diagnostics) != set(_DIAGNOSTIC_FIELDS)
+                    or any(type(value) is not int or not 0 <= value <= _MAX_DIAGNOSTIC_COUNT
+                           for value in diagnostics.values())):
+                return False
+            data["diagnostics"] = diagnostics
         line = (json.dumps(data, ensure_ascii=True, separators=(",", ":")) + "\n").encode("ascii")
         try:
             pending = memoryview(line)
@@ -259,7 +273,7 @@ class _Candidate:
     def capture(self, value):
         with self.lock:
             if not self.armed or self.value:
-                return
+                return False
         try:
             # This existing validator is pure: it does not import auth, read
             # configuration, contact the platform, or install a session.
@@ -271,11 +285,13 @@ class _Candidate:
             candidate = "https://mp.weixin.qq.com/s?" + urlencode(minimal)
             validate_session_url(candidate)
         except Exception:
-            return
+            return False
         with self.lock:
             if self.armed and not self.value:
                 self.value = candidate
                 self.wake.set()
+                return True
+        return False
 
     def read(self):
         with self.lock:
@@ -310,6 +326,25 @@ def run_worker(reader, writer, *, certificate_factory=None, lease_factory=None,
     output = _Output(writer)
     commands = _Commands(reader, wake)
     candidate = _Candidate(wake)
+    diagnostic_lock = threading.Lock()
+    diagnostics = dict.fromkeys(_DIAGNOSTIC_FIELDS, 0)
+
+    def record_stage(stage):
+        if stage not in _DIAGNOSTIC_FIELDS or stage == "valid_candidates":
+            return
+        with diagnostic_lock:
+            if diagnostics[stage] < _MAX_DIAGNOSTIC_COUNT:
+                diagnostics[stage] += 1
+
+    def diagnostic_snapshot():
+        with diagnostic_lock:
+            return dict(diagnostics)
+
+    def capture_candidate(value):
+        if candidate.capture(value):
+            with diagnostic_lock:
+                if diagnostics["valid_candidates"] < _MAX_DIAGNOSTIC_COUNT:
+                    diagnostics["valid_candidates"] += 1
     certificate = lease = proxy = None
     state = "error"
     error_code = None
@@ -354,7 +389,9 @@ def run_worker(reader, writer, *, certificate_factory=None, lease_factory=None,
                 certificate = certificate_factory()
                 certificate.prepare()
             if interrupted() is None:
-                proxy = proxy_factory(server_context=certificate.context, on_capture=candidate.capture)
+                proxy = proxy_factory(
+                    server_context=certificate.context, on_capture=capture_candidate,
+                    on_diagnostic=record_stage)
                 proxy.start()
             if interrupted() is None:
                 # Retain the object even if acquisition partly fails.
@@ -364,7 +401,9 @@ def run_worker(reader, writer, *, certificate_factory=None, lease_factory=None,
             if state == "detecting":
                 with candidate.lock:
                     candidate.armed = True
-                output.emit("detecting")
+                last_diagnostics = diagnostic_snapshot()
+                last_diagnostic_emit = clock()
+                output.emit("detecting", diagnostics=last_diagnostics)
                 while True:
                     state = interrupted() or "detecting"
                     if state != "detecting":
@@ -375,6 +414,13 @@ def run_worker(reader, writer, *, certificate_factory=None, lease_factory=None,
                     if not proxy.running:
                         state = "error"
                         break
+                    current_diagnostics = diagnostic_snapshot()
+                    now = clock()
+                    if (current_diagnostics != last_diagnostics
+                            and now - last_diagnostic_emit >= 0.5):
+                        output.emit("detecting", diagnostics=current_diagnostics)
+                        last_diagnostics = current_diagnostics
+                        last_diagnostic_emit = now
                     poll_wait(min(0.1, max(0.0, deadline - clock())))
                     wake.clear()
     except BaseException as error:
@@ -415,7 +461,8 @@ def run_worker(reader, writer, *, certificate_factory=None, lease_factory=None,
         if late_reason:
             state = late_reason
         value = candidate.read() if state == "succeeded" else None
-        output.emit(state, cleanup_ok=True, url=value, code=error_code)
+        output.emit(state, cleanup_ok=True, url=value, code=error_code,
+                    diagnostics=diagnostic_snapshot())
         value = None
         candidate.clear()
     return 1 if state == "error" else 0
