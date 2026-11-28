@@ -229,7 +229,7 @@ class InfoAccountsPage(BasePage):
         layout.addWidget(self._build_batch_card())
         layout.addWidget(self._build_accounts_card())
         layout.addWidget(self._build_settings_card())
-        layout.addWidget(self._build_log_card())
+        layout.addWidget(self._build_log_card(), 1)
         self._scroll.setWidget(self._content)
         outer.addWidget(self._scroll)
 
@@ -503,9 +503,9 @@ class InfoAccountsPage(BasePage):
         head.addStretch(1)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFixedHeight(120)
+        self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.log_text.setPlaceholderText("等待采集任务…")
-        body.addWidget(self.log_text)
+        body.addWidget(self.log_text, 1)
         return card
 
     # ---------- 账号列表 ----------

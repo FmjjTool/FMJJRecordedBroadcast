@@ -197,6 +197,28 @@ class TCDocService:
                      direction: str, preview: str) -> dict:
         return self._mapping.page(session, page, mode, sort_column, direction, preview)
 
+    def mapping_cloud_rows(self, session: str, page: int, query: str,
+                           sort_column: str, direction: str, visible: list[str]) -> dict:
+        return self._mapping.cloud_rows(session, page, query, sort_column, direction, visible)
+
+    def start_mapping_cloud(self, operation: str, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        payload = dict(payload or {})
+        def run(job):
+            cancelled = lambda: bool(job.cancel_requested)
+            if operation in {"schema", "refresh"}:
+                return self._mapping.cloud_schema(
+                    str(payload.get("tab") or "official"), job.log, cancelled,
+                    str(payload.get("session") or "") if operation == "refresh" else None)
+            if operation == "preview":
+                return self._mapping.cloud_preview(payload, job.log, cancelled)
+            if operation == "apply":
+                return self._mapping.cloud_execute(payload, job.log, cancelled)
+            raise ValueError("云端映射操作无效")
+        job = self.jobs.submit("tcdoc_mapping_cloud_" + operation, run)
+        return {"job": job.id}
+
     def start_mapping(self, operation: str, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

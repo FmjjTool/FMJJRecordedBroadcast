@@ -2,11 +2,220 @@
   'use strict';
   var saved = null;
 
+  function renderTcdocCloudMapping(host, helpers, state) {
+    var h = helpers.h, api = helpers.api, post = helpers.post, toast = helpers.toast;
+    var c = state.cloud || (state.cloud = {
+      session: '', tab: 'official', fields: [], visible: [], selected: new Set(),
+      drafts: {}, page: 1, query: '', order: { order: '', asc: true },
+      preview: '', plans: [], job: '', action: '', result: ''
+    });
+    var busy = !!c.job, serial = 0, rows = [];
+    var target = h('select', { class: 'select', 'aria-label': '目标工作表' },
+      h('option', { value: 'official', selected: c.tab === 'official' }, '官方动态'),
+      h('option', { value: 'live', selected: c.tab === 'live' }, '直播记录'));
+    var search = h('input', { class: 'input', type: 'search',
+      placeholder: '搜索记录 ID 或字段内容', value: c.query, style: 'min-width:220px' });
+    var refresh = h('button', { class: 'btn', type: 'button' }, '刷新云端');
+    var status = h('span', { class: 'muted small' }, c.result || '');
+    var columns = h('details', { open: true, style: 'margin-top:8px' },
+      h('summary', { class: 'small' }, '选择显示列'));
+    var tableHost = h('div'), paging = h('div', { class: 'pager' });
+    var previewHost = h('div'), jobHost = h('div');
+    var selection = h('span', { class: 'small', role: 'status' });
+    var clear = h('button', { class: 'btn', type: 'button' }, '取消勾选');
+    var previewBtn = h('button', { class: 'btn primary', type: 'button' }, '预览并回写');
+
+    function message(text, kind) {
+      status.className = kind === 'error' ? 'error small' : 'muted small';
+      status.textContent = text || ''; c.result = text || '';
+    }
+    function update() {
+      busy = !!c.job;
+      target.disabled = busy; search.disabled = busy; refresh.disabled = busy;
+      clear.disabled = busy || !c.selected.size;
+      previewBtn.disabled = busy || !c.selected.size || !Object.keys(c.drafts).length;
+      selection.textContent = '已选择 ' + c.selected.size + ' 条 · 未回写草稿 ' +
+        Object.keys(c.drafts).reduce(function (sum, key) { return sum + Object.keys(c.drafts[key]).length; }, 0) + ' 项';
+      previewBtn.textContent = '预览并回写（' + c.selected.size + ' 条）';
+      columns.querySelectorAll('input').forEach(function (input) { input.disabled = busy; });
+      tableHost.querySelectorAll('input,button').forEach(function (input) { input.disabled = busy; });
+    }
+    function run(action, payload) {
+      if (c.job) return;
+      c.job = 'pending'; c.action = action; update(); message('正在处理…');
+      post('/api/tcdoc/mapping/cloud/' + action, payload).then(function (result) {
+        c.job = result.job; observeJob();
+      }).catch(function (error) {
+        c.job = ''; update(); message(error.message, 'error');
+      });
+    }
+    function observeJob() {
+      var action = c.action;
+      helpers.watchJob(jobHost, c.job, function (job) {
+        c.job = '';
+        var result = job.result || {};
+        if (result.cancelled) { message('任务已取消，可重新操作'); update(); return; }
+        if (action === 'schema' || action === 'refresh') {
+          c.session = result.session || ''; c.fields = result.fields || [];
+          c.visible = c.visible.filter(function (id) {
+            return c.fields.some(function (field) { return field.id === id; });
+          });
+          if (!c.visible.length) c.visible = c.fields.slice(0, 8).map(function (field) { return field.id; });
+          c.selected.clear(); c.drafts = {}; c.preview = ''; c.plans = []; c.page = 1;
+          message((result.target || '云端数据') + ' · 已读取 ' + (result.total || 0) + ' 条');
+          drawColumns(); loadRows();
+        } else if (action === 'preview') {
+          if (result.error) message(result.error, 'error');
+          else { c.preview = result.preview || ''; c.plans = result.plans || []; drawPreview(); message('已生成回写预览，请核对后确认'); }
+        } else if (action === 'apply') {
+          if (result.error || result.unknown_record_outcome) {
+            message(result.error || '回写结果不明，请刷新云端记录并人工核对', 'error');
+          } else {
+            (result.record_ids || []).forEach(function (rid) { delete c.drafts[rid]; c.selected.delete(rid); });
+            c.preview = ''; c.plans = []; message(result.summary || '回写完成，已读回核对');
+            run('refresh', { tab: c.tab, session: c.session });
+          }
+        }
+        update();
+      }, { cancelable: true, indeterminate: true, onSettled: function (job) {
+        c.job = '';
+        if (job.status === 'error') message(job.error || '任务未能完成，请重试', 'error');
+        if (job.status === 'cancelled') message('任务已取消，可重新操作');
+        update();
+      }});
+    }
+    function drawColumns() {
+      columns.querySelectorAll('label').forEach(function (node) { node.remove(); });
+      c.fields.forEach(function (field) {
+        var check = h('input', { type: 'checkbox', checked: c.visible.indexOf(field.id) >= 0 });
+        check.addEventListener('change', function () {
+          c.visible = check.checked ? c.visible.concat(field.id) : c.visible.filter(function (id) { return id !== field.id; });
+          if (!c.visible.length) { check.checked = true; c.visible = [field.id]; toast('至少保留一列显示', 'info'); return; }
+          drawTable();
+        });
+        columns.appendChild(h('label', { class: 'small', style: 'display:inline-flex;gap:4px;margin:6px 12px 0 0' }, check, field.name + ' · ' + field.type));
+      });
+      update();
+    }
+    function loadRows() {
+      if (!c.session) { drawTable(); return; }
+      var request = ++serial;
+      api('/api/tcdoc/mapping/cloud/rows?session=' + encodeURIComponent(c.session)
+        + '&page=' + c.page + '&query=' + encodeURIComponent(c.query)
+        + '&sort_column=' + encodeURIComponent(c.order.order)
+        + '&direction=' + (c.order.order ? (c.order.asc ? 'asc' : 'desc') : '')
+        + '&visible=' + encodeURIComponent(c.visible.join(','))).then(function (result) {
+        if (!host.isConnected || request !== serial) return;
+        rows = result.rows || []; c.page = result.page || 1; drawTable();
+        helpers.pager(paging, result.page, result.pages, result.total, function (page) { c.page = page; loadRows(); });
+      }).catch(function (error) { if (request === serial) message(error.message, 'error'); });
+    }
+    function drawTable() {
+      if (!c.session) { tableHost.replaceChildren(helpers.empty('正在读取云端数据，或请点击刷新云端。')); return; }
+      if (!rows.length) { tableHost.replaceChildren(helpers.empty('当前筛选没有记录。')); return; }
+      var fieldsById = {}; c.fields.forEach(function (field) { fieldsById[field.id] = field; });
+      var shown = c.visible.map(function (id) { return fieldsById[id]; }).filter(Boolean);
+      var head = h('tr', null, h('th', null, ''));
+      var body = h('tbody');
+      function header(key, title) {
+        var th = h('th', { class: 'sortable', tabIndex: 0,
+          'aria-sort': c.order.order === key ? (c.order.asc ? 'ascending' : 'descending') : 'none' },
+          title + (c.order.order === key ? (c.order.asc ? ' ↑' : ' ↓') : ''));
+        function change() { helpers.cycleSort(c.order, key); c.page = 1; loadRows(); }
+        th.addEventListener('click', change); th.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); change(); }
+        }); return th;
+      }
+      head.appendChild(header('record_id', 'recordID'));
+      shown.forEach(function (field) { head.appendChild(header(field.id, field.name)); });
+      rows.forEach(function (row) {
+        var tr = h('tr');
+        var cb = h('input', { type: 'checkbox', checked: c.selected.has(row.record_id),
+          'aria-label': '选择 ' + row.record_id });
+        cb.addEventListener('change', function () {
+          if (cb.checked) c.selected.add(row.record_id); else c.selected.delete(row.record_id); update();
+        });
+        tr.appendChild(h('td', null, cb));
+        tr.appendChild(h('td', { class: 'ellipsis', title: row.record_id }, row.record_id));
+        shown.forEach(function (field) {
+          var original = row.values[field.id] || '';
+          var value = c.drafts[row.record_id] && c.drafts[row.record_id][field.id] !== undefined
+            ? c.drafts[row.record_id][field.id] : original;
+          var cell = h('td', { class: 'ellipsis', title: value || original }, value || '-');
+          if (c.drafts[row.record_id] && c.drafts[row.record_id][field.id] !== undefined) cell.className += ' changed';
+          if (field.editable) cell.addEventListener('dblclick', function () {
+            if (!c.selected.has(row.record_id) || busy) { toast('请先勾选记录后再编辑', 'info'); return; }
+            var next = window.prompt('编辑「' + field.name + '」', value);
+            if (next === null) return;
+            c.drafts[row.record_id] = c.drafts[row.record_id] || {};
+            if (next === original) delete c.drafts[row.record_id][field.id]; else c.drafts[row.record_id][field.id] = next;
+            if (!Object.keys(c.drafts[row.record_id]).length) delete c.drafts[row.record_id];
+            drawTable(); update();
+          });
+          tr.appendChild(cell);
+        });
+        body.appendChild(tr);
+      });
+      tableHost.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'db-table' }, h('thead', null, head), body)));
+      update();
+    }
+    function drawPreview() {
+      if (!c.plans.length) { previewHost.replaceChildren(); return; }
+      var lines = []; c.plans.forEach(function (plan) {
+        lines.push('记录 ID：' + plan.record_id);
+        (plan.changes || []).forEach(function (change) { lines.push(change.field + '：' + (change.remote || '空') + ' → ' + (change.local || '空')); });
+        lines.push('');
+      });
+      var confirm = h('button', { class: 'btn primary', type: 'button' }, '确认回写');
+      confirm.addEventListener('click', function () {
+        if (!window.confirm('确认将预览中的 ' + c.plans.length + ' 条记录逐条回写云端吗？\n\n写入后会读回核对，结果不明时不会自动重试。')) return;
+        run('apply', { session: c.session, preview: c.preview, confirmed: true });
+      });
+      previewHost.replaceChildren(h('div', { class: 'card', style: 'margin-top:12px' },
+        h('div', { class: 'card-title' }, '回写预览'), h('pre', { class: 'small', style: 'white-space:pre-wrap;max-height:260px;overflow:auto' }, lines.join('\n')), confirm));
+    }
+    target.addEventListener('change', function () {
+      c.tab = target.value; c.session = ''; c.fields = []; c.visible = []; c.selected.clear(); c.drafts = {}; c.preview = ''; c.plans = [];
+      drawColumns(); drawTable(); run('schema', { tab: c.tab });
+    });
+    search.addEventListener('input', function () { c.query = search.value; c.page = 1; loadRows(); });
+    refresh.addEventListener('click', function () { run('refresh', { tab: c.tab, session: c.session }); });
+    clear.addEventListener('click', function () { c.selected.clear(); drawTable(); update(); });
+    previewBtn.addEventListener('click', function () {
+      var updates = Array.from(c.selected).map(function (rid) { return { record_id: rid, values: c.drafts[rid] || {} }; });
+      run('preview', { session: c.session, updates: updates });
+    });
+    host.replaceChildren(
+      h('div', { class: 'card' },
+        h('div', { class: 'toolbar', style: 'flex-wrap:wrap;gap:8px' },
+          h('span', { class: 'muted small' }, '目标工作表'), target,
+          h('span', { style: 'flex:1' }), refresh),
+        h('div', { class: 'toolbar', style: 'margin-top:8px;flex-wrap:wrap;gap:8px' }, search, status),
+        columns, jobHost),
+      h('div', { class: 'card' }, tableHost, paging,
+        h('div', { class: 'toolbar', style: 'margin-top:12px;flex-wrap:wrap;gap:8px' }, selection, clear,
+          h('span', { style: 'flex:1' }), previewBtn)), previewHost);
+    drawColumns(); update();
+    if (!c.session) run('schema', { tab: c.tab }); else loadRows();
+  }
+
   window.renderTcdocMapping = function (host, helpers) {
     var h = helpers.h, api = helpers.api, post = helpers.post, toast = helpers.toast;
-    var s = saved || (saved = { session: '', headers: [], total: 0, tab: 'official', fields: [],
+    var s = saved || (saved = { mode: 'cloud', cloud: null, session: '', headers: [], total: 0, tab: 'official', fields: [],
       mapping: {}, key: '', preview: '', counts: null, selected: new Set(), page: 1,
       mode: 'all', order: { order: '', asc: true }, visible: [], job: '', action: '', result: '' });
+    var modeHost = h('div');
+    var modeTabs = h('div', { class: 'tabs', style: 'margin-bottom:12px' });
+    [['cloud', '云端数据（默认）'], ['local', '本地表格映射']].forEach(function (item) {
+      modeTabs.appendChild(h('button', { class: 'tab' + (s.mode === item[0] ? ' active' : ''),
+        type: 'button', onclick: function () { s.mode = item[0]; renderTcdocMapping(host, helpers); } }, item[1]));
+    });
+    host.replaceChildren(modeTabs, modeHost);
+    if (s.mode === 'cloud') {
+      renderTcdocCloudMapping(modeHost, helpers, s);
+      return;
+    }
+    host = modeHost;
     var busy = !!s.job, serial = 0, rows = [], widths = [];
     var file = h('input', { type: 'file', accept: '.csv,.tsv,.xlsx,.json', class: 'input',
       'aria-label': '选择本地表格', style: 'max-width:340px' });

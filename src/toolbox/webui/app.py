@@ -920,9 +920,17 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/tcdoc/mapping/rows", lambda req: tcdoc.mapping_rows(
         req.q("session"), req.q_int("page", 1, 1, 10000), req.q("mode", "all"),
         req.q("sort_column"), req.q("direction"), req.q("preview")))
+    server.get("/api/tcdoc/mapping/cloud/rows", lambda req: tcdoc.mapping_cloud_rows(
+        req.q("session"), req.q_int("page", 1, 1, 10000), req.q("query"),
+        req.q("sort_column"), req.q("direction"),
+        [item for item in req.q("visible").split(",") if item]))
     for operation in ("schema", "compare", "apply"):
         server.post("/api/tcdoc/mapping/" + operation,
                     lambda req, action=operation: tcdoc.start_mapping(action, dict(req.json or {})))
+    for operation in ("schema", "refresh", "preview", "apply"):
+        server.post("/api/tcdoc/mapping/cloud/" + operation,
+                    lambda req, action=operation: tcdoc.start_mapping_cloud(
+                        action, dict(req.json or {})))
 
     server.get("/api/tcdoc/edit/status", lambda req: tcdoc.edit_status())
 
