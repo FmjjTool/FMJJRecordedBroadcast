@@ -1920,6 +1920,12 @@
           class: 'input grow', value: data.default_save_dir || '',
           placeholder: '保存到（导出目录或工作目录内）'
         });
+        var extractCb = h('input', { type: 'checkbox' });
+        var extractOption = h('label', {
+          class: 'muted small',
+          title: '成功下载的新压缩包用内置 7-Zip 解压到同名文件夹；已跳过或加密的压缩包不解压。',
+          style: 'display:flex;align-items:center;gap:6px;white-space:nowrap'
+        }, extractCb, '下载后自动解压');
         var upBtn = h('button', { class: 'btn', type: 'button' }, '上一级');
         var refreshBtn = h('button', { class: 'btn', type: 'button' }, '刷新');
         var dlBtn = h('button', {
@@ -2031,28 +2037,43 @@
 
         function doDownload(payload, title) {
           if (busy) return;
+          var extractNote = extractCb.checked
+            ? '\n\n成功下载的压缩包将用内置 7-Zip 解压到同名文件夹；同名文件可能被覆盖。' : '';
           if (!window.confirm(title + '\n\n保存到：' + saveInput.value.trim()
-            + '\n\n已存在的同名同大小文件会跳过；中断后可重新下载续传。\n\n确认下载？')) {
+            + '\n\n已存在的同名同大小文件会跳过；中断后可重新下载续传。'
+            + extractNote + '\n\n确认下载？')) {
             return;
           }
           busy = true;
           syncPath();
           payload.provider = providerSel.value;
           payload.save_dir = saveInput.value.trim();
+          payload.auto_extract = extractCb.checked;
           post('/api/netdisk/cloud/download', payload).then(function (result) {
             watchJob(dlJobHost, result.job, function (job) {
               busy = false;
               syncPath();
               var outcome = job.result || {};
+              var hasFailures = !!(outcome.failed || outcome.extract_failed
+                || outcome.extract_tool_unavailable || outcome.cancelled);
               toast(outcome.summary || '下载完成',
-                outcome.failed ? 'warning' : 'success');
+                hasFailures ? 'warning' : 'success');
+              var failureLines = [];
               if (outcome.failures && outcome.failures.length) {
+                failureLines.push('下载失败：' + outcome.failures.map(function (item) {
+                  return item.name + '（' + (item.error || '原因未提供') + '）';
+                }).join('；'));
+              }
+              if (outcome.extract_failures && outcome.extract_failures.length) {
+                failureLines.push('解压失败：' + outcome.extract_failures.map(function (item) {
+                  return item.name + '（' + (item.error || '原因未提供') + '）';
+                }).join('；'));
+              }
+              if (failureLines.length) {
                 dlJobHost.appendChild(h('div', {
                   class: 'card', style: 'margin-top:8px'
                 }, h('div', { class: 'muted small' },
-                  '失败文件：' + outcome.failures.map(function (item) {
-                    return item.name + '（' + (item.error || '未知') + '）';
-                  }).join('；'))));
+                  failureLines.join('；'))));
               }
             }, {
               cancelable: true,
@@ -2110,10 +2131,11 @@
             upBtn, refreshBtn, pathLabel,
             h('span', { style: 'flex:1' }), selLabel, dlBtn, folderBtn),
           h('div', { class: 'toolbar', style: 'margin-top:8px' },
-            h('span', { class: 'muted small' }, '保存到'), saveInput),
+            h('span', { class: 'muted small' }, '保存到'), saveInput,
+            extractOption),
           h('div', { class: 'muted small', style: 'margin-top:6px' },
             '浏览云端目录并下载到导出目录或工作目录内；文件夹会递归下载并保留层级，'
-            + '已存在的同名同大小文件自动跳过。自动解压仍在桌面端。')));
+            + '已存在的同名同大小文件自动跳过。')));
         host.appendChild(listJobHost);
         host.appendChild(dlJobHost);
         host.appendChild(listHost);
