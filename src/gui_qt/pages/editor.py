@@ -48,7 +48,7 @@ from toolbox.edit_engine import (
     cut_points_from_ranges, cut_segments, detect_black, detect_scenes,
     detect_silence, export_chapters, export_edl, export_segments_csv,
     extract_all_tracks, extract_track, frame_bytes, import_segments_csv,
-    probe_tracks, remove_tracks, segments_from_points, snapshot,
+    remove_tracks, segments_from_points, snapshot,
     snapshot_every, write_chapters, write_metadata,
 )
 from toolbox.utils import format_size, is_video_file
@@ -372,7 +372,7 @@ class EditorPage(BasePage):
             self.files = []
             self.current_path = None
             self._refresh_files(select=-1)
-        self._sync_folders(reload_files=replace)
+        self._sync_folders_async(reload_files=replace)
 
     def on_hide(self):
         # 切页必须松开文件：暂停状态的 QMediaPlayer 仍占着句柄，
@@ -857,11 +857,7 @@ class EditorPage(BasePage):
         """刷新：重扫日期文件夹并重新载入当前文件夹的视频。"""
         if self.running:
             return
-        _root, choices = self._folder_choices()
-        if not choices:
-            self._scan_work_dir()   # 没有日期文件夹：按工作目录递归刷新
-            return
-        self._sync_folders()
+        self._sync_folders_async()
         self._log("已刷新日期文件夹与视频列表")
 
     def _folder_of_path(self, path, choices):
@@ -935,7 +931,7 @@ class EditorPage(BasePage):
             return
         if self.files and not self._auto_folder:
             self._log("手动加入的文件队列已被日期文件夹替换")
-        self._load_folder(folder)
+        self._load_folder_async(folder)
 
     # ==================== 文件队列 ====================
 
