@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import codecs
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # 界面过滤用：7z 能打开的常见后缀
 ARCHIVE_SUFFIXES = (
@@ -311,6 +312,147 @@ def list_archive(archive, password: str | None = None) -> list[Entry]:
             block[key.strip()] = value.strip()
     flush()
     return entries
+
+
+def list_archive_limited(archive, *, max_entries: int = 10000,
+                         max_output_bytes: int = 4 * 1024 * 1024,
+                         max_line_bytes: int = 8192,
+                         max_total_size: int | None = None,
+                         timeout: float = 120, stop_event=None) -> list[Entry]:
+    """有界地读取压缩包目录，供自动解压前的安全检查使用。"""
+    if max_entries <= 0 or max_output_bytes <= 0 or max_line_bytes <= 0:
+        raise ValueError("压缩包目录限制必须为正数")
+    if timeout <= 0:
+        raise ValueError("读取超时必须为正数")
+
+    path = Path(archive).resolve()
+    command = [find_7z(), "-sccUTF-8", "l", "-slt", "-ba",
+               "--", str(path)]
+    try:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace",
+            cwd=str(path.parent), creationflags=_NO_WINDOW, bufsize=1)
+    except OSError as exc:
+        raise SevenZipError("无法启动 7-Zip 读取压缩包") from exc
+
+    lines = queue.Queue()
+    finished = object()
+
+    def pump_output() -> None:
+        output_bytes = 0
+        error = ""
+        try:
+            while True:
+                line = proc.stdout.readline(max_line_bytes + 1)
+                if not line:
+                    break
+                line_bytes = len(line.encode("utf-8", errors="replace"))
+                output_bytes += line_bytes
+                if line_bytes > max_line_bytes:
+                    error = "压缩包目录单行内容超过限制"
+                    break
+                if output_bytes > max_output_bytes:
+                    error = "压缩包目录内容超过限制"
+                    break
+                lines.put((line, ""))
+        except (OSError, UnicodeError):
+            error = "读取压缩包目录失败"
+        finally:
+            lines.put((finished, error))
+
+    reader = threading.Thread(target=pump_output, daemon=True)
+    reader.start()
+    entries: list[Entry] = []
+    block: dict[str, str] = {}
+    total_size = 0
+    deadline = time.monotonic() + timeout
+
+    def flush() -> None:
+        nonlocal total_size
+        raw_path = block.get("Path", "")
+        if not raw_path:
+            return
+        normalized = raw_path.replace("\\", "/")
+        relative = PurePosixPath(normalized)
+        if ("\x00" in raw_path or relative.is_absolute()
+                or normalized.startswith("//")
+                or re.match(r"^[A-Za-z]:", normalized)
+                or ".." in relative.parts):
+            raise SevenZipError("压缩包包含不安全的路径")
+        if block.get("Symbolic Link") or block.get("Hard Link"):
+            raise SevenZipError("压缩包包含不支持的链接")
+        try:
+            size = int(block.get("Size") or 0)
+            packed = int(block.get("Packed Size") or 0)
+        except ValueError as exc:
+            raise SevenZipError("压缩包目录包含无效大小") from exc
+        if size < 0 or packed < 0:
+            raise SevenZipError("压缩包目录包含无效大小")
+        is_dir = "D" in block.get("Attributes", "")
+        if not is_dir:
+            total_size += size
+            if max_total_size is not None and total_size > max_total_size:
+                raise SevenZipError("压缩包解压体积超过安全上限")
+        if len(entries) >= max_entries:
+            raise SevenZipError("压缩包条目数超过安全上限")
+        entries.append(Entry(
+            path=raw_path, size=size, packed=packed, is_dir=is_dir,
+            encrypted=block.get("Encrypted", "").strip() == "+",
+            modified=block.get("Modified", "")))
+
+    def stop_process() -> None:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+            try:
+                proc.wait(3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(3)
+                except subprocess.TimeoutExpired:
+                    pass
+
+    try:
+        done = False
+        while not done:
+            if stop_event is not None and stop_event.is_set():
+                raise SevenZipError("已停止")
+            if time.monotonic() > deadline:
+                raise SevenZipError("读取压缩包目录超时")
+            try:
+                line, error = lines.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if line is finished:
+                if error:
+                    raise SevenZipError(error)
+                done = True
+                continue
+            if not line.strip():
+                flush()
+                block = {}
+                continue
+            key, sep, value = line.partition(" = ")
+            if sep:
+                block[key.strip()] = value.strip()
+        flush()
+        if stop_event is not None and stop_event.is_set():
+            raise SevenZipError("已停止")
+        remaining = max(0.1, deadline - time.monotonic())
+        try:
+            return_code = proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise SevenZipError("读取压缩包目录超时") from exc
+        if return_code != 0:
+            raise SevenZipError("压缩包无法读取，请检查文件完整性")
+        return entries
+    finally:
+        if proc.poll() is None:
+            stop_process()
 
 
 def total_size(archive, password: str | None = None) -> int:

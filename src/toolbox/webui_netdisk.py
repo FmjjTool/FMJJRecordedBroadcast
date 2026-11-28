@@ -13,6 +13,10 @@ from pathlib import Path
 
 ROOT_IDS = {"quark": "0", "baidu": "/", "yun139": "/", "115": "0"}
 _MAX_LIST = 3000
+_AUTO_EXTRACT_MAX_ENTRIES = 10000
+_AUTO_EXTRACT_MAX_TOTAL_SIZE = 10 * 1024 ** 3
+_AUTO_EXTRACT_MAX_FILE_SIZE = 5 * 1024 ** 3
+_AUTO_EXTRACT_MAX_RATIO = 500
 
 
 def _modules():
@@ -273,6 +277,9 @@ def ensure_cloud_download(payload: dict) -> dict:
     provider = str(payload.get("provider") or "quark").strip()
     if provider not in ROOT_IDS:
         raise ValueError("未知网盘类型")
+    auto_extract = payload.get("auto_extract", False)
+    if not isinstance(auto_extract, bool):
+        raise ValueError("自动解压选项格式不正确")
     files = payload.get("files") or []
     folders = payload.get("folders") or []
     if not isinstance(files, list) or not isinstance(folders, list):
@@ -283,7 +290,7 @@ def ensure_cloud_download(payload: dict) -> dict:
         raise ValueError("单次下载数量过多，请分批")
     save_dir = _save_dir(payload.get("save_dir"), create=False)
     return {"provider": provider, "files": files, "folders": folders,
-            "save_dir": str(save_dir)}
+            "save_dir": str(save_dir), "auto_extract": auto_extract}
 
 
 def cloud_list(provider: str, fid: str) -> dict:
@@ -373,9 +380,81 @@ def _save_dir(text: str, create: bool = True) -> Path:
     return resolved
 
 
+def _auto_extract_failure(exc: Exception) -> str:
+    """Map archive errors to short messages without leaking local paths."""
+    message = str(exc)
+    safe_messages = {
+        "压缩包包含不安全的路径": "压缩包包含不安全路径，已跳过解压",
+        "压缩包包含不支持的链接": "压缩包包含不支持的链接，已跳过解压",
+        "压缩包解压体积超过安全上限": "解压体积超过 10 GB 安全上限，已跳过解压",
+        "压缩包条目数超过安全上限": "压缩包条目超过 10000 个，已跳过解压",
+        "压缩包目录内容超过限制": "压缩包目录过大，已跳过解压",
+        "压缩包目录单行内容超过限制": "压缩包路径过长，已跳过解压",
+        "读取压缩包目录超时": "读取压缩包目录超时，已跳过解压",
+        "加密压缩包不支持自动解压": "加密压缩包不支持自动解压，请手动处理",
+        "压缩包单文件超过安全上限": "压缩包单文件超过 5 GB 安全上限，已跳过解压",
+        "压缩包压缩比超过安全上限": "压缩比超过 500 倍安全上限，已跳过解压",
+        "压缩包无法读取，请检查文件完整性":
+            "压缩包无法读取，请检查文件完整性",
+        "未找到 7z 可执行文件（内置二进制缺失且系统未安装 7-Zip）":
+            "未找到 7-Zip，无法自动解压",
+    }
+    return safe_messages.get(
+        message, "压缩包无法解压，请检查文件完整性或保存目录权限")
+
+
+def _is_reparse_or_symlink(path: Path) -> bool:
+    """Reject links and Windows reparse points before archive I/O."""
+    try:
+        if path.is_symlink():
+            return True
+        attributes = int(getattr(path.stat(), "st_file_attributes", 0))
+    except OSError:
+        return True
+    return bool(attributes & 0x0400)  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def _validate_extract_paths(archive: str | Path, save_dir: Path) -> tuple[Path, Path]:
+    """Keep archive input and same-name output inside the download root."""
+    from toolbox import sevenzip
+
+    root = Path(save_dir).resolve()
+    source = Path(archive)
+    if not source.is_absolute():
+        raise sevenzip.SevenZipError("压缩包路径无效")
+    try:
+        relative = source.relative_to(root)
+    except ValueError as exc:
+        raise sevenzip.SevenZipError("压缩包路径超出保存目录") from exc
+    current = root
+    for part in relative.parts:
+        current /= part
+        if _is_reparse_or_symlink(current):
+            raise sevenzip.SevenZipError("压缩包路径包含不支持的链接")
+    try:
+        resolved = source.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise sevenzip.SevenZipError("压缩包路径无效") from exc
+    if not resolved.is_file():
+        raise sevenzip.SevenZipError("压缩包路径无效")
+    output = sevenzip.default_extract_dir(resolved)
+    try:
+        output.relative_to(root)
+    except ValueError as exc:
+        raise sevenzip.SevenZipError("解压目录超出保存目录") from exc
+    current = root
+    output_relative = output.relative_to(root)
+    for part in output_relative.parts:
+        current /= part
+        if current.exists() and _is_reparse_or_symlink(current):
+            raise sevenzip.SevenZipError("解压目录包含不支持的链接")
+    return resolved, output
+
+
 def cloud_download(payload: dict, on_progress=None, on_log=None,
                    is_cancelled=None) -> dict:
-    """下载选中的云端文件 / 文件夹到本地保存目录（支持续传与中断）。"""
+    """下载选中的云端文件 / 文件夹；可选复用桌面 7-Zip 自动解压。"""
     from toolbox.quark import backup as qbackup
     from toolbox.quark import download as qdownload
 
@@ -418,18 +497,122 @@ def cloud_download(payload: dict, on_progress=None, on_log=None,
     ok = [item for item in results if item.ok]
     failed = [item for item in results if not item.ok]
     total_bytes = sum(item.size for item in ok)
+    extracted = 0
+    extract_failures = []
+    extract_skipped = 0
+    extract_tool_unavailable = False
+    archives = []
+    if data["auto_extract"]:
+        from toolbox import sevenzip
+
+        archives = [item for item in results
+                    if item.ok and not item.skipped and item.local_path
+                    and sevenzip.is_archive(item.local_path)]
+        if archives and not sevenzip.available():
+            extract_tool_unavailable = True
+            extract_skipped = len(archives)
+            log("未找到 7-Zip，跳过自动解压")
+        else:
+            for index, item in enumerate(archives):
+                if is_cancelled and is_cancelled():
+                    stop_event.set()
+                if stop_event.is_set():
+                    extract_skipped = len(archives) - index
+                    break
+                log(f"解压：{item.name}")
+
+                def report_extract_progress(percent, _text=""):
+                    if is_cancelled and is_cancelled():
+                        stop_event.set()
+                    if on_progress:
+                        try:
+                            pct = max(0, min(100, int(percent)))
+                        except (TypeError, ValueError):
+                            pct = 0
+                        fraction = (index + pct / 100) / len(archives)
+                        on_progress(fraction, f"解压 {item.name} · {pct}%")
+
+                try:
+                    archive_path, out_dir = _validate_extract_paths(
+                        item.local_path, save_dir)
+                    entries = sevenzip.list_archive_limited(
+                        archive_path,
+                        max_entries=_AUTO_EXTRACT_MAX_ENTRIES,
+                        max_total_size=_AUTO_EXTRACT_MAX_TOTAL_SIZE,
+                        stop_event=stop_event)
+                    files_in_archive = [entry for entry in entries
+                                        if not entry.is_dir]
+                    if not files_in_archive:
+                        extract_skipped += 1
+                        log(f"压缩包没有可解压文件：{item.name}")
+                        continue
+                    if any(entry.encrypted for entry in files_in_archive):
+                        raise sevenzip.SevenZipError(
+                            "加密压缩包不支持自动解压")
+                    if any(entry.size > _AUTO_EXTRACT_MAX_FILE_SIZE
+                           for entry in files_in_archive):
+                        raise sevenzip.SevenZipError(
+                            "压缩包单文件超过安全上限")
+                    total_unpacked = sum(entry.size for entry in files_in_archive)
+                    total_packed = sum(entry.packed for entry in files_in_archive)
+                    if (total_unpacked and (not total_packed or
+                            total_unpacked / total_packed
+                            > _AUTO_EXTRACT_MAX_RATIO)):
+                        raise sevenzip.SevenZipError(
+                            "压缩包压缩比超过安全上限")
+                    sevenzip.extract(
+                        archive_path, out_dir, overwrite=True,
+                        stop_event=stop_event,
+                        on_progress=report_extract_progress)
+                    extracted += 1
+                    log(f"解压完成：{out_dir.name}")
+                except sevenzip.SevenZipError as exc:
+                    if stop_event.is_set():
+                        extract_skipped = len(archives) - index
+                        log(f"解压已停止：{item.name}")
+                        break
+                    reason = _auto_extract_failure(exc)
+                    extract_failures.append({
+                        "name": item.name,
+                        "error": reason,
+                    })
+                    log(f"解压失败：{item.name}，{reason}")
+                except OSError:
+                    extract_failures.append({
+                        "name": item.name,
+                        "error": "目标目录不可写，请检查保存目录权限后重试",
+                    })
+                    log(f"解压失败：{item.name}，请检查保存目录权限后重试")
+
+    summary = (f"下载完成：成功 {len(ok)} · 失败 {len(failed)} · "
+               f"{_human_size(total_bytes)}")
+    if data["auto_extract"]:
+        if extract_tool_unavailable:
+            summary += " · 自动解压不可用（未找到 7-Zip）"
+        elif archives:
+            summary += f" · 解压成功 {extracted} · 解压失败 {len(extract_failures)}"
+            if extract_skipped:
+                summary += f" · 解压跳过 {extract_skipped}"
+        else:
+            summary += " · 没有新下载的压缩包需要解压"
+    if stop_event.is_set():
+        summary += "（已停止）"
     return {
         "ok": not stop_event.is_set(),
         "cancelled": stop_event.is_set(),
         "downloaded": len(ok),
         "failed": len(failed),
+        "auto_extract": data["auto_extract"],
+        "extracted": extracted,
+        "extract_failed": len(extract_failures),
+        "extract_failures": extract_failures[:50],
+        "extract_skipped": extract_skipped,
+        "extract_tool_unavailable": extract_tool_unavailable,
         "bytes": total_bytes,
         "save_dir": str(save_dir),
         "failures": [{"name": item.name, "error": str(item.error or "")[:200]}
                      for item in failed][:50],
-        "summary": (f"下载完成：成功 {len(ok)} · 失败 {len(failed)} · "
-                    f"{_human_size(total_bytes)}") + ("（已停止）"
-                                                     if stop_event.is_set() else ""),
+        "summary": summary,
     }
 
 
