@@ -3,7 +3,7 @@
 
 - `config`：模型地址、模型名、分块字数与 API Key 的本机加密存储
 - `rules`：读取内置 skill 的规则文件并拼装提示词
-- `client`：OpenAI 兼容 `/chat/completions` 客户端
+- `client`：OpenAI 兼容 `/chat/completions` 与 `/responses` 客户端
 - `pipeline`：分块提取 → 合并 → 终稿 → 输出校验
 
 本包不依赖 PySide6，页面与命令行都可以调用 `pipeline.run()`。

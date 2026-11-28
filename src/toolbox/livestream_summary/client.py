@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OpenAI 兼容 /chat/completions 客户端。
+"""兼容 OpenAI Chat Completions 与 Responses 的远程模型客户端。
 
 只负责一次对话请求与错误翻译；不记录、不打印 API Key。
 """
@@ -37,18 +37,37 @@ class CancelledError(RuntimeError):
     """用户主动停止。"""
 
 
-def _endpoint(base_url: str) -> str:
+def _endpoint(base_url: str) -> tuple[str, str]:
     base = (base_url or "").strip().rstrip("/")
     if not base:
         raise ChatError("还没有填写模型接口地址")
-    if base.endswith("/chat/completions"):
-        return base
-    return base + "/chat/completions"
+    normalized = base.lower()
+    if normalized.endswith("/responses"):
+        return base, "responses"
+    if normalized.endswith("/chat/completions"):
+        return base, "chat_completions"
+    return base + "/chat/completions", "chat_completions"
 
 
 def _check_cancel(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
         raise CancelledError("已停止")
+
+
+def _clean_text(content) -> str:
+    text = str(content or "").strip()
+    if not text:
+        raise ChatError("模型返回了空内容")
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    if not text:
+        raise ChatError("模型返回了空内容")
+    return text
 
 
 def _content(payload: dict) -> str:
@@ -61,17 +80,39 @@ def _content(payload: dict) -> str:
         content = "".join(
             str(part.get("text") or "") if isinstance(part, dict) else str(part)
             for part in content)
-    text = str(content or "").strip()
-    if not text:
-        raise ChatError("模型返回了空内容")
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    return text
+    return _clean_text(content)
+
+
+def _responses_content(payload: dict) -> str:
+    """Extract assistant text from the raw Responses REST representation."""
+    if not isinstance(payload, dict):
+        raise ChatError("模型返回格式无法解析（缺少 output）")
+    convenience_text = payload.get("output_text")
+    if isinstance(convenience_text, str) and convenience_text.strip():
+        return _clean_text(convenience_text)
+
+    output = payload.get("output")
+    if not isinstance(output, list):
+        raise ChatError("模型返回格式无法解析（缺少 output 列表）")
+    text_parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        if item.get("role") not in (None, "assistant"):
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if part_type == "output_text":
+                    text_parts.append(str(part.get("text") or ""))
+                elif part_type == "refusal":
+                    text_parts.append(str(part.get("refusal") or ""))
+    return _clean_text("".join(text_parts))
 
 
 class ChatClient:
@@ -95,16 +136,25 @@ class ChatClient:
              cancel: threading.Event | None = None,
              on_wait: Callable[[str], None] | None = None) -> str:
         self._validate()
-        url = _endpoint(self.base_url)
-        body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        url, api_mode = _endpoint(self.base_url)
+        if api_mode == "responses":
+            body = {
+                "model": self.model,
+                "instructions": system,
+                "input": user,
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+        else:
+            body = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         headers = {
             "Authorization": f"Bearer {self.api_key or 'local'}",
             "Content-Type": "application/json",
@@ -147,7 +197,8 @@ class ChatClient:
                 payload = response.json()
             except ValueError as exc:
                 raise ChatError("模型接口返回的不是 JSON") from exc
-            return _content(payload)
+            return (_responses_content(payload) if api_mode == "responses"
+                    else _content(payload))
         raise ChatError(last_error or "模型请求失败")
 
     @staticmethod
