@@ -528,7 +528,7 @@ class MainWindow(QMainWindow):
         topbar_buttons = []
         for group_title, items in NAV_GROUPS:
             is_bottom = group_title == "全局"
-            if not is_bottom:
+            if group_title and not is_bottom:
                 gl = QLabel(group_title)
                 gl.setObjectName("workbenchGroup")
                 nav_layout.addWidget(gl)

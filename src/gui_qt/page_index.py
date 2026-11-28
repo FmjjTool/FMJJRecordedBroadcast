@@ -199,6 +199,7 @@ PAGE_CLASSES = {
 
 # 侧栏分组与顺序（标题取 group 名，条目标题查 PAGE_INDEX）
 NAV_LAYOUT = [
+    ("", ["tcdoc"]),
     ("内容采集", ["info_accounts", "info_results", "info_tools"]),
     ("资产管理", ["asset", "netdisk"]),
     ("录播工具箱", [
@@ -206,7 +207,7 @@ NAV_LAYOUT = [
         "toolbox_subtitle", "toolbox_launcher", "toolbox_calendar", "toolbox_migrate",
     ]),
     ("账户追踪", [
-        "music_tracker", "tracker", "douyin_index", "tcdoc", "weibo_chaohua", "fan_groups",
+        "music_tracker", "tracker", "douyin_index", "weibo_chaohua", "fan_groups",
     ]),
     ("票务购物", ["tickets", "shopping"]),
     ("音乐工具", ["music_search_download", "music_playlist", "music_file_tools"]),
