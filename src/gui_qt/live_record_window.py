@@ -420,7 +420,43 @@ class PlatformPane(QWidget):
         if getattr(self.win, "embedded", False):
             self._build_embedded_toolbars(lay)
             return
-        self._build_direct_toolbars(lay, spacing=6)
+        self._build_standalone_toolbars(lay)
+
+    def _build_standalone_toolbars(self, lay):
+        # 独立窗口沿用主分支的两行工具栏结构。
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
+        self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
+        self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
+        self.btn_batch.clicked.connect(self._on_batch_menu)
+        bar.addSpacing(10)
+        self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
+                                  "按间隔检测开播，开播即自动录制")
+        self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
+        self._tbtn(bar, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
+        bar.addStretch(1)
+        self._tbtn(bar, "全选", lambda: self._check_all(True))
+        self._tbtn(bar, "取消", lambda: self._check_all(False))
+        lay.addLayout(bar)
+
+        bar2 = QHBoxLayout()
+        bar2.setSpacing(6)
+        self._tbtn(bar2, "录制设置", self.on_settings)
+        self._tbtn(bar2, "推送设置", self.on_push_settings)
+        self._tbtn(bar2, "FLV / TS 修复", self.on_repair_flv,
+                   "修复 FLV 标签与时间戳，或重封装 TS 跳过损坏数据包；保留原文件")
+        self._tbtn(bar2, "写时间码", self.on_timecode,
+                   "录制完成后给文件写容器时间码（ts/flv → mp4 + tmcd 轨，画质不变）")
+        self._tbtn(bar2, "打开录制目录", lambda: _open_dir(self.manager.out_dir()))
+        self._tbtn(bar2, "清除状态", self.on_clear_states,
+                   "清空本页运行状态与日志（直播/录制/监控/已录时间/在线人数），"
+                   "主播列表、备注和录制设置保留；正在录制会先停止并打包")
+        bar2.addStretch(1)
+        bt_dm = self._tbtn(bar2, "弹幕姬", self.win._open_danmaku_window,
+                           "打开弹幕姬窗口：实时弹幕、回放包、转弹幕机 TXT")
+        bt_dm.setProperty("variant", "primary")
+        lay.addLayout(bar2)
 
     def _build_embedded_toolbars(self, lay):
         self._build_direct_toolbars(lay, spacing=8)
@@ -2064,6 +2100,9 @@ class LiveRecordWindow(QMainWindow):
 
     def __init__(self, app=None, platform="douyin", room="", embedded=False):
         super().__init__()
+        menu_bar = self.menuBar()
+        menu_bar.clear()
+        menu_bar.hide()
         self.app = app
         self.embedded = bool(embedded)
         if self.embedded:
