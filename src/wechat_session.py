@@ -77,13 +77,8 @@ def _local_session() -> SessionSnapshot | None:
         return _session
 
 
-def set_session_from_url(url: str) -> SessionSnapshot:
-    """仅接收用户主动粘贴的文章请求地址；不抓取、不落盘、不探测登录。"""
-    global _session
-    if os.environ.get(_ENDPOINT_ENV):
-        raise SessionInputError("请在桌面端统一账号入口设置阅读会话")
-    if not _enabled():
-        raise SessionInputError("账号使用已关闭，暂不能设置阅读会话")
+def validate_session_url(url: str) -> dict[str, str]:
+    """纯校验：不导入认证、不访问文件、不安装会话，也不回显输入。"""
     value = html.unescape(str(url or "").strip())
     if not value or len(value) > 32768 or any(ord(c) < 32 for c in value):
         raise SessionInputError("请输入完整的微信文章请求地址")
@@ -109,6 +104,18 @@ def set_session_from_url(url: str) -> SessionSnapshot:
     if (not re.fullmatch(r"[A-Za-z0-9_+/=-]{4,256}", biz)
             or not params.get("key") or not params.get("uin")):
         raise SessionInputError("地址中缺少有效阅读信息；普通分享链接不能用于历史列表")
+    return params
+
+
+def set_session_from_url(url: str) -> SessionSnapshot:
+    """接收主动输入或检测完成后的结果；只安装短时内存会话，不落盘。"""
+    global _session
+    if os.environ.get(_ENDPOINT_ENV):
+        raise SessionInputError("请在桌面端统一账号入口设置阅读会话")
+    if not _enabled():
+        raise SessionInputError("账号使用已关闭，暂不能设置阅读会话")
+    params = validate_session_url(url)
+    biz = params["__biz"]
     now = time.time()
     snapshot = SessionSnapshot(
         identity=secrets.token_hex(16), expires_at=now + SESSION_TTL_SECONDS, biz=biz,

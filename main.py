@@ -13,6 +13,12 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
+# 独立检测进程必须先于 Qt、配置与日志初始化；输入输出仅使用父进程私有管道。
+if "--wechat-reading-detect-worker" in sys.argv:
+    from toolbox.wechat_capture_worker import main as _wechat_detect_main
+
+    sys.exit(_wechat_detect_main())
+
 # WebUI 独立服务入口：--webui 时只加载 Qt-free 服务端，不创建桌面窗口。
 if "--webui" in sys.argv:
     if sys.stdout is None:

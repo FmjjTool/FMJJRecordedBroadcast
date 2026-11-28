@@ -14,11 +14,11 @@ import sqlite3
 import threading
 import time
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -435,9 +435,52 @@ class CookieManagerDialog(QDialog):
         _GitHubTokenDialog(self).exec()
 
     def _open_wechat_session(self):
-        if _WechatReadingSessionDialog(self).exec() == QDialog.Accepted:
-            self._refresh_wechat_session_status()
-            self._notify()
+        dialog = getattr(self, "_wechat_detection_dialog", None)
+        if dialog is None:
+            dialog = _WechatReadingDetectionDialog(self)
+            self._wechat_detection_dialog = dialog
+            dialog.session_ready.connect(self._wechat_session_ready)
+            dialog.finished.connect(
+                lambda _result, current=dialog: self._wechat_detection_finished(current))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _wechat_session_ready(self):
+        self._refresh_wechat_session_status()
+        self._notify()
+
+    def _wechat_detection_finished(self, dialog):
+        if getattr(self, "_wechat_detection_dialog", None) is dialog:
+            self._wechat_detection_dialog = None
+        dialog.deleteLater()
+        result = getattr(self, "_wechat_pending_result", None)
+        self._wechat_pending_result = None
+        if result is not None:
+            QTimer.singleShot(0, lambda: self.done(result))
+
+    def _wechat_can_close(self, result):
+        dialog = getattr(self, "_wechat_detection_dialog", None)
+        if dialog is not None and not dialog.request_close():
+            self._wechat_pending_result = result
+            return False
+        return True
+
+    def done(self, result):
+        if self._wechat_can_close(result):
+            super().done(result)
+
+    def reject(self):
+        self.done(QDialog.Rejected)
+
+    def accept(self):
+        self.done(QDialog.Accepted)
+
+    def closeEvent(self, event):
+        if not self._wechat_can_close(QDialog.Rejected):
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _clear_wechat_session(self):
         from wechat_session import clear_session
@@ -469,7 +512,7 @@ class CookieManagerDialog(QDialog):
         self._wechat_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self._wechat_status.setToolTip("阅读会话仅驻留内存；过期、清除或账号使用关闭后立即不可用。")
         row.addWidget(self._wechat_status, 1)
-        enter = QPushButton("输入阅读信息")
+        enter = QPushButton("自动检测")
         enter.clicked.connect(self._open_wechat_session)
         row.addWidget(enter)
         self._wechat_clear = QPushButton("清除")
@@ -2090,6 +2133,292 @@ class _TcdocOpenApiDialog(QDialog):
             QMessageBox.warning(self, "清除失败", str(exc))
             return
         self._fill()
+
+
+class _WechatReadingDetectionDialog(QDialog):
+    """统一入口内的检测进度；系统改动与临时会话均交给管理层。"""
+
+    session_ready = Signal()
+
+    def __init__(self, parent=None, *, detector=None):
+        super().__init__(parent)
+        if detector is None:
+            from toolbox.wechat_detection import get_detector
+            detector = get_detector()
+        self._detector = detector
+        self._finished = False
+        self._close_requested = False
+        self._close_result = QDialog.Rejected
+        self._start_pending = False
+        self._stop_requested = False
+        self._watching_run = False
+        self._success_emitted = False
+        self._last_status = {
+            "state": "idle", "busy": False, "cleanup_ok": True,
+            "cleanup_failed": False, "recovery_required": False,
+            "remaining_seconds": 0, "message": "尚未开始检测",
+        }
+        self.setWindowTitle("微信公众号自动检测")
+        self.setWindowModality(Qt.NonModal)
+        self.setModal(False)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        notice = QLabel(
+            "检测期间会临时设置本机代理，并为本次检测安装当前用户证书，"
+            "仅检查微信公众号文章请求。结束后会自动还原代理并移除证书。")
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
+        self.consent = QCheckBox("我同意以上临时系统设置")
+        self.consent.toggled.connect(self._render_status)
+        layout.addWidget(self.consent)
+        instruction = QLabel(
+            "开始后，请在电脑版微信中打开目标公众号的文章，保持此窗口打开。"
+            "最长等待 120 秒；获取到本次阅读信息后会自动结束检测。")
+        instruction.setWordWrap(True)
+        instruction.setProperty("role", "caption")
+        layout.addWidget(instruction)
+        self.feedback = QLabel()
+        self.feedback.setTextFormat(Qt.PlainText)
+        self.feedback.setWordWrap(True)
+        self.feedback.setMinimumHeight(self.feedback.fontMetrics().lineSpacing() * 2)
+        layout.addWidget(self.feedback)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 120)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        layout.addWidget(self.progress)
+        self.countdown = QLabel()
+        self.countdown.setProperty("role", "caption")
+        layout.addWidget(self.countdown)
+        layout.addStretch(1)
+        self.manual = QPushButton("手动输入")
+        self.manual.clicked.connect(self._open_manual)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.setLayoutDirection(Qt.RightToLeft)
+        for button in self.buttons.buttons():
+            button.setLayoutDirection(Qt.LeftToRight)
+        self.primary = self.buttons.button(QDialogButtonBox.Ok)
+        self.primary.setText("开始检测")
+        self.primary.setProperty("variant", "primary")
+        self.primary.setDefault(False)
+        self.primary.setAutoDefault(False)
+        self.secondary = self.buttons.button(QDialogButtonBox.Cancel)
+        self.secondary.setText("关闭")
+        self.secondary.setDefault(True)
+        self.buttons.accepted.connect(self._start_or_restore)
+        self.buttons.rejected.connect(self._cancel_or_close)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.manual)
+        button_row.addStretch(1)
+        button_row.addWidget(self.buttons)
+        layout.addLayout(button_row)
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        max_w = max(1, available.width() - 30) if available else 720
+        max_h = max(1, available.height() - 40) if available else 520
+        self.setMinimumSize(min(420, max_w), min(380, max_h))
+        self.setMaximumSize(max_w, max_h)
+        self.resize(min(720, max_w), min(420, max_h))
+        self._timer = QTimer(self)
+        self._timer.setInterval(250)
+        self._timer.timeout.connect(self._poll)
+        self._poll()
+        self._timer.start()
+
+    def _poll(self):
+        try:
+            status = self._detector.status()
+            state = str(status.get("state") or "idle")
+            busy = bool(status.get("busy"))
+            cleanup_failed = bool(status.get("cleanup_failed", False))
+            recovery_required = bool(status.get("recovery_required", False))
+            cleanup_ok = (bool(status.get("cleanup_ok", False))
+                          and not cleanup_failed and not recovery_required)
+            remaining = max(0, min(120, int(status.get("remaining_seconds") or 0)))
+            message = str(status.get("message") or "")[:400]
+            if self._start_pending:
+                if state == "idle" and not busy:
+                    state, busy, message = "starting", True, "正在启动检测…"
+                else:
+                    self._start_pending = False
+            self._last_status = {
+                "state": state, "busy": busy, "cleanup_ok": cleanup_ok,
+                "cleanup_failed": cleanup_failed,
+                "recovery_required": recovery_required,
+                "remaining_seconds": remaining, "message": message,
+            }
+        except Exception:
+            self._start_pending = False
+            self._last_status = {
+                "state": "error", "busy": False, "cleanup_ok": False,
+                "cleanup_failed": True, "recovery_required": False, "remaining_seconds": 0,
+                "message": "暂时无法确认检测状态，请重试还原。",
+            }
+        status = self._last_status
+        if status["busy"]:
+            self._watching_run = True
+        else:
+            self._stop_requested = False
+        self._render_status()
+        if (status["state"] == "succeeded" and not status["busy"]
+                and status["cleanup_ok"] and self._watching_run
+                and not self._success_emitted):
+            self._success_emitted = True
+            self.session_ready.emit()
+        if (self._close_requested and not status["busy"]
+                and (status["cleanup_ok"] or status["recovery_required"])):
+            self._finish_close()
+
+    def _render_status(self, _checked=False):
+        status = self._last_status
+        busy = status["busy"]
+        clean = status["cleanup_ok"]
+        cleanup_failed = status["cleanup_failed"]
+        recovery_required = status["recovery_required"] and not busy
+        restoring = status["state"] == "restoring"
+        message = status["message"] or "尚未开始检测"
+        if recovery_required:
+            message = ("检测进程已失联，无法自动还原。请检查并还原 Windows 网络代理与当前用户证书，"
+                       "完成后重新启动程序。\n本次检测证书名称以 FMJJ Reading Detection 开头。")
+        elif cleanup_failed or (not clean and not busy):
+            message += "\n系统设置尚未完全还原。请点击“重试还原”，完成前请保留此窗口。"
+        elif self._close_requested and busy:
+            message += "\n还原完成后会自动关闭。"
+        self.feedback.setText(message)
+        self.consent.setEnabled(not busy and clean and not recovery_required and not self._close_requested)
+        self.manual.setEnabled(not busy and clean and not recovery_required and not self._close_requested)
+        if recovery_required:
+            self.primary.setText("需手动还原")
+            self.primary.setEnabled(False)
+            self.secondary.setText("关闭")
+            self.secondary.setEnabled(True)
+            self.progress.setRange(0, 120)
+            self.progress.setValue(0)
+            self.countdown.setText("新的自动检测已停用；请先完成系统设置还原")
+        elif cleanup_failed or (not clean and not busy):
+            self.primary.setText("重试还原")
+            self.primary.setEnabled(True)
+            self.secondary.setText("等待还原")
+            self.secondary.setEnabled(False)
+            self.progress.setRange(0, 120)
+            self.progress.setValue(0)
+            self.countdown.setText("完成还原后才能关闭或重新检测")
+        elif busy:
+            self.primary.setText("正在还原" if restoring else "检测中")
+            self.primary.setEnabled(False)
+            self.secondary.setText("还原中" if restoring else "停止检测")
+            self.secondary.setEnabled(not restoring and not self._stop_requested)
+            if status["state"] == "detecting":
+                self.progress.setRange(0, 120)
+                self.progress.setValue(120 - status["remaining_seconds"])
+                self.countdown.setText(f"最多还需等待 {status['remaining_seconds']} 秒")
+            else:
+                self.progress.setRange(0, 0)
+                self.countdown.setText("正在还原临时系统设置…" if restoring else "正在准备检测…")
+        else:
+            self.primary.setText("开始检测" if status["state"] == "idle" else "重新检测")
+            self.primary.setEnabled(self.consent.isChecked() and not self._close_requested)
+            self.secondary.setText("关闭")
+            self.secondary.setEnabled(True)
+            self.progress.setRange(0, 120)
+            self.progress.setValue(120 if status["state"] == "succeeded" else 0)
+            self.countdown.setText(
+                "本次阅读信息仅在内存中短时可用" if status["state"] == "succeeded"
+                else "勾选同意后开始检测")
+
+    def _start_or_restore(self):
+        self._poll()
+        status = self._last_status
+        if status["recovery_required"]:
+            return
+        if status["cleanup_failed"]:
+            self._stop_detection()
+            return
+        if status["busy"]:
+            return
+        if not status["cleanup_ok"]:
+            self._stop_detection()
+            return
+        if self._close_requested or not self.consent.isChecked():
+            return
+        self._start_pending = True
+        self._watching_run = True
+        self._success_emitted = False
+        self.primary.setEnabled(False)
+        self.manual.setEnabled(False)
+        try:
+            self._detector.start(consent=True)
+        except Exception:
+            self._start_pending = False
+            self._stop_detection()
+        self._poll()
+
+    def _stop_detection(self):
+        self._start_pending = False
+        self._stop_requested = True
+        self.secondary.setEnabled(False)
+        try:
+            self._detector.stop()
+        except Exception:
+            # 不展示异常原文，也不把异常当作已完成还原。
+            self._last_status = {
+                "state": "error", "busy": False, "cleanup_ok": False,
+                "cleanup_failed": True, "recovery_required": False, "remaining_seconds": 0,
+                "message": "还原未能完成，请重试还原。",
+            }
+            self._render_status()
+            return
+        self._poll()
+
+    def _cancel_or_close(self):
+        if self._last_status["busy"]:
+            self._stop_detection()
+        else:
+            self.reject()
+
+    def _open_manual(self):
+        self._poll()
+        if self._last_status["busy"] or not self._last_status["cleanup_ok"]:
+            return
+        if _WechatReadingSessionDialog(self).exec() == QDialog.Accepted:
+            self.session_ready.emit()
+            self.done(QDialog.Accepted)
+
+    def request_close(self, result=QDialog.Rejected):
+        self._close_result = result
+        self._close_requested = True
+        self._poll()
+        if self._last_status["recovery_required"] and not self._last_status["busy"]:
+            return True
+        if self._last_status["busy"] or not self._last_status["cleanup_ok"]:
+            if (self._last_status["state"] != "restoring"
+                    or not self._last_status["busy"] or self._last_status["cleanup_failed"]):
+                self._stop_detection()
+            return not self._last_status["busy"] and self._last_status["cleanup_ok"]
+        return True
+
+    def _finish_close(self):
+        if self._finished:
+            return
+        self._finished = True
+        self._timer.stop()
+        super().done(self._close_result)
+
+    def done(self, result):
+        self.request_close(result)
+
+    def reject(self):
+        self.request_close(QDialog.Rejected)
+
+    def accept(self):
+        self.request_close(QDialog.Accepted)
+
+    def closeEvent(self, event):
+        if not self.request_close():
+            event.ignore()
+            return
+        event.accept()
 
 
 class _WechatReadingSessionDialog(QDialog):

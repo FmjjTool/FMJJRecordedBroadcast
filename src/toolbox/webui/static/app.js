@@ -942,10 +942,16 @@
     }
 
     function wechatCard(reload) {
-      return window.createWechatLibraryCard({
+      var page = h('div');
+      page.appendChild(window.createWechatLibraryCard({
         h: h, api: api, post: post, toast: toast, watchJob: watchJob,
         downloadPost: downloadPost, reload: reload
-      });
+      }));
+      var desktopPanel = h('div');
+      renderDesktopOnly(desktopPanel, '文章自动检测',
+        '自动检测依赖本机临时网络设置与独立检测进程，仅在桌面端提供。此页继续使用当前短期阅读状态。');
+      page.appendChild(desktopPanel);
+      return page;
     }
 
     function biliCard(reload) {
