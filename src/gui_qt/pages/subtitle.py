@@ -169,7 +169,7 @@ class SubtitlePage(BasePage):
         if self._enter_stage == 0:
             self._enter_stage = 1
             self._scan_date_folders()
-            self._log("⏎ 再次按回车将按当前格式配置转换（或点「开始转换」）")
+            self._log("再次按回车将按当前格式配置转换（或点「开始转换」）")
         else:
             self._enter_stage = 0
             self._convert()

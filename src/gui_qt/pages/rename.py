@@ -339,7 +339,7 @@ class RenamePage(BasePage):
         self.extra_preview_label.setStyleSheet(
             "color: palette(placeholder-text); font-size: 10px;")
         fv.addWidget(self.extra_preview_label, 1)
-        self.skip_btn = QPushButton("⏭ 跳过")
+        self.skip_btn = QPushButton("跳过")
         self.skip_btn.setEnabled(False)
         self.skip_btn.clicked.connect(self._skip_video)
         fv.addWidget(self.skip_btn)
@@ -690,7 +690,7 @@ class RenamePage(BasePage):
         else:
             self.confirm_btn.setText("确认重命名 (Enter)")
             self.confirm_btn.setEnabled(True)
-            self.skip_btn.setText("⏭ 跳过")
+            self.skip_btn.setText("跳过")
             self.skip_btn.setEnabled(True)
 
     def _apply_video_date_range(self, video_path, duration=None):

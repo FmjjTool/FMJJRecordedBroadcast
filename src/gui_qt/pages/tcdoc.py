@@ -905,6 +905,9 @@ class TcDocPage(BasePage):
         self._loaded_tabs.discard(index)
         self._local_errors[index] = message[:200]
         self.status_label.setText(message[:200])
+        if index == self.content_tab_index and hasattr(self, "_sheet_page_loading"):
+            self._sheet_page_loading = False
+            self._update_sheet_paging()
 
     def _render_table(self, table, rows, make_items, finish, valid, offset=0):
         """分批填充普通表格，把事件循环留给导航、重绘和输入。"""
@@ -1129,6 +1132,8 @@ class TcDocPage(BasePage):
         self._sheet_doc_key = ""
         self._sheet_offset = 0
         self._sheet_total = 0
+        self._sheet_page_size = 200
+        self._sheet_page_loading = False
         return box
 
     def _build_revision_tab(self) -> QWidget:
@@ -1696,6 +1701,7 @@ class TcDocPage(BasePage):
             self._apply_sheet_page(data, page_size, done, valid)
             self._data_sorter._update_indicator()
 
+        self._begin_sheet_page(page_size, reset=True)
         self._load_local(self.content_tab_index, work, apply)
 
     def _apply_sheet_tabs(self, doc, sheets, keep):
@@ -1761,7 +1767,27 @@ class TcDocPage(BasePage):
     def _sheet_sort_changed(self, *_args):
         self._load_sheet_page(reset=True)
 
+    def _update_sheet_paging(self):
+        enabled = not self._sheet_page_loading and not self._busy
+        self.prev_btn.setEnabled(enabled and self._sheet_offset > 0)
+        self.next_btn.setEnabled(
+            enabled and self._sheet_offset + self._sheet_page_size < self._sheet_total)
+
+    def _begin_sheet_page(self, page_size, *, reset=False):
+        self._sheet_page_size = page_size
+        self._sheet_page_loading = True
+        if reset:
+            # 选择变化立即作废旧表的页码和数据，不等后台首屏返回。
+            self._sheet_offset = 0
+            self._sheet_total = 0
+            self.table_data.setRowCount(0)
+            self.page_label.setText("-/-")
+            self.sheet_info.clear()
+        self._update_sheet_paging()
+
     def _load_sheet_page(self, reset: bool = False, delta: int = 0):
+        if delta and (self._sheet_page_loading or self._busy):
+            return
         doc = self.current_doc()
         sheet = self._current_sheet() or {}
         page_size = max(20, int(tc_cfg.load_cfg().get("tcdoc_table_page") or 200))
@@ -1771,6 +1797,7 @@ class TcDocPage(BasePage):
         column = self._data_sorter.col
         sort_column = self._sheet_columns[column] if 0 <= column < len(self._sheet_columns) else ""
         descending = not self._data_sorter.ascending
+        self._begin_sheet_page(page_size, reset=reset)
         self._load_local(self.content_tab_index,
                          lambda: self._read_sheet_page(
                              doc, sheet, offset, page_size, newest, sort_column, descending),
@@ -1792,6 +1819,9 @@ class TcDocPage(BasePage):
         return sheet, rows, total, offset, image_stats
 
     def _apply_sheet_page(self, data, page_size, done, valid):
+        if not valid():
+            done()
+            return
         sheet, rows, total, self._sheet_offset, image_stats = data
         self._sheet_total = total
         if not sheet:
@@ -1800,8 +1830,8 @@ class TcDocPage(BasePage):
             self.table_data.setColumnCount(0)
             self.page_label.setText("-/-")
             self.sheet_info.setText("")
-            self.prev_btn.setEnabled(False)
-            self.next_btn.setEnabled(False)
+            self._sheet_page_loading = False
+            self._update_sheet_paging()
             done()
             return
 
@@ -1832,8 +1862,6 @@ class TcDocPage(BasePage):
         pages = max(1, (total + page_size - 1) // page_size)
         current = self._sheet_offset // page_size + 1 if total else 0
         self.page_label.setText(f"{current}/{pages}")
-        self.prev_btn.setEnabled(self._sheet_offset > 0)
-        self.next_btn.setEnabled(self._sheet_offset + page_size < total)
         stamp = sheet.get("fetched_at") or "-"
         image_note = ""
         if image_stats.get("total"):
@@ -1844,8 +1872,14 @@ class TcDocPage(BasePage):
             f"{len(names)} 列 · {total} 行{image_note} · 同步于 {stamp}")
 
         def rendered(error=None):
-            if not error:
-                self._restore_sheet_row_numbers()
+            if valid():
+                try:
+                    if not error:
+                        self._restore_sheet_row_numbers()
+                except Exception as exc:  # noqa: BLE001 - 收尾失败也要释放分页状态
+                    error = exc
+                self._sheet_page_loading = False
+                self._update_sheet_paging()
             done(error)
 
         self._render_table(self.table_data, rows, items, rendered, valid)

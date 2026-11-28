@@ -5004,9 +5004,10 @@ function renderLivestreamSummary(root) {
         checksHost.replaceChildren();
         var list = h('div', { class: 'muted small', style: 'margin-top:6px' });
         (result.checks || []).forEach(function (check) {
+          var status = check.ok ? '通过' : (check.fatal ? '阻断' : '提示');
           list.appendChild(h('div', null,
-            (check.ok ? '✓ ' : (check.fatal ? '✕ ' : '! '))
-            + check.label + '：' + (check.detail || '')));
+            status + '：' + check.label
+            + (check.detail ? '：' + check.detail : '')));
         });
         checksHost.appendChild(list);
         var meta = result.metadata || {};
@@ -11319,7 +11320,7 @@ function renderLivestreamSummary(root) {
             files.forEach(function (file) {
               var name = (file.file || '').split(/[\\/]/).pop();
               list.appendChild(h('div', { class: 'muted small' },
-                '✓ ' + name + (file.preview ? '（试听）' : '')
+              '已完成：' + name + (file.preview ? '（试听）' : '')
                 + (file.quality ? ' · ' + file.quality : '')
                 + (file.via ? ' · ' + file.via : '')));
             });
@@ -11328,7 +11329,7 @@ function renderLivestreamSummary(root) {
             list.appendChild(h('div', { class: 'muted small',
               style: 'margin-top:6px;color:var(--danger,#c62828)' },
               outcome.failures.map(function (fail) {
-                return '× ' + (fail.title || '') + '：' + fail.error;
+                return '失败：' + (fail.title || '') + '：' + fail.error;
               }).join('；')));
           }
           if (list.childNodes.length) {

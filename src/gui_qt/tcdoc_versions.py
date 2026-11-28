@@ -405,7 +405,7 @@ class TcDocVersionsDialog(QDialog):
                 row = self._shown_rows[row_index]
                 values = [_display(row.get("row_no"))] + [_display((row.get("values") or {}).get(name, "")) for name in names]
                 for column, value in enumerate(values):
-                    item = QTableWidgetItem(value.replace("\n", " ⏎ "))
+                    item = QTableWidgetItem(value.replace("\n", " / "))
                     item.setToolTip(value)
                     self.table.setItem(row_index, column, item)
             if start + 20 < len(self._shown_rows):

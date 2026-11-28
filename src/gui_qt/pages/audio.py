@@ -209,7 +209,7 @@ class AudioPage(BasePage):
         if self._enter_stage == 0:
             self._enter_stage = 1
             self._scan()
-            self._log("⏎ 再次按回车将开始提取（或点「开始提取」）")
+            self._log("再次按回车将开始提取（或点「开始提取」）")
         else:
             self._enter_stage = 0
             self._start()

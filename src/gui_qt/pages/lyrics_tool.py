@@ -221,7 +221,7 @@ class LyricsToolPage(BasePage):
             target = self.work_dir or self.app.work_dir
             if target and os.path.isdir(target):
                 self._scan_dir(target)
-            self._log("⏎ 再次按回车将按当前格式转换（或点「开始转换」）")
+            self._log("再次按回车将按当前格式转换（或点「开始转换」）")
         else:
             self._enter_stage = 0
             self._convert()
@@ -462,7 +462,7 @@ class LyricsToolPage(BasePage):
             try:
                 if mode == "decrypt":
                     if ext == ".krcd":
-                        self._krcd_log(f"  ⏭ {name}: 已是 KRCD 明文，跳过")
+                        self._krcd_log(f"  {name}: 已是 KRCD 明文，跳过")
                         continue
                     with open(fp, "rb") as f:
                         plain = self.converter.krc_to_krcd(f.read())
@@ -471,7 +471,7 @@ class LyricsToolPage(BasePage):
                     self._krcd_log(f"  {name} → {name}.krcd")
                 else:
                     if ext == ".krc":
-                        self._krcd_log(f"  ⏭ {name}: 已是 KRC，跳过")
+                        self._krcd_log(f"  {name}: 已是 KRC，跳过")
                         continue
                     with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                         enc = self.converter.krcd_to_krc(f.read())

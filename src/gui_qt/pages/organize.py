@@ -365,7 +365,7 @@ class OrganizePage(BasePage):
         if self._enter_stage == 0:
             self._enter_stage = 1
             self._scan()
-            self._log("⏎ 再次按回车将直接执行整理（或点「执行整理」）")
+            self._log("再次按回车将直接执行整理（或点「执行整理」）")
         else:
             self._enter_stage = 0
             self._execute()
