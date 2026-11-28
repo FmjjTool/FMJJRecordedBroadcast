@@ -17,7 +17,7 @@ description: "项目 /短语与 skill 要点查询。只按现行原文生成简
 
 ## 唯一路由表
 
-旧名仍可跳转，维护位置已经合并到目标主目录；实际执行时先读对应 SKILL.md 再读分支 reference。单独导出 / 复制兼容旧目录时须同时携带对应主目录和依赖，不能只带转交页。
+下表直接指向现行主入口或分支 reference；实际执行时先读所属 SKILL.md，再读本次命中的正文。单目录导出只包含该主目录，跨技能依赖仍须按链接一并提供。
 
 | 快捷短语 | 当前维护位置（src/skills/ 下） | 定位 |
 | --- | --- | --- |
@@ -49,4 +49,4 @@ description: "项目 /短语与 skill 要点查询。只按现行原文生成简
 | `/shaman` | [convention-skill/references/craftsmanship.md](../convention-skill/references/craftsmanship.md) | 默认不读的可选风格 |
 | `/快捷指令` | [quick-commands/SKILL.md](../quick-commands/SKILL.md) | 本映射表 |
 
-应用内技能发现仍会显示 25 个旧 ID；这表示 13 个主入口 + 12 个兼容入口，不等于维护 25 套正文。新增技能类型或路由时同步 AGENTS.md、主技能描述与本表，不再复制长规则摘要。
+项目仅保留 13 个主技能目录，技能发现按现有目录枚举；快捷短语继续直接定位正文，不另建技能目录。新增技能类型或路由时同步 AGENTS.md、主技能描述与本表，不再复制长规则摘要。

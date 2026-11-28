@@ -17,7 +17,7 @@
   合并 PDF + 水印件），并在同级打一个同名 zip 包。
 
 历史数据只存字段、不含图片，见 `toolbox/certificate_history.py`。
-版式规范见 `src/skills/image-output-spec/SKILL.md` 的「内部认证证书」一节。
+版式规范见 `src/skills/ui-visual-spec/references/generated-images.md` 的「内部认证证书」一节。
 """
 
 from __future__ import annotations

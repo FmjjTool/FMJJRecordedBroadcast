@@ -38,6 +38,6 @@ description: "本项目操作前必读的约定总入口：安全边界、Git / 
 
 ## 合并后的路由
 
-13 个主入口与 12 个旧名兼容入口的映射见 [快捷指令](../quick-commands/SKILL.md) 与根 AGENTS.md。兼容入口只转交，不重复维护规则。实际任务必须读对应主入口及被选分支；快捷摘要、技能发现、程序按钮都不能替代权限核对。
+13 个主技能入口见根 AGENTS.md；[快捷指令](../quick-commands/SKILL.md) 直接路由到主入口或其 references，不保留旧名转交目录。实际任务必须读对应主入口及被选分支；快捷摘要、技能发现、程序按钮都不能替代权限核对。
 
-代码验证与清理统一到 testing-quality-gates；架构 / 数据 / 平台 / WebUI 同步统一到 layering-contract；视觉 / 交互 / 程序出图统一到 ui-visual-spec。保留独立凭据、安全、业务领域、输出模板与真实数据范围约束。仅明确要求发布才读 summarize-update。
+代码验证与清理统一到 testing-quality-gates；架构 / 数据 / 平台 / WebUI 同步统一到 layering-contract；视觉 / 交互 / 程序出图统一到 ui-visual-spec。保留独立凭据、安全、业务领域、输出模板与真实数据范围约束。明确推送 / 发布或维护构建、内置清单、依赖解析时，按 summarize-update 区分动作与所需参考；本地提交不触发发布流程。

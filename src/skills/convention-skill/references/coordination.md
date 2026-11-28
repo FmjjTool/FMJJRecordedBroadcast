@@ -1,6 +1,6 @@
 # 并行协作与文件所有权（Agent Coordination）
 
-先阅读 [convention-skill](../../convention-skill/SKILL.md)。仅涉及明确发布动作时再读 [summarize-update](../../summarize-update/SKILL.md)；涉及数据迁移时再读 [data-lifecycle](../../data-lifecycle/SKILL.md)；涉及测试时再读 [testing-quality-gates](../../testing-quality-gates/SKILL.md)。
+先阅读 [convention-skill](../../convention-skill/SKILL.md)。明确推送 / 发布或维护构建、内置清单、依赖解析时再读 [summarize-update](../../summarize-update/SKILL.md)；涉及数据迁移时再读 [数据生命周期](../../layering-contract/references/data-lifecycle.md)；涉及测试时再读 [testing-quality-gates](../../testing-quality-gates/SKILL.md)。
 
 本 skill 只补 **多人/多 Agent/多进程同时改代码** 的协调规则；单 Agent 串行任务的 Git、备份、报告、发布仍按 `convention-skill` 与 `summarize-update` 执行。
 
@@ -73,5 +73,5 @@
 
 - `convention-skill`：单人 Git/备份/报告/发布的通用流程；本 skill 补并行协调。
 - `testing-quality-gates`：并行改动后各自跑相关测试，合并后按受影响范围运行必要验证；纯文档检查不启动应用。
-- `data-lifecycle`：共享数据库/迁移时先约定 writer，避免两个 Agent 同时迁移。
+- [数据生命周期](../../layering-contract/references/data-lifecycle.md)：共享数据库/迁移时先约定 writer，避免两个 Agent 同时迁移。
 - `security-baseline`：WIP 提交前检查 Secret/真实数据，不把凭据带进 Git。

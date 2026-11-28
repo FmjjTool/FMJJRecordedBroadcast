@@ -5,7 +5,7 @@ description: "项目界面与图片输出规范的统一入口。修改 PySide6 
 
 # 界面与图片输出规范
 
-先遵守 [convention-skill](../convention-skill/SKILL.md)、[cookie-data-protection](../cookie-data-protection/SKILL.md)与[核心模块保护](../recording-toolbox-core/SKILL.md)。本入口整合屏幕视觉、交互与图片输出；旧名 ui-interaction-spec、image-output-spec 仅转交到这里，不再维护第二份规范。技能只使用 Markdown。
+先遵守 [convention-skill](../convention-skill/SKILL.md)、[cookie-data-protection](../cookie-data-protection/SKILL.md)与[核心模块保护](../recording-toolbox-core/SKILL.md)。本入口统一管理屏幕视觉、交互与图片输出，详细规范按下表分支维护。技能只使用 Markdown。
 
 ## 先判断输出对象，再按需阅读
 
@@ -28,12 +28,12 @@ description: "项目界面与图片输出规范的统一入口。修改 PySide6 
 4. 业务页面不新增登录窗口、凭据控件或登录引导入口，用户可见文字不出现凭据名词；未登录时给出无入口指引的「需要登录」或「登录已失效」提示。认证能力仍只读使用统一管理接口，真实已存凭据禁令不变。
 5. 屏幕普通文字与图片中的普通文字目标对比度至少 4.5:1；大字至少 3:1，大字指至少 18pt（约 24px），或至少 14pt 粗体（约 18.67px）。辅助说明、placeholder、hover、focus 文字没有普遍豁免；例外与历史未达标项见屏幕视觉第二节。
 6. 用户自定义封面、裁切、截图 / 抽帧、下载媒体和内部缩略图不强套报表画布或品牌页头页脚，仍遵守各自既有行为与数据保护。内部认证证书使用明确的 A4 例外。
-7. 规范只约束本次已授权的改动，不自动授权修改业务规则、录播八模块或真实数据，不以统一风格为由批量重排其他页面。桌面用户可用能力变化时另按 [webui-sync](../webui-sync/SKILL.md)处理。
+7. 规范只约束本次已授权的改动，不自动授权修改业务规则、录播八模块或真实数据，不以统一风格为由批量重排其他页面。桌面用户可用能力变化时另按 [桌面到 WebUI 同步](../layering-contract/references/webui-sync.md)处理。
 
 ## 验证与截图
 
-程序、界面、渲染和截图验证统一遵守 [testing-quality-gates](../testing-quality-gates/SKILL.md)、[isolated-testing](../isolated-testing/SKILL.md)与[running-instance-guard](../running-instance-guard/SKILL.md)。使用隔离程序副本和虚构数据；屏幕视觉参考中的「真实窗口」指隔离副本使用 Windows 平台插件显示的窗口，不是接入用户当前实例。切主题、改定时或重启恢复的验收也仅操作隔离副本，不能关闭用户实例。
+程序、界面、渲染和截图验证统一遵守 [testing-quality-gates](../testing-quality-gates/SKILL.md)、[隔离测试](../testing-quality-gates/references/isolated-testing.md)与[运行中实例保护](../testing-quality-gates/references/running-instance-guard.md)。使用隔离程序副本和虚构数据；屏幕视觉参考中的「真实窗口」指隔离副本使用 Windows 平台插件显示的窗口，不是接入用户当前实例。切主题、改定时或重启恢复的验收也仅操作隔离副本，不能关闭用户实例。
 
-临时 harness、数据、日志和过程截图放根目录 _smoking/；只有最终报告证据截图放 Progress/ui/日期/，清理按 [test-cleanup](../test-cleanup/SKILL.md)。接入真实实例、真实数据或真实平台的申请、快照与还原只遵守隔离测试主规则，不在视觉规范另设放行路径；真实已存 Cookie 禁令始终适用。
+临时 harness、数据、日志和过程截图放根目录 _smoking/；只有最终报告证据截图放 Progress/ui/日期/，清理按 [测试清理](../testing-quality-gates/references/test-cleanup.md)。接入真实实例、真实数据或真实平台的申请、快照与还原只遵守隔离测试主规则，不在视觉规范另设放行路径；真实已存 Cookie 禁令始终适用。
 
-纯 Markdown 维护只需检查内容、引用、链接、兼容转交和差异范围；不为验证文档而启动应用、登录或生成真实业务数据。实际检查结果、未验证项及提交由主任务按总约定记录。
+纯 Markdown 维护只需检查内容、引用、链接、主入口与分支路由和差异范围；不为验证文档而启动应用、登录或生成真实业务数据。实际检查结果、未验证项及提交由主任务按总约定记录。

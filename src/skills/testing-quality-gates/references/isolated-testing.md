@@ -1,6 +1,6 @@
 # 隔离测试与真实数据还原
 
-本文件是隔离与还原的唯一正文，入口为 [testing-quality-gates](../SKILL.md)；旧名 [isolated-testing](../../isolated-testing/SKILL.md) 仅作兼容跳转。先遵守 [总约定](../../convention-skill/SKILL.md)、[真实凭据保护](../../cookie-data-protection/SKILL.md) 与 [运行保护](running-instance-guard.md)。
+本文件是隔离与还原的唯一正文，入口为 [testing-quality-gates](../SKILL.md)。先遵守 [总约定](../../convention-skill/SKILL.md)、[真实凭据保护](../../cookie-data-protection/SKILL.md) 与 [运行保护](running-instance-guard.md)。
 
 ## 默认隔离与真实接入边界
 

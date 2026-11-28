@@ -1,6 +1,6 @@
 # 测试文件与本地残留清理
 
-本文件是测试清理的唯一正文，入口为 [testing-quality-gates](../SKILL.md)；旧名 [test-cleanup](../../test-cleanup/SKILL.md) 仅作兼容跳转。先遵守 [总约定](../../convention-skill/SKILL.md)、[真实凭据保护](../../cookie-data-protection/SKILL.md) 与 [并行协作](../../agent-coordination/SKILL.md)。
+本文件是测试清理的唯一正文，入口为 [testing-quality-gates](../SKILL.md)。先遵守 [总约定](../../convention-skill/SKILL.md)、[真实凭据保护](../../cookie-data-protection/SKILL.md) 与 [并行协作](../../convention-skill/references/coordination.md)。
 
 ## 项目选择与触发
 

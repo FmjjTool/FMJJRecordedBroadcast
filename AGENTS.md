@@ -4,25 +4,25 @@
 
 本文件只维护入口与不可忽略边界；17 条约定的现行正文及唯一细则在 convention-skill，不再复制整套流程。用户明确要求规则修订时可在指定范围合并、更新，不能把技能整理视为应用改动或线上写入授权。
 
-## 主入口与兼容路由
+## 主技能入口
 
-| 主入口 | 触发与内容 | 保留的旧名兼容入口 |
-| --- | --- | --- |
-| [convention-skill](src/skills/convention-skill/SKILL.md) | 所有操作；Git / 报告 / 入口约定；并行时读 coordination | agent-coordination、shaman-jobs（仅可选风格） |
-| [cookie-data-protection](src/skills/cookie-data-protection/SKILL.md) | 所有操作前必读；真实 Cookie 无例外保护 | — |
-| [cookie-manager](src/skills/cookie-manager/SKILL.md) | 应用账户、认证接口、登录能力与隔离验证 | — |
-| [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md) | 代码改动 / 测试；隔离、实例保护、清理按分支阅读 | test-cleanup、isolated-testing、running-instance-guard |
-| [layering-contract](src/skills/layering-contract/SKILL.md) | 新增 / 重构 / 跨层；数据、平台、桌面→WebUI 同步按分支阅读 | data-lifecycle、platform-adapter-policy、webui-sync |
-| [security-baseline](src/skills/security-baseline/SKILL.md) | 非 Cookie 密钥、日志、文件、ZIP、subprocess、网络、依赖、打包 | — |
-| [ui-visual-spec](src/skills/ui-visual-spec/SKILL.md) | UI 视觉、交互 / 文案、程序导出图按分支阅读，使用现有共享组件与令牌 | ui-interaction-spec、image-output-spec |
-| [fengming-livestream-summary](src/skills/fengming-livestream-summary/SKILL.md) | 封茗囧菌转录 / 文件总结；纠错、分类、数据库与纯文本模板 | summarize-article |
-| [summarize-update](src/skills/summarize-update/SKILL.md) | 明确推送 / 发布动作；标准 / FULL 打包按分支阅读 | release-editions |
-| [software-feature-guide](src/skills/software-feature-guide/SKILL.md) | 页面功能、入口、路径与限制，按页面读 references | — |
-| [tcdoc-sync-scope](src/skills/tcdoc-sync-scope/SKILL.md) | 腾讯文档同步 / 写回 / 表格修改 / 导出覆盖前必读 | — |
-| [recording-toolbox-core](src/skills/recording-toolbox-core/SKILL.md) | 更新前核对八模块直接 / 间接影响与具体授权 | — |
-| [quick-commands](src/skills/quick-commands/SKILL.md) | /短语、要点或技能路由查询，仅读原文生成摘要 | — |
+| 主入口 | 触发与内容 |
+| --- | --- |
+| [convention-skill](src/skills/convention-skill/SKILL.md) | 所有操作；Git / 报告 / 入口约定；并行时读 coordination |
+| [cookie-data-protection](src/skills/cookie-data-protection/SKILL.md) | 所有操作前必读；真实 Cookie 无例外保护 |
+| [cookie-manager](src/skills/cookie-manager/SKILL.md) | 应用账户、认证接口、登录能力与隔离验证 |
+| [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md) | 任何更新前核对实例保护；代码改动 / 测试 / 清理按分支阅读 |
+| [layering-contract](src/skills/layering-contract/SKILL.md) | 新增 / 重构 / 跨层；数据、平台、桌面→WebUI 同步按分支阅读 |
+| [security-baseline](src/skills/security-baseline/SKILL.md) | 非 Cookie 密钥、日志、文件、ZIP、subprocess、网络、依赖、打包 |
+| [ui-visual-spec](src/skills/ui-visual-spec/SKILL.md) | UI 视觉、交互 / 文案、程序导出图按分支阅读，使用现有共享组件与令牌 |
+| [fengming-livestream-summary](src/skills/fengming-livestream-summary/SKILL.md) | 封茗囧菌转录 / 文件总结；纠错、分类、数据库与纯文本模板 |
+| [summarize-update](src/skills/summarize-update/SKILL.md) | 明确推送 / 发布，或构建、内置清单、依赖解析与缺依赖排查；双版本按分支阅读 |
+| [software-feature-guide](src/skills/software-feature-guide/SKILL.md) | 页面功能、入口、路径与限制，按页面读 references |
+| [tcdoc-sync-scope](src/skills/tcdoc-sync-scope/SKILL.md) | 腾讯文档同步 / 写回 / 表格修改 / 导出覆盖前必读 |
+| [recording-toolbox-core](src/skills/recording-toolbox-core/SKILL.md) | 更新前核对八模块直接 / 间接影响与具体授权 |
+| [quick-commands](src/skills/quick-commands/SKILL.md) | /短语、要点或技能路由查询，仅读原文生成摘要 |
 
-当前为 13 个主入口、12 个旧名兼容入口，原有 25 个 SKILL.md 路径保留。旧名只转交，不再维护同一份规则；单独导出旧目录需同时携带对应主目录和依赖。本文不修改技能导出程序。
+项目只保留上述 13 个主技能入口。专项细则集中在所属主目录的 references/，快捷指令直接指向现行正文，不保留旧名转交目录。技能发现按实际目录枚举；单目录导出只携带该目录，跨技能依赖仍须按链接同时提供。
 
 ## 开工与收尾
 

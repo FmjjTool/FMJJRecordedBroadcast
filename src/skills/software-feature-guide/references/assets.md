@@ -17,4 +17,4 @@
 -   本页不提供备份按钮或快捷跳转；配置与资产备份统一在「全局设置 → 备份与恢复」。网盘增量上传仍在「网络库 → 网盘备份」。
 -   单条上传：资源归档表格右键「上传到腾讯文档（官方动态）」把这一条直接写进《封茗囧菌数据汇总库》的「官方动态」，不经过中间层待同步清单、不受 50 条批量上限限制。点击后自动执行「同步前刷新」（采集账号 → 拉云端快照）→ 写入 → 读回校验，一条龙完成，不需要先手动点刷新；已存在的同一原帖链接会跳过。中间层工具条开启「免校对模式」时，这里跳过自动刷新，直接用当前本地数据写入。
 -   图片格式：上传时腾讯只收 JPEG/PNG/GIF/BMP/WebP，其它格式（HEIC/AVIF/TIFF 等）自动在内存里转成 PNG 再传，不改动本地原图；转换失败才报「格式不支持」并中止这一条。
--   详情窗可导出预览拼贴图，复用 `toolbox.asset_preview.render_asset_preview` 与共享 `toolbox.image_render`，遵守 [统一生成图片规范](../../image-output-spec/SKILL.md) 的版式与设计令牌。
+-   详情窗可导出预览拼贴图，复用 `toolbox.asset_preview.render_asset_preview` 与共享 `toolbox.image_render`，遵守 [统一生成图片规范](../../ui-visual-spec/references/generated-images.md) 的版式与设计令牌。

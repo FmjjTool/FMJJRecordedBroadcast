@@ -1,6 +1,6 @@
 # 数据生命周期（Data Lifecycle）
 
-本文件是 [架构总入口](../SKILL.md) 的数据规范正文；新增或修改持久化、去重、迁移、备份及保留清理时完整阅读。旧 `data-lifecycle` skill 仅转交本文件。
+本文件是 [架构总入口](../SKILL.md) 的数据规范正文；新增或修改持久化、去重、迁移、备份及保留清理时完整阅读。
 
 先阅读 [convention-skill](../../convention-skill/SKILL.md) 与 [layering-contract](../SKILL.md)。涉及 Cookie/登录时按 [cookie-data-protection](../../cookie-data-protection/SKILL.md) 与 [cookie-manager](../../cookie-manager/SKILL.md)；涉及腾讯文档写入时按 [tcdoc-sync-scope](../../tcdoc-sync-scope/SKILL.md)。
 

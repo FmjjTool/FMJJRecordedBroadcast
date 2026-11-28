@@ -1,11 +1,11 @@
 ---
 name: summarize-update
-description: "更新总结与明确授权的 Git 推送、版本发布。总结默认不推送；普通 push 只同步指定分支，不附带打包、改版本或 Release。完整发布按版本、构建、日志与资产校验流程执行；双版本细节见 references/release-editions.md。"
+description: "按请求区分更新总结、Git 推送与版本发布，总结默认不推送。构建标准 / FULL、修改 build.py、内置清单、依赖解析或排查缺依赖时同样使用；普通 push 不附带打包、改版本或 Release，双版本细节按需读取。"
 ---
 
-# 更新总结与版本发布
+# 更新总结、构建与版本发布
 
-先遵守 [总约定](../convention-skill/SKILL.md)；所有操作前阅读 [真实凭据保护](../cookie-data-protection/SKILL.md)，任何更新前核对 [录播核心保护](../recording-toolbox-core/SKILL.md) 与 [运行中实例保护](../testing-quality-gates/references/running-instance-guard.md)。本 skill 只补发布特有的范围判断、版本与交付规则；Git 备份、远端领先/分叉、网络顺序、唯一当日报告和本地提交以总约定为唯一来源。
+先遵守 [总约定](../convention-skill/SKILL.md)；所有操作前阅读 [真实凭据保护](../cookie-data-protection/SKILL.md)，任何更新前核对 [录播核心保护](../recording-toolbox-core/SKILL.md) 与 [运行中实例保护](../testing-quality-gates/references/running-instance-guard.md)。本 skill 只补推送、构建与发布特有的范围判断、版本及交付规则；Git 备份、远端领先/分叉、网络顺序、唯一当日报告和本地提交以总约定为唯一来源。构建或依赖维护直接读取 [标准版与 FULL 内置版](references/release-editions.md)，不因此执行完整发布。
 
 ## 先区分用户请求
 
@@ -16,7 +16,7 @@ description: "更新总结与明确授权的 Git 推送、版本发布。总结�
 | 明确要求推送 / push | 按用户指定仓库与分支同步已确认提交；不自动升级为完整发布 |
 | 明确要求发布新版本 / 完整发布 | 按下文完整流程；用户限定“不打包”“仅标准版”等时只执行获准范围，缺少的产物如实说明 |
 
-用户的当次范围优先；发布授权不是运行实例关闭授权、真实数据写入授权或真实凭据修改授权。仅阅读此 skill 或旧名 release-editions 不触发任何外部动作。总结类请求也不因出现“push”一词就获得推送授权。
+用户的当次范围优先；发布授权不是运行实例关闭授权、真实数据写入授权或真实凭据修改授权。仅阅读本入口或双版本参考不触发任何外部动作。总结类请求也不因出现“push”一词就获得推送授权。
 
 ## 开发与验证衔接
 
@@ -28,7 +28,7 @@ description: "更新总结与明确授权的 Git 推送、版本发布。总结�
 - 按总约定重新成功 fetch 并比较目标分支；分叉先列差异、等待明确取舍，禁止强制推送。
 - 本次适用测试通过，未验证的真实 UI、平台和硬件行为明确列出。涉及发布、依赖或产物先读 [安全基线](../security-baseline/SKILL.md)。
 - 构建、打包态冒烟只在独立目录/程序副本执行，运行数据与端口隔离；不会清理或覆盖用户运行实例、真实 `config/` 或 `download/`。
-- 构建双版本、改 build.py / 内置清单 / 依赖查找顺序或排查缺依赖时，完整读取 [标准版与 FULL 内置版](references/release-editions.md)。旧名 [release-editions](../release-editions/SKILL.md) 仅作兼容入口。
+- 构建双版本、改 build.py / 内置清单 / 依赖查找顺序或排查缺依赖时，完整读取 [标准版与 FULL 内置版](references/release-editions.md)。
 
 ## 版本号
 

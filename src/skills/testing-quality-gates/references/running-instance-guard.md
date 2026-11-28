@@ -1,6 +1,6 @@
 # 运行中实例保护
 
-本文件是运行保护的唯一正文，入口为 [testing-quality-gates](../SKILL.md)；旧名 [running-instance-guard](../../running-instance-guard/SKILL.md) 仅作兼容跳转。先遵守 [总约定](../../convention-skill/SKILL.md) 与 [真实凭据保护](../../cookie-data-protection/SKILL.md)。
+本文件是运行保护的唯一正文，入口为 [testing-quality-gates](../SKILL.md)。先遵守 [总约定](../../convention-skill/SKILL.md) 与 [真实凭据保护](../../cookie-data-protection/SKILL.md)。
 
 ## 实例归属与权限
 

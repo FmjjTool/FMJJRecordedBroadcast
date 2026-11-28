@@ -1,6 +1,6 @@
 """导出图片共享渲染（Pillow + 标准库）。
 
-规范见 `src/skills/image-output-spec/SKILL.md`：
+规范见 `src/skills/ui-visual-spec/references/generated-images.md`：
 - 1080 px 基准宽度、固定页头/页脚、卡片/表格 token；
 - 只依赖 Pillow 与标准库，不导入 PySide6；
 - 页面/业务模块只传数据，不新写第二套色板、字号与页脚。

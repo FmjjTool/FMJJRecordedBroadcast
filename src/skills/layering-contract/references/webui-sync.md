@@ -1,8 +1,8 @@
 # 桌面端 → WebUI 同步
 
-本文件是 [架构总入口](../SKILL.md) 的同步规范正文；桌面用户能力发生变化或排查 WebUI 缺失/不一致时完整阅读。旧 `webui-sync` skill 仅转交本文件。
+本文件是 [架构总入口](../SKILL.md) 的同步规范正文；桌面用户能力发生变化或排查 WebUI 缺失/不一致时完整阅读。
 
-先阅读 [convention-skill](../../convention-skill/SKILL.md)（约定 2/3/4/9/12/16）、[架构总入口](../SKILL.md) 与 [分层详细规则](architecture.md)（五层依赖 + 「WebUI 中间层隔离」）。涉及界面时再读 [ui-visual-spec](../../ui-visual-spec/SKILL.md)、[ui-interaction-spec](../../ui-interaction-spec/SKILL.md)。
+先阅读 [convention-skill](../../convention-skill/SKILL.md)（约定 2/3/4/9/12/16）、[架构总入口](../SKILL.md) 与 [分层详细规则](architecture.md)（五层依赖 + 「WebUI 中间层隔离」）。涉及界面时再读 [ui-visual-spec](../../ui-visual-spec/SKILL.md)、[交互与反馈](../../ui-visual-spec/references/interaction.md)。
 
 ## 定位与铁律
 
@@ -125,12 +125,12 @@ FIELDS = {
 | 功能可执行 | 真实调用接口完成一次「读 → 写 → 回读」，不是只有控件 |
 | 布局对齐 | 与桌面同页对照分组、字段、操作顺序、状态文案 |
 
-验证方式（按 [isolated-testing](../../isolated-testing/SKILL.md)）：
+验证方式（按 [隔离测试](../../testing-quality-gates/references/isolated-testing.md)）：
 
 - 隔离副本 + 独立端口（如 18791/18792）+ 临时 app 根（patch `config_manager.get_app_root`）+ 引擎打桩。
-- 宿主机 Edge 无头 Playwright 走一遍页面，截图存 `Progress/ui/<日期>/`。
-- 真实 `config/` 与 `download/` 不动，跑完核对 `config/config.json` 前后 SHA-256 一致并在报告写明。
-- 临时文件与测试脚本按 [test-cleanup](../../test-cleanup/SKILL.md) 的保留、确认与回收站规则处理；清理方式以当前环境实际可用工具为准，不假定存在 `host_safe_delete`。
+- 宿主机 Edge 无头 Playwright 走一遍隔离页面，过程截图存 `_smoking/`；只有最终报告证据放 `Progress/ui/<日期>/`。
+- 真实 `config/` 与 `download/` 不动，核对隔离副本的配置与路径；本次获批接入的非凭据真实文件按隔离正文记录快照、SHA-256 与整文件还原结果，不为验收擅自读取真实配置。
+- 临时文件与测试脚本按 [测试清理](../../testing-quality-gates/references/test-cleanup.md) 的保留、确认与回收站规则处理；清理方式以当前环境实际可用工具为准，不假定存在 `host_safe_delete`。
 
 禁止：在真实 `download/` 上做写操作；用真实账号或凭据做验证；把未验证项写成已通过。
 
@@ -156,5 +156,5 @@ FIELDS = {
 - [convention-skill](../../convention-skill/SKILL.md)：提交、报告、隔离测试与凭据禁令；本 skill 不豁免其中任何一条。
 - [分层详细规则](architecture.md)：五层与「WebUI 中间层隔离」的权威定义；本文件只负责同步流程，不改变分层。
 - [software-feature-guide](../../software-feature-guide/SKILL.md)：功能说明唯一维护处；Web 化或新增专属页时同步更新。
-- [ui-visual-spec](../../ui-visual-spec/SKILL.md) / [ui-interaction-spec](../../ui-interaction-spec/SKILL.md)：Web 端只借语义角色与交互范式，不改 QSS 与主题。
-- [test-cleanup](../../test-cleanup/SKILL.md)：验证完成后清理测试文件与临时产物。
+- [ui-visual-spec](../../ui-visual-spec/SKILL.md) / [交互与反馈](../../ui-visual-spec/references/interaction.md)：Web 端只借语义角色与交互范式，不改 QSS 与主题。
+- [测试清理](../../testing-quality-gates/references/test-cleanup.md)：验证完成后清理测试文件与临时产物。

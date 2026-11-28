@@ -1,6 +1,6 @@
 # 平台适配与外部接口策略（Platform Adapter Policy）
 
-本文件是 [架构总入口](../SKILL.md) 的平台规范正文；新增或修改平台接口、登录适配、下载及回退策略时完整阅读。旧 `platform-adapter-policy` skill 仅转交本文件。
+本文件是 [架构总入口](../SKILL.md) 的平台规范正文；新增或修改平台接口、登录适配、下载及回退策略时完整阅读。
 
 先阅读 [convention-skill](../../convention-skill/SKILL.md) 与 [layering-contract](../SKILL.md)。涉及登录/凭据时按 [cookie-data-protection](../../cookie-data-protection/SKILL.md) 与 [cookie-manager](../../cookie-manager/SKILL.md)；涉及网络/文件/依赖安全时读 [security-baseline](../../security-baseline/SKILL.md)；涉及测试时读 [testing-quality-gates](../../testing-quality-gates/SKILL.md)。
 

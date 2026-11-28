@@ -9,7 +9,7 @@ description: "项目架构与工程边界总入口。新增/重构/跨层调用�
 
 ## 按任务读取
 
-只读取本轮命中的参考文档，命中多个任务时组合读取；不因进入本 skill 就通读全部专项规则。参考文档是相应规则的规范正文，旧 skill 名只保留兼容入口。
+只读取本轮命中的参考文档，命中多个任务时组合读取；不因进入本 skill 就通读全部专项规则。参考文档是相应规则的唯一正文，不另设转交入口。
 
 | 触发 | 必读参考 | 内容 |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ description: "项目架构与工程边界总入口。新增/重构/跨层调用�
 | 新增/修改平台接口、登录适配、下载或回退策略 | [平台适配](references/platform-adapter-policy.md) | Adapter 契约、能力矩阵、网络/签名、错误分类、契约测试 |
 | 桌面端新增/改动用户能力，或排查 WebUI 缺失/不一致 | [桌面到 WebUI 同步](references/webui-sync.md) | 四层同批接入、字段表、桌面专属边界、三层验收 |
 
-纯文案、视觉或业务参数调整不自动触发全部架构参考；涉及界面时另按 [ui-visual-spec](../ui-visual-spec/SKILL.md) 与 [ui-interaction-spec](../ui-interaction-spec/SKILL.md)。
+纯文案、视觉或业务参数调整不自动触发全部架构参考；涉及界面时另按 [ui-visual-spec](../ui-visual-spec/SKILL.md) 与 [交互与反馈](../ui-visual-spec/references/interaction.md)。
 
 ## 共用边界
 
@@ -29,6 +29,6 @@ description: "项目架构与工程边界总入口。新增/重构/跨层调用�
 5. 桌面与 Web 复用业务规则和同源数据，保持进程与页面状态隔离；桌面能力变更按参考文档同批接入 WebUI。
 6. 验证默认使用隔离副本和虚构数据；未验证项如实报告。报告与提交统一按总约定，本 skill 只使用 Markdown，不安装运行时拦截器。
 
-## 兼容入口
+## 维护位置
 
-[data-lifecycle](../data-lifecycle/SKILL.md)、[platform-adapter-policy](../platform-adapter-policy/SKILL.md)、[webui-sync](../webui-sync/SKILL.md) 的目录与 `SKILL.md` 保留，供既有引用、快捷指令和下载 ID 使用；其规范正文统一维护在本目录的 `references/`，不另存第二套规则。
+架构、数据、平台与 WebUI 同步细则统一维护在本目录的 references/，快捷指令直接链接相应正文。
