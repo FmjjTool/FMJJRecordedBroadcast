@@ -74,10 +74,20 @@ def search(text, limit=30, on_log=None, is_cancelled=None, *, page=1):
 
 
 def parse(text, on_log=None, is_cancelled=None):
-    item = xianyu.fetch_item(text, credential=_TaskCredential(),
+    """解析单品链接后立即归档详情与图片；关键词搜索仍由单独用例只读处理。"""
+    credential = _TaskCredential()
+    item = xianyu.fetch_item(text, credential=credential,
                              on_log=on_log, is_cancelled=is_cancelled)
-    return {"platform": "xianyu", "kind": "item", "items": [_row(item)], "total": 1,
-            "summary": "闲鱼商品已解析，勾选后可入库并下载图片"}
+    result = save_detail(item, on_log=on_log, is_cancelled=is_cancelled,
+                         credential=credential)
+    saved_item = (result.get("items") or [{}])[0]
+    row = _row(item) | {"saved": bool(saved_item.get("saved") or saved_item.get("skipped"))}
+    summary = result["summary"]
+    if result.get("failures"):
+        summary += "；" + result["failures"][0]["error"]
+    return {"platform": "xianyu", "kind": "item", "items": [row], "total": 1,
+            "failures": result.get("failures", []),
+            "cancelled": bool(result.get("cancelled")), "summary": summary}
 
 
 def is_item_reference(text: str) -> bool:
@@ -244,12 +254,12 @@ def list_saved(limit=200):
             "summary": f"已读取 {len(rows)} 件本地闲鱼商品资料"}
 
 
-def save_items(items, on_log=None, is_cancelled=None):
+def _save_items(items, on_log=None, is_cancelled=None, *, details=None, credential=None):
     ids = normalize_items(items)
     root = _root()
     saved, skipped, failures, results = 0, 0, [], []
     cancelled = False
-    credential = _TaskCredential()
+    credential = credential or _TaskCredential()
     for index, value in enumerate(ids, 1):
         try:
             xianyu.check_cancel(is_cancelled)
@@ -263,8 +273,13 @@ def save_items(items, on_log=None, is_cancelled=None):
                     results.append(_row(existing) | {"saved": True, "skipped": True})
                     skipped += 1
                     continue
-                detail = xianyu.fetch_item(value, credential=credential,
-                                           on_log=on_log, is_cancelled=is_cancelled)
+                detail = (details or {}).get(value) if details is not None else None
+                if detail is None:
+                    detail = xianyu.fetch_item(value, credential=credential,
+                                               on_log=on_log, is_cancelled=is_cancelled)
+                if not isinstance(detail, dict) or xianyu.item_id(detail.get("item_id") or "") != value:
+                    raise ValueError("闲鱼返回了其他商品，已停止保存")
+                credential.check()
                 image_folder = _inside(folder / "images", folder)
                 image_folder.mkdir(exist_ok=True)
                 local, image_failures = [], 0
@@ -305,3 +320,19 @@ def save_items(items, on_log=None, is_cancelled=None):
             "failures": failures, "items": results, "cancelled": cancelled,
             "remaining": remaining,
             "summary": summary + "；资料与图片位于「闲鱼商品」目录"}
+
+
+def save_items(items, on_log=None, is_cancelled=None):
+    return _save_items(items, on_log=on_log, is_cancelled=is_cancelled)
+
+
+def save_detail(detail, on_log=None, is_cancelled=None, *, credential=None):
+    """保存已经解析的详情 DTO，避免单品解析成功后再次请求商品详情。"""
+    if not isinstance(detail, dict):
+        raise ValueError("闲鱼商品资料格式无效，无法保存")
+    value = xianyu.item_id(detail.get("item_id") or "")
+    if on_log:
+        on_log("正在保存商品详情并下载图片")
+    return _save_items([{"item_id": value}], on_log=on_log,
+                       is_cancelled=is_cancelled, details={value: detail},
+                       credential=credential)

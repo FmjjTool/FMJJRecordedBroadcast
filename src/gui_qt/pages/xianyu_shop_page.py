@@ -106,7 +106,7 @@ class XianyuShopPage(BasePage):
         layout.addWidget(card, 1)
 
         feedback = QHBoxLayout()
-        self.status_label = QLabel("搜索与解析仅读取；勾选后保存到「闲鱼商品」目录")
+        self.status_label = QLabel("粘贴单品链接后自动保存商品资料与图片；关键词搜索结果可勾选后批量入库")
         self.status_label.setWordWrap(True)
         feedback.addWidget(self.status_label, 1)
         self.retry_btn = QPushButton("重试")

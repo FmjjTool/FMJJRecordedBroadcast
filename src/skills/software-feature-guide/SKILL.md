@@ -41,7 +41,7 @@ description: "软件页面功能与使用说明。用于功能介绍、页面说
 | [粉丝群](references/fan-groups.md) | `src/gui_qt/pages/fan_groups_page.py` | 抖音/微博/B站公开粉丝群；QQ群分享链接/登录按群号订阅 |
 | [微博超话](references/weibo-chaohua.md) | `src/gui_qt/pages/weibo_chaohua.py` | 超话访客态采集与历史分析 |
 | [票务解析](references/tickets.md) | `src/gui_qt/pages/tickets_page.py` | 大麦/秀动/B站会员购 |
-| [购物解析](references/shopping.md) | `src/gui_qt/pages/shopping_hub.py` | 淘宝 / 抖音商城 / B站小店 / 闲鱼（链接自动识别，闲鱼支持关键词搜索与入库下载） |
+| [购物解析](references/shopping.md) | `src/gui_qt/pages/shopping_hub.py` | 淘宝 / 抖音商城 / B站小店 / 闲鱼（链接自动识别；闲鱼单品链接自动入库下载，关键词结果可批量选择） |
 | [公众号文章](references/wechat-articles.md) | `src/gui_qt/pages/wechat_article.py` | 公众号资料、文章归档、历史同步与正文图片导出 |
 | [直播总结](references/livestream-summary.md) | `src/gui_qt/pages/livestream_summary.py` | 转录总结、模型接口 / 本地 CPU·GPU / 规则模式与模型参数 |
 | [抖音表情](references/douyin-emoji.md) | `src/gui_qt/pages/douyin_emoji_page.py` | 会员表情栏、直播收集与弹幕包补收（采集工具第 4 个页签） |
