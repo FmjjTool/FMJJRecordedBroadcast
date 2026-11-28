@@ -17,6 +17,8 @@ from typing import Callable
 from toolbox.tcdoc import openapi
 
 WRITABLE_OPS = frozenset({"新增", "更新"})
+CLOUD_EDITABLE_TYPES = openapi.SUPPORTED_TYPES | {7, 16}
+MAX_CLOUD_EDIT_RECORDS = 300
 
 
 class MappingError(ValueError):
@@ -128,6 +130,88 @@ def _field_signature(mapping, field_by_id):
     return {fid: deepcopy({key: field_by_id[fid].get(key) for key in
                            ("fieldID", "fieldTitle", "fieldType", "_options")})
             for fid in mapping.values() if fid in field_by_id}
+
+
+def _record_field_value(record, field):
+    values = record.get("values") or {}
+    title = str(field.get("fieldTitle") or "")
+    fid = str(field.get("fieldID") or "")
+    return values.get(title, values.get(fid))
+
+
+def prepare_cloud_updates(field_by_id: dict[str, dict], records: list[dict],
+                          updates: list[dict]) -> list[dict]:
+    """把用户暂存的云端单元格编辑变成按 recordID 锁定的预览计划。"""
+    if not isinstance(updates, list) or not updates or len(updates) > MAX_CLOUD_EDIT_RECORDS:
+        raise MappingError(f"请选择 1–{MAX_CLOUD_EDIT_RECORDS} 条记录并编辑后再预览")
+    fields = {str(fid): field for fid, field in field_by_id.items()}
+    title_counts = Counter(str(field.get("fieldTitle") or "") for field in fields.values())
+    by_record = defaultdict(list)
+    for record in records:
+        rid = str(record.get("recordID") or "").strip()
+        if rid:
+            by_record[rid].append(record)
+    seen_records: set[str] = set()
+    plans = []
+    for update in updates:
+        if not isinstance(update, dict):
+            raise MappingError("修改预览格式无效，请重新选择记录")
+        rid = str(update.get("record_id") or "").strip()
+        patch = update.get("values")
+        if not rid or rid in seen_records or not isinstance(patch, dict) or not patch:
+            raise MappingError("修改预览包含空记录、重复记录或空字段，请重新选择")
+        seen_records.add(rid)
+        matches = by_record.get(rid, [])
+        if len(matches) != 1:
+            raise MappingError("所选记录已不存在或记录 ID 不唯一，请刷新云端数据")
+        record = matches[0]
+        values = {}
+        snapshot = {}
+        fields_used = {}
+        changes = []
+        for raw_fid, raw in patch.items():
+            fid = str(raw_fid or "").strip()
+            field = fields.get(fid)
+            title = str((field or {}).get("fieldTitle") or "").strip()
+            if (field is None or not title
+                    or int(field.get("fieldType") or 0) not in CLOUD_EDITABLE_TYPES):
+                raise MappingError("所选字段不支持回写，请刷新字段并重新编辑")
+            if title_counts[title] != 1:
+                raise MappingError(f"云端存在同名字段「{title}」，无法安全回写")
+            ok, encoded = _encode(field, raw)
+            if not ok:
+                raise MappingError(str(encoded))
+            old = _record_field_value(record, field)
+            if encoded is None:
+                if openapi.display_value(field, old).strip():
+                    raise MappingError(f"「{title}」不能用空值清除，请保留原内容后再预览")
+                continue
+            before_key = _value_key(field, old)
+            if before_key == _value_key(field, encoded):
+                continue
+            values[title] = encoded
+            snapshot[fid] = before_key
+            fields_used[fid] = field
+            changes.append({
+                "field_id": fid, "field": title,
+                "remote": openapi.display_value(field, old),
+                "local": openapi.display_value(field, encoded),
+            })
+        if values:
+            plans.append({
+                "record_id": rid, "values": values, "changes": changes,
+                "_snapshot": snapshot,
+                "_fields": _field_signature(
+                    {fid: fid for fid in fields_used}, fields),
+            })
+    if not plans:
+        raise MappingError("没有检测到可回写的字段变化")
+    return plans
+
+
+def _cloud_edit_fingerprint(action):
+    return {key: action.get(key) for key in
+            ("record_id", "values", "changes", "_snapshot", "_fields")}
 
 
 def compare(headers: list[str], rows: list[dict], mapping: dict[str, str],

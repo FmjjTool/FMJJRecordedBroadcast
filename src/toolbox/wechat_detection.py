@@ -17,6 +17,12 @@ import time
 
 _WORKER_FLAG = "--wechat-reading-detect-worker"
 _MAX_LINE = 49152
+_DIAGNOSTIC_FIELDS = (
+    "proxy_connections", "connect_requests", "wechat_connects",
+    "upstream_tls", "client_tls", "http_requests",
+    "valid_candidates",
+)
+_MAX_DIAGNOSTIC_COUNT = 1_000_000
 _MESSAGES = {
     "idle": "尚未开始检测",
     "starting": "正在准备检测，请稍候",
@@ -91,6 +97,7 @@ class WechatDetectionController:
         self._cancelled = False
         self._expired = False
         self._process = None
+        self._diagnostics = dict.fromkeys(_DIAGNOSTIC_FIELDS, 0)
 
     def status(self) -> dict:
         with self._lock:
@@ -99,6 +106,7 @@ class WechatDetectionController:
                 "busy": self._busy, "cleanup_ok": self._cleanup_ok,
                 "cleanup_failed": self._cleanup_failed,
                 "recovery_required": self._recovery_required,
+                "diagnostics": dict(self._diagnostics),
                 "remaining_seconds": (max(0, int(self._deadline - self._clock()))
                                       if self._busy and self._state in
                                       ("starting", "detecting") else 0),
@@ -135,6 +143,7 @@ class WechatDetectionController:
             self._cancelled = False
             self._expired = False
             self._stop_request.clear()
+            self._diagnostics = dict.fromkeys(_DIAGNOSTIC_FIELDS, 0)
             self._deadline = self._clock() + self._timeout
             self._set("starting", busy=True, cleanup_ok=True)
             try:
@@ -234,6 +243,21 @@ class WechatDetectionController:
                     malformed = True
                     data.clear()
                     continue
+                if "diagnostics" in data:
+                    raw_diagnostics = data.get("diagnostics")
+                    if (not isinstance(raw_diagnostics, dict)
+                            or set(raw_diagnostics) != set(_DIAGNOSTIC_FIELDS)
+                            or any(type(value) is not int
+                                   or not 0 <= value <= _MAX_DIAGNOSTIC_COUNT
+                                   for value in raw_diagnostics.values())):
+                        malformed = True
+                        continue
+                    with self._lock:
+                        if any(raw_diagnostics[name] < self._diagnostics[name]
+                               for name in _DIAGNOSTIC_FIELDS):
+                            malformed = True
+                            continue
+                        self._diagnostics = dict(raw_diagnostics)
                 if not isinstance(state, str) or state not in _MESSAGES or state == "idle":
                     malformed = True
                     continue
