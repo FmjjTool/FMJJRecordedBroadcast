@@ -14,7 +14,7 @@ from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMenuBar,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStyle,
     QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
 )
@@ -299,7 +299,6 @@ class MusicTagPage(BasePage):
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(12)
-        v.addWidget(self._build_menubar())
         self.decrypt_bar = self._build_decrypt_bar()
         v.addWidget(self.decrypt_bar)
         v.addWidget(self._build_toolbar())
@@ -326,80 +325,6 @@ class MusicTagPage(BasePage):
             action.setStatusTip(tip)
         action.triggered.connect(slot)
         return action
-
-    def _build_menubar(self):
-        bar = QMenuBar()
-        bar.setNativeMenuBar(False)
-        bar.setStyleSheet(
-            "QMenuBar { background: transparent; border: none; padding: 0; }"
-            "QMenuBar::item { padding: 3px 6px; background: transparent; }"
-            "QMenuBar::item:selected { background: rgba(127,127,127,0.18); }")
-
-        file_menu = bar.addMenu("文件(&F)")
-        file_menu.addAction(self._act("添加文件...", self._add_files,
-                                      shortcut="Ctrl+O", tip="选择音频文件加入列表"))
-        file_menu.addAction(self._act("添加文件夹...", self._add_folder,
-                                      shortcut="Ctrl+Shift+O", tip="递归扫描文件夹内全部音频"))
-        file_menu.addSeparator()
-        file_menu.addAction(self._act("重新读取标签", self._reload_selected,
-                                      shortcut="Ctrl+R", tip="丢弃未保存修改，从磁盘重新读取"))
-        file_menu.addAction(self._act("保存标签", self._save_selected,
-                                      icon="save", shortcut="Ctrl+S", tip="把表单写入选中文件"))
-        file_menu.addAction(self._act("全部保存", self._save_all,
-                                      shortcut="Ctrl+Shift+S", tip="保存所有已修改文件"))
-        file_menu.addSeparator()
-        file_menu.addAction(self._act("清除标签", self._clear_tags, icon="remove_tags"))
-        file_menu.addAction(self._act("标签历史", self._history, icon="history"))
-        file_menu.addSeparator()
-        file_menu.addAction(self._act("移除选中", self._remove_selected))
-        file_menu.addAction(self._act("清空列表", self._clear_list))
-
-        edit_menu = bar.addMenu("编辑(&E)")
-        edit_menu.addAction(self._act("全选文件", self._select_all_files, shortcut="Ctrl+A"))
-        edit_menu.addAction(self._act("取消选择", self._unselect_all_files))
-        edit_menu.addAction(self._act("反选", self._invert_selection))
-        edit_menu.addSeparator()
-        edit_menu.addAction(self._act("复制标签", self._copy_tags, shortcut="Ctrl+Shift+C"))
-        edit_menu.addAction(self._act("粘贴标签", self._paste_tags, shortcut="Ctrl+Shift+V"))
-        edit_menu.addSeparator()
-        edit_menu.addAction(self._act("查找替换...", self._find_replace, shortcut="Ctrl+F"))
-
-        view_menu = bar.addMenu("视图(&V)")
-        view_menu.addAction(self._act("刷新", self._reload_selected, icon="refresh",
-                                      shortcut="F5", tip="重新读取选中文件标签"))
-        view_menu.addAction(self._act("自定义列...", self._customize_columns, icon="manage_dirs"))
-        view_menu.addAction(self._act("显示全部列", lambda: self._toggle_all_columns(True)))
-
-        source_menu = bar.addMenu("标签源(&S)")
-        source_menu.addAction(self._act("网络匹配...", self._net_match, icon="combined_source",
-                                        tip="四平台搜索并手动选择候选"))
-        source_menu.addAction(self._act("自动匹配标签...", self._auto_match, icon="auto_match",
-                                        tip="四平台按相似度自动匹配"))
-        source_menu.addSeparator()
-        source_menu.addAction(self._act("封面搜索...", self._cover_search, icon="cover_source"))
-        source_menu.addAction(self._act("歌词搜索...", self._lyric_search, icon="lyric_source"))
-
-        batch_menu = bar.addMenu("批量(&B)")
-        batch_menu.addAction(self._act("自动匹配标签...", self._auto_match, icon="auto_match"))
-        xlsx_action = self._act("XLSX 表格匹配...", self._xlsx_import)
-        xlsx_action.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
-        batch_menu.addAction(xlsx_action)
-        batch_menu.addAction(self._act("按标签改名...", self._batch_rename, icon="filename_rel"))
-        batch_menu.addAction(self._act("提取封面", self._extract_covers, icon="extract_cover"))
-        batch_menu.addSeparator()
-        lyric_menu = batch_menu.addMenu("歌词")
-        lyric_menu.setIcon(self._icon("lyric_source"))
-        lyric_menu.addAction(self._act("重新格式化时间标签", lambda: self._apply_lyric_op("reformat")))
-        lyric_menu.addAction(self._act("去除时间标签", lambda: self._apply_lyric_op("remove_time")))
-        lyric_menu.addAction(self._act("删除空行", lambda: self._apply_lyric_op("remove_blank")))
-        lyric_menu.addAction(self._act("删除头部标签", lambda: self._apply_lyric_op("remove_header")))
-        lyric_menu.addSeparator()
-        lyric_menu.addAction(self._act("导入 LRC 文件...", self._import_lrc_selected))
-
-        tools_menu = bar.addMenu("工具(&T)")
-        tools_menu.addAction(self._act("编码修复...", self._encoding_fix, icon="charset"))
-        tools_menu.addAction(self._act("标签历史", self._history, icon="history"))
-        return bar
 
     def _build_toolbar(self):
         tb = QToolBar()
