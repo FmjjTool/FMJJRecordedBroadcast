@@ -964,6 +964,24 @@ APP_PUBLISHER    = "歆慕"
 5. **引擎层不要反向 import GUI**（`toolbox/live_video.py` 是唯一例外，用了 `QTimer` 做渲染定时）
 6. **发版流程**：改 `src/version.py` → `git commit` → `python build.py`
 
+### 一键检查本地与 GitHub 差异
+
+开发时可双击根目录的 **`检查本地云端差异.cmd`**，结果显示后按回车关闭。需要 Python 3.10+ 和 Git，不需要安装工具箱依赖或启动应用。也可以在终端运行：
+
+```powershell
+python check_git_sync.py
+python check_git_sync.py --limit 0     # 展示完整列表，默认每组最多 20 项
+python check_git_sync.py --offline     # 仅检查本地缓存，不代表云端最新状态
+```
+
+脚本会核对本项目的 `origin` 地址，获取远端分支，再分别列出历史领先/落后/分叉、双方独有提交、文件增删行数及未提交文件。分叉时补充共同基线到两端的变化和同文件重叠列表；同文件重叠仅供审阅，不等于已确认文本冲突。默认展示元数据，不输出源码补丁，也不读取应用配置或登录数据。
+
+`main` 默认比较 `origin/main`；其他分支使用已配置的 `origin` 上游。没有上游或处于 detached HEAD 时，须明确指定目标，例如 `python check_git_sync.py --target origin/main`。可用 `--repo "仓库根目录"` 检查本项目的其他副本。
+
+在线检查按直连、可用代理依次获取远端状态，不修改代理或 remote 配置；失败时明确报告检查未完成，不用旧缓存冒充最新状态。获取操作只更新 Git 对象及目标远端跟踪引用，禁用自动维护与递归子模块；不会执行拉取合并、暂存、提交、推送、覆盖或清理。检查结果是当时的快照，实际更新前仍应重新检查。
+
+退出码：`0` 为比较快照无差异且工作区干净，`1` 为检查完成但发现差异或未提交文件，`2` 为失败或无法得出完整结论；`130` 为用户取消。离线模式下 `0` 也仅表示与缓存一致。
+
 ### 参考来源
 
 - 录播录制设计参考 [BililiveRecorder](https://github.com/Bililive/BililiveRecorder)（FLV 流式转存、弹幕 XML 格式）
