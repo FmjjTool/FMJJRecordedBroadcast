@@ -15,10 +15,10 @@ from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGroupBox,
-    QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QTabWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QInputDialog,
+    QLineEdit, QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QTabWidget, QVBoxLayout, QWidget, QStackedWidget,
 )
 
 from gui_qt import table_columns, table_sort
@@ -46,6 +46,15 @@ class TcDocMappingPanel(QWidget):
         self.sample_records: list[dict] = []
         self.remote_records: list[dict] = []
         self.remote_total = 0
+        self._cloud_records: list[dict] = []
+        self._cloud_loaded = False
+        self._cloud_page = 1
+        self._cloud_page_size = 200
+        self._cloud_query = ""
+        self._cloud_visible_fields: list[str] = []
+        self._cloud_selected: set[str] = set()
+        self._cloud_drafts: dict[str, dict[str, str]] = {}
+        self._rendering_cloud = False
         self.local_headers: list[str] = []
         self.local_rows: list[dict] = []
         self.local_path = ""
@@ -118,6 +127,16 @@ class TcDocMappingPanel(QWidget):
         target_bar.addWidget(self.preview_btn)
         layout.addLayout(target_bar)
 
+        mode_bar = QHBoxLayout()
+        mode_bar.addWidget(QLabel("数据模式"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("云端数据（默认）", "cloud")
+        self.mode_combo.addItem("本地表格映射", "local")
+        self.mode_combo.currentIndexChanged.connect(self._change_mode)
+        mode_bar.addWidget(self.mode_combo)
+        mode_bar.addStretch(1)
+        layout.addLayout(mode_bar)
+
         self.busy_bar = QProgressBar()
         self.busy_bar.setRange(0, 0)
         self.busy_bar.setTextVisible(False)
@@ -134,7 +153,15 @@ class TcDocMappingPanel(QWidget):
         split.addWidget(self._build_right_panel())
         split.setChildrenCollapsible(False)
         split.setSizes([480, 700])
-        layout.addWidget(split, 1)
+        self.mode_stack = QStackedWidget()
+        self.cloud_page = self._build_cloud_page()
+        local_page = QWidget()
+        local_layout = QVBoxLayout(local_page)
+        local_layout.setContentsMargins(0, 0, 0, 0)
+        local_layout.addWidget(split)
+        self.mode_stack.addWidget(self.cloud_page)
+        self.mode_stack.addWidget(local_page)
+        layout.addWidget(self.mode_stack, 1)
 
         self._buttons.extend([
             self.connect_btn, self.refresh_btn, self.pick_btn, self.auto_btn,
@@ -145,6 +172,404 @@ class TcDocMappingPanel(QWidget):
         ])
         self._controls.extend([self.sheet_combo, self.key_combo, self.remote_limit_combo,
                                self.diff_filter])
+
+    def _build_cloud_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        card = QGroupBox("云端数据")
+        box = QVBoxLayout(card)
+        hint = QLabel("默认直接读取当前白名单子表。勾选记录后可编辑支持的字段；确认预览后逐条回写。")
+        hint.setProperty("role", "caption")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
+        bar = QHBoxLayout()
+        self.cloud_info = QLabel("连接文档并选择目标子表后加载云端数据")
+        self.cloud_info.setProperty("role", "caption")
+        bar.addWidget(self.cloud_info, 1)
+        self.cloud_search = QLineEdit()
+        self.cloud_search.setPlaceholderText("搜索云端记录")
+        self.cloud_search.setClearButtonEnabled(True)
+        self.cloud_search.setMinimumWidth(180)
+        self.cloud_search.textChanged.connect(self._cloud_search_changed)
+        bar.addWidget(self.cloud_search)
+        self.cloud_columns_btn = QPushButton("选择显示列")
+        self.cloud_columns_btn.clicked.connect(self._choose_cloud_columns)
+        bar.addWidget(self.cloud_columns_btn)
+        self.cloud_reload_btn = QPushButton("刷新云端")
+        self.cloud_reload_btn.clicked.connect(self.reload_cloud)
+        bar.addWidget(self.cloud_reload_btn)
+        box.addLayout(bar)
+        self.cloud_table = self._make_table([""])
+        self.cloud_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._cloud_sorter = table_sort.install_callback(
+            self.cloud_table, self._sort_cloud, skip_columns=(0,), tri_state=True)
+        self.cloud_table.itemChanged.connect(self._cloud_item_changed)
+        self.cloud_table.cellDoubleClicked.connect(self._edit_cloud_cell)
+        box.addWidget(self.cloud_table, 1)
+        footer = QHBoxLayout()
+        self.cloud_page_label = QLabel("第 1 / 1 页 · 共 0 条")
+        self.cloud_prev_btn = QPushButton("上一页")
+        self.cloud_next_btn = QPushButton("下一页")
+        self.cloud_prev_btn.clicked.connect(lambda: self._move_cloud(-1))
+        self.cloud_next_btn.clicked.connect(lambda: self._move_cloud(1))
+        footer.addWidget(self.cloud_page_label, 1)
+        footer.addWidget(self.cloud_prev_btn)
+        footer.addWidget(self.cloud_next_btn)
+        box.addLayout(footer)
+        actions = QHBoxLayout()
+        self.cloud_selection_label = QLabel("已选择 0 条")
+        actions.addWidget(self.cloud_selection_label)
+        clear = QPushButton("清除选择")
+        clear.clicked.connect(self._clear_cloud_selection)
+        actions.addWidget(clear)
+        actions.addStretch(1)
+        self.cloud_apply_btn = QPushButton("预览并回写")
+        self.cloud_apply_btn.setProperty("variant", "primary")
+        self.cloud_apply_btn.clicked.connect(self._preview_cloud_updates)
+        actions.addWidget(self.cloud_apply_btn)
+        box.addLayout(actions)
+        layout.addWidget(card)
+        return page
+
+    def _change_mode(self, _index: int) -> None:
+        mode = self.mode_combo.currentData()
+        if mode == "local" and self._cloud_drafts:
+            answer = QMessageBox.question(
+                self, "切换数据模式", "还有未回写的云端修改草稿。切换后清除这些草稿吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self.mode_combo.blockSignals(True)
+                self.mode_combo.setCurrentIndex(0)
+                self.mode_combo.blockSignals(False)
+                return
+            self._cloud_drafts.clear()
+            self._render_cloud_table()
+        self.mode_stack.setCurrentIndex(0 if mode == "cloud" else 1)
+        if mode == "cloud" and self.client and self.fields and not self._cloud_records:
+            self.reload_cloud()
+
+    def _cloud_search_changed(self, text: str) -> None:
+        self._cloud_query = str(text or "").strip().casefold()
+        self._cloud_page = 1
+        self._render_cloud_table()
+
+    def _cloud_filtered_records(self) -> list[dict]:
+        if not self._cloud_query:
+            return list(self._cloud_records)
+        fields = self.field_by_id
+        query = self._cloud_query
+        result = []
+        for record in self._cloud_records:
+            values = record.get("values") or {}
+            haystack = " ".join(
+                openapi.display_value(field, values.get(field.get("fieldTitle"),
+                    values.get(fid))) for fid, field in fields.items())
+            if query in (str(record.get("recordID") or "") + " " + haystack).casefold():
+                result.append(record)
+        return result
+
+    def _cloud_field_ids(self) -> list[str]:
+        valid = [str(fid) for fid, field in self.field_by_id.items()
+                 if field.get("fieldTitle")]
+        if not self._cloud_visible_fields:
+            self._cloud_visible_fields = valid[:8]
+        self._cloud_visible_fields = [fid for fid in self._cloud_visible_fields if fid in valid]
+        return self._cloud_visible_fields
+
+    def _choose_cloud_columns(self) -> None:
+        if not self.fields:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择云端显示列")
+        dialog.resize(460, 540)
+        layout = QVBoxLayout(dialog)
+        hint = QLabel("勾选需要显示的字段；双击记录单元格可暂存修改。")
+        hint.setProperty("role", "caption")
+        layout.addWidget(hint)
+        checks = []
+        visible = set(self._cloud_field_ids())
+        for fid, field in self.field_by_id.items():
+            title = str(field.get("fieldTitle") or "")
+            if not title:
+                continue
+            check = QCheckBox(f"{title} · {FIELD_TYPES.get(int(field.get('fieldType') or 0), '其他')}")
+            check.setChecked(fid in visible)
+            check.setProperty("field_id", fid)
+            checks.append(check)
+            layout.addWidget(check)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = [str(check.property("field_id")) for check in checks if check.isChecked()]
+        if not selected:
+            QMessageBox.information(self, "需要显示字段", "至少选择一个云端字段")
+            return
+        self._cloud_visible_fields = selected
+        self._render_cloud_table()
+
+    def _sort_cloud(self, *_args) -> None:
+        self._cloud_page = 1
+        self._render_cloud_table()
+
+    def _move_cloud(self, offset: int) -> None:
+        self._cloud_page += offset
+        self._render_cloud_table()
+
+    def _clear_cloud_selection(self) -> None:
+        self._cloud_selected.clear()
+        self._render_cloud_table()
+
+    def _cloud_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._rendering_cloud:
+            return
+        if item.column() == 0:
+            rid = str(item.data(Qt.UserRole + 2) or "")
+            if rid:
+                if item.checkState() == Qt.Checked:
+                    self._cloud_selected.add(rid)
+                else:
+                    self._cloud_selected.discard(rid)
+                self._update_cloud_selection()
+            return
+        rid = str(item.data(Qt.UserRole + 2) or "")
+        fid = str(item.data(Qt.UserRole + 1) or "")
+        field = self.field_by_id.get(fid)
+        if not rid or field is None:
+            return
+        original = str(item.data(Qt.UserRole) or "")
+        current = item.text()
+        draft = self._cloud_drafts.setdefault(rid, {})
+        if current == original:
+            draft.pop(fid, None)
+        else:
+            draft[fid] = current
+        if not draft:
+            self._cloud_drafts.pop(rid, None)
+        self._update_cloud_selection()
+
+    def _edit_cloud_cell(self, row: int, column: int) -> None:
+        if column <= 0 or column > len(self._cloud_field_ids()):
+            return
+        check = self.cloud_table.item(row, 0)
+        if not check or check.checkState() != Qt.Checked:
+            QMessageBox.information(self, "先选择记录", "请先勾选需要修改的云端记录")
+            return
+        rid = str(check.data(Qt.UserRole + 2) or "")
+        fid = self._cloud_field_ids()[column - 1]
+        field = self.field_by_id.get(fid)
+        if not field or int(field.get("fieldType") or 0) not in workflow.CLOUD_EDITABLE_TYPES:
+            QMessageBox.information(self, "字段只读", "该字段类型暂不支持直接编辑")
+            return
+        item = self.cloud_table.item(row, column)
+        if item is None:
+            return
+        options = field.get("_options") or []
+        extra = ""
+        if int(field.get("fieldType") or 0) in (9, 17):
+            extra = "\n可选值：" + "、".join(str(option.get("text") or "") for option in options)
+        elif int(field.get("fieldType") or 0) == 3:
+            extra = "\n输入：是 或 否"
+        value, accepted = QInputDialog.getText(
+            self, "编辑云端字段", f"{field.get('fieldTitle')} · {FIELD_TYPES.get(int(field.get('fieldType') or 0), '')}{extra}",
+            text=item.text())
+        if not accepted:
+            return
+        item.setText(value)
+
+    def _render_cloud_table(self) -> None:
+        self._rendering_cloud = True
+        self.cloud_table.blockSignals(True)
+        try:
+            if not self.fields or not self._cloud_loaded:
+                self.cloud_table.setRowCount(0)
+                self.cloud_table.setColumnCount(0)
+                self.cloud_info.setText("连接文档并选择目标子表后加载云端数据")
+                self.cloud_page_label.setText("第 1 / 1 页 · 共 0 条")
+                self.cloud_prev_btn.setEnabled(False)
+                self.cloud_next_btn.setEnabled(False)
+                self._update_cloud_selection()
+                return
+            ids = self._cloud_field_ids()
+            fields = [self.field_by_id[fid] for fid in ids]
+            titles = [str(field.get("fieldTitle") or "") for field in fields]
+            headers = ["选择"] + titles
+            self.cloud_table.setColumnCount(len(headers))
+            self.cloud_table.setHorizontalHeaderLabels(headers)
+            records = self._cloud_filtered_records()
+            if self._cloud_sorter.col >= len(headers):
+                self._cloud_sorter.col = -1
+            records = self._ordered(records, self._cloud_sorter, lambda rec, col:
+                str(rec.get("recordID") or "") if col == 0 else
+                openapi.display_value(fields[col - 1], (rec.get("values") or {}).get(
+                    fields[col - 1].get("fieldTitle"), (rec.get("values") or {}).get(
+                    str(fields[col - 1].get("fieldID"))))))
+            pages = max(1, (len(records) + self._cloud_page_size - 1) // self._cloud_page_size)
+            self._cloud_page = max(1, min(self._cloud_page, pages))
+            page_rows = records[(self._cloud_page - 1) * self._cloud_page_size:
+                                self._cloud_page * self._cloud_page_size]
+            self.cloud_table.setRowCount(len(page_rows))
+            for row_no, record in enumerate(page_rows):
+                rid = str(record.get("recordID") or "")
+                check = QTableWidgetItem()
+                check.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                check.setCheckState(Qt.Checked if rid in self._cloud_selected else Qt.Unchecked)
+                check.setData(Qt.UserRole + 2, rid)
+                self.cloud_table.setItem(row_no, 0, check)
+                values = record.get("values") or {}
+                drafts = self._cloud_drafts.get(rid, {})
+                for col_no, (fid, field) in enumerate(zip(ids, fields), 1):
+                    original = openapi.display_value(field, values.get(
+                        field.get("fieldTitle"), values.get(fid)))
+                    shown = drafts.get(fid, original)
+                    cell = QTableWidgetItem(shown)
+                    cell.setData(Qt.UserRole, original)
+                    cell.setData(Qt.UserRole + 1, fid)
+                    cell.setData(Qt.UserRole + 2, rid)
+                    cell.setToolTip(original if shown == original else f"云端：{original}\n草稿：{shown}")
+                    if int(field.get("fieldType") or 0) not in workflow.CLOUD_EDITABLE_TYPES:
+                        cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                        cell.setToolTip("此字段只读")
+                    self.cloud_table.setItem(row_no, col_no, cell)
+            table_columns.fit_table_columns(self.cloud_table)
+            self.cloud_page_label.setText(
+                f"第 {self._cloud_page} / {pages} 页 · 共 {len(records)} 条")
+            self.cloud_prev_btn.setEnabled(self._cloud_page > 1 and not self._busy)
+            self.cloud_next_btn.setEnabled(self._cloud_page < pages and not self._busy)
+            title = self.sheet_combo.currentText().split("  (")[0] if self.sheet_combo.count() else ""
+            self.cloud_info.setText(f"{title} · 云端 {len(self._cloud_records)} 条 · 显示 {len(records)} 条")
+            self._update_cloud_selection()
+        finally:
+            self.cloud_table.blockSignals(False)
+            self._rendering_cloud = False
+
+    def _update_cloud_selection(self) -> None:
+        count = len(self._cloud_selected)
+        self.cloud_selection_label.setText(f"已选择 {count} 条 · 未回写草稿 {sum(len(v) for v in self._cloud_drafts.values())} 项")
+        self.cloud_apply_btn.setText(f"预览并回写（{count} 条）")
+        self.cloud_apply_btn.setEnabled(bool(count) and bool(self._cloud_drafts) and not self._busy)
+
+    def reload_cloud(self) -> None:
+        if not (self.client and self.file_id and self.fields and self.sheet_combo.currentData()):
+            return
+        if self._cloud_drafts:
+            answer = QMessageBox.question(
+                self, "刷新云端数据", "刷新会丢弃尚未回写的编辑草稿，继续吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+        self._cloud_drafts.clear()
+        client, file_id, sheet_id = self.client, self.file_id, self.sheet_combo.currentData()
+
+        def work():
+            return client.get_records(file_id, sheet_id, lambda text: post_to_main(self.log, text))
+
+        def done(records):
+            if (self.client is not client or self.file_id != file_id
+                    or self.sheet_combo.currentData() != sheet_id):
+                return
+            self._cloud_records = records
+            self._cloud_loaded = True
+            self._cloud_selected.intersection_update(
+                str(record.get("recordID") or "") for record in records)
+            self._cloud_page = 1
+            self._render_cloud_table()
+            self.log(f"云端数据已刷新：{len(records)} 条")
+
+        self._run(work, done, "正在读取云端记录…", "读取云端数据")
+
+    def _preview_cloud_updates(self) -> None:
+        if not self._validate_cloud_ready():
+            return
+        updates = [{"record_id": rid, "values": dict(values)}
+                   for rid, values in self._cloud_drafts.items()
+                   if rid in self._cloud_selected and values]
+        try:
+            plans = workflow.prepare_cloud_updates(self.field_by_id, self._cloud_records, updates)
+        except workflow.MappingError as exc:
+            QMessageBox.warning(self, "无法预览修改", str(exc))
+            return
+        changes = [change for plan in plans for change in plan["changes"]]
+        details = []
+        for plan in plans:
+            details.append("记录 ID：" + plan["record_id"])
+            details.extend(f"{change['field']}：{change['remote'] or '（空）'} → {change['local']}"
+                           for change in plan["changes"])
+            details.append("")
+        box = QDialog(self)
+        box.setWindowTitle("确认回写云端修改")
+        box.resize(720, 520)
+        box.setMinimumSize(420, 300)
+        layout = QVBoxLayout(box)
+        label = QLabel(
+            f"《封茗囧菌数据汇总库》· {self.sheet_combo.currentText()}\n"
+            f"将修改 {len(plans)} 条记录的 {len(changes)} 个字段。")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        detail = QPlainTextEdit()
+        detail.setReadOnly(True)
+        detail.setPlainText("\n".join(details))
+        layout.addWidget(detail, 1)
+        note = QLabel("提交前会再次核对记录 ID、字段定义和原值；写后逐条读回验证。")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox()
+        buttons.addButton("取消", QDialogButtonBox.RejectRole)
+        confirm = buttons.addButton("确认回写", QDialogButtonBox.AcceptRole)
+        confirm.setProperty("variant", "primary")
+        buttons.accepted.connect(box.accept)
+        buttons.rejected.connect(box.reject)
+        layout.addWidget(buttons)
+        revision = self._revision
+        if box.exec() != QDialog.Accepted or revision != self._revision:
+            return
+        client, file_id, sheet_id = self.client, self.file_id, self.sheet_combo.currentData()
+        credentials = self._cred_snapshot
+        history_doc = dict(self.doc or {})
+        history_sheet = dict(next((item for item in self.sheets
+                                   if item.get("sheetID") == sheet_id), {}))
+
+        def work():
+            if (self._revision != revision or self._credentials() != credentials
+                    or self.client is not client or self.file_id != file_id):
+                raise workflow.MappingError("当前文档或登录状态已变化，请重新连接并刷新云端记录")
+            return workflow.execute_cloud_updates(
+                client, file_id, sheet_id, plans,
+                lambda text: post_to_main(self.log, text), self._cancel.is_set)
+
+        def done(result):
+            self._record_history(result, sheet_id, doc=history_doc, sheet=history_sheet)
+            self._cloud_drafts.clear()
+            self._cloud_selected.clear()
+            self.log(f"云端编辑完成：更新 {result.get('updated', 0)} 条并读回核对")
+            self.reload_cloud()
+
+        self._run(work, done, f"正在回写 {len(plans)} 条云端记录…", "云端回写",
+                  receipt_callback=lambda result: self._record_history(
+                      result, sheet_id, doc=history_doc, sheet=history_sheet))
+
+    def _validate_cloud_ready(self) -> bool:
+        if not (self.client and self.file_id and self.sheet_combo.currentData()):
+            QMessageBox.warning(self, "尚未连接", "请先连接当前文档并选择目标子表")
+            return False
+        try:
+            credentials = self._credentials()
+            sheet_id = self.sheet_combo.currentData()
+            openapi.validate_write_scope((self.doc or {}).get("key", ""), sheet_id)
+            self.client.validate_write_target(self.file_id, sheet_id)
+        except (RuntimeError, openapi.ApiError) as exc:
+            QMessageBox.warning(self, "连接不可用", str(exc))
+            return False
+        if credentials != self._cred_snapshot:
+            QMessageBox.warning(self, "登录已变更", "当前登录已变更，请重新连接后再修改")
+            return False
+        if not self._cloud_loaded:
+            QMessageBox.warning(self, "尚无云端数据", "请先刷新云端记录")
+            return False
+        return True
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
