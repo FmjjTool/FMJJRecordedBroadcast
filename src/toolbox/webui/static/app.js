@@ -13480,6 +13480,100 @@ function renderMusicTag(root) {
   }
 
   function renderTcdoc(root) {
+    function columnTools(table, footer, columns, records, weights, options) {
+      options = options || {};
+      var scrollable = options.allowHorizontalScroll === true;
+      var group = h('colgroup');
+      function readableWidths() {
+        var measure = document.createElement('canvas').getContext('2d');
+        var cellFont = getComputedStyle(table).font;
+        var headerFont = getComputedStyle(table.querySelector('th') || table).font;
+        return columns.map(function (column) {
+          if (column.key === 'row_no') return 48;
+          measure.font = headerFont;
+          var width = measure.measureText(column.label).width + 28;
+          measure.font = cellFont;
+          records.forEach(function (row) {
+            var text = row[column.key] == null ? '' : String(row[column.key]);
+            width = Math.max(width, measure.measureText(text.slice(0, 300)).width + 24);
+          });
+          return Math.ceil(Math.min(520, Math.max(120, width)));
+        });
+      }
+      var defaults = scrollable ? readableWidths() : columns.map(function (column) {
+        return column.key === 'row_no' ? 0.5 : 1;
+      });
+      if (weights.length !== columns.length) {
+        weights.splice.apply(weights, [0, weights.length].concat(defaults));
+      }
+      columns.forEach(function () { group.appendChild(h('col')); });
+      table.insertBefore(group, table.firstChild);
+      function apply() {
+        var total = weights.reduce(function (sum, value) { return sum + value; }, 0) || 1;
+        var fixed = scrollable ? columns.reduce(function (sum, column, i) {
+          return sum + (column.key === 'row_no' ? weights[i] : 0);
+        }, 0) : 0;
+        if (scrollable) {
+          // Preserve readable widths; extra viewport space belongs to data columns.
+          table.style.minWidth = total + 'px';
+          table.style.width = '100%';
+          table.style.tableLayout = 'fixed';
+        }
+        Array.from(group.children).forEach(function (col, i) {
+          if (!scrollable) col.style.width = (100 * weights[i] / total) + '%';
+          else if (columns[i].key === 'row_no') col.style.width = weights[i] + 'px';
+          else {
+            var share = weights[i] / (total - fixed);
+            col.style.width = 'calc(' + (100 * share) + '% - ' + (fixed * share) + 'px)';
+          }
+        });
+      }
+      function fit() {
+        if (scrollable) {
+          weights.splice.apply(weights, [0, weights.length].concat(readableWidths()));
+        } else {
+          columns.forEach(function (column, i) {
+            weights[i] = Math.min(40, Math.max(column.label.length, 4,
+              Math.max.apply(null, records.map(function (row) {
+                return String(row[column.key] == null ? '' : row[column.key]).length;
+              }))));
+          });
+        }
+        apply();
+      }
+      function reset() {
+        weights.splice.apply(weights, [0, weights.length].concat(defaults));
+        apply();
+      }
+      table.querySelector('thead').addEventListener('contextmenu', function (event) {
+        event.preventDefault();
+        var menu = h('div', { class: 'card', role: 'menu',
+          style: 'position:fixed;pointer-events:auto;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
+            + 'px;top:' + Math.max(0, Math.min(event.clientY, window.innerHeight - 80)) + 'px' },
+          h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+            onclick: function () { closeMenu(); fit(); } }, '列宽自适应'),
+          h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
+            onclick: function () { closeMenu(); reset(); } }, '重置列宽'));
+        var closing = false;
+        function closeMenu() {
+          if (closing) return;
+          closing = true;
+          menu.remove();
+        }
+        menu.addEventListener('focusout', function (focusEvent) {
+          if (!menu.contains(focusEvent.relatedTarget)) closeMenu();
+        });
+        menu.addEventListener('keydown', function (keyEvent) {
+          if (keyEvent.key === 'Escape') { keyEvent.stopPropagation(); closeMenu(); }
+        });
+        (options.menuHost || table.parentElement).appendChild(menu);
+        menu.querySelector('button').focus();
+      });
+      footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: fit }, '自适应'));
+      footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: reset }, '重置'));
+      apply();
+    }
+
     setLoading(root, '正在读取腾讯文档概览…');
     api('/api/tcdoc/overview?doc_key=' + encodeURIComponent(state.tcdoc.docKey))
       .then(function (data) {
@@ -13603,7 +13697,8 @@ function renderMusicTag(root) {
           tabHost.replaceChildren();
           if (state.tcdoc.tab === 'versions') {
             window.renderTcdocVersions(tabHost,
-              { h: h, api: api, withToken: withToken, cycleSort: cycleSort, sortRows: sortRows },
+              { h: h, api: api, withToken: withToken, cycleSort: cycleSort, sortRows: sortRows,
+                columnTools: columnTools },
               { doc_key: data.selected, onLatest: function () {
                 state.tcdoc.tab = 'sync';
                 tabs.querySelectorAll('.tab').forEach(function (button, index) {
@@ -14524,57 +14619,6 @@ function renderMusicTag(root) {
             }, label + (active ? (order.asc ? ' ↑' : ' ↓') : ''));
           }
 
-          function columnTools(table, footer, columns, records, weights) {
-            var group = h('colgroup');
-            if (weights.length !== columns.length) {
-              weights.splice.apply(weights, [0, weights.length].concat(columns.map(function (column) {
-                return column.key === 'row_no' ? 0.5 : 1;
-              })));
-            }
-            columns.forEach(function () { group.appendChild(h('col')); });
-            table.insertBefore(group, table.firstChild);
-            function apply() {
-              var total = weights.reduce(function (sum, value) { return sum + value; }, 0) || 1;
-              Array.from(group.children).forEach(function (col, i) {
-                col.style.width = (100 * weights[i] / total) + '%';
-              });
-            }
-            function fit() {
-              columns.forEach(function (column, i) {
-                weights[i] = Math.min(40, Math.max(column.label.length, 4,
-                  Math.max.apply(null, records.map(function (row) {
-                    return String(row[column.key] == null ? '' : row[column.key]).length;
-                  }))));
-              });
-              apply();
-            }
-            function reset() {
-              columns.forEach(function (column, i) { weights[i] = column.key === 'row_no' ? 0.5 : 1; });
-              apply();
-            }
-            table.querySelector('thead').addEventListener('contextmenu', function (event) {
-              event.preventDefault();
-              var menu = h('div', { class: 'card', role: 'menu',
-                style: 'position:fixed;pointer-events:auto;z-index:100;left:' + Math.max(0, Math.min(event.clientX, window.innerWidth - 220))
-                  + 'px;top:' + Math.max(0, Math.min(event.clientY, window.innerHeight - 80)) + 'px' },
-                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
-                  onclick: function () { menu.remove(); fit(); } }, '列宽自适应'),
-                h('button', { class: 'btn mini', type: 'button', role: 'menuitem',
-                  onclick: function () { menu.remove(); reset(); } }, '重置列宽'));
-              menu.addEventListener('focusout', function (focusEvent) {
-                if (!menu.contains(focusEvent.relatedTarget)) menu.remove();
-              });
-              menu.addEventListener('keydown', function (keyEvent) {
-                if (keyEvent.key === 'Escape') { keyEvent.stopPropagation(); menu.remove(); }
-              });
-              (changesOverlay && changesOverlay.contains(table) ? changesOverlay : rowsHost).appendChild(menu);
-              menu.querySelector('button').focus();
-            });
-            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: fit }, '自适应'));
-            footer.appendChild(h('button', { class: 'btn ghost mini', type: 'button', onclick: reset }, '重置'));
-            apply();
-          }
-
           function openChanges() {
             if (changesOverlay && changesOverlay.isConnected) {
               changesOverlay.querySelector('button').focus();
@@ -14658,7 +14702,7 @@ function renderMusicTag(root) {
                     var table = h('table', { class: 'db-table',
                       style: 'width:100%;min-width:0;table-layout:fixed' }, h('thead', null, head), body);
                     changeHost.replaceChildren(h('div', { class: 'table-wrap' }, table));
-                    columnTools(table, widthHost, columns, result.rows, changeWidths);
+                    columnTools(table, widthHost, columns, result.rows, changeWidths, { menuHost: overlay });
                   }
                   drawChanges();
                 }).catch(function (error) {
@@ -14737,7 +14781,8 @@ function renderMusicTag(root) {
                 var widthRows = rows.rows.map(function (row) {
                   return Object.assign({ row_no: row.row_no }, row.values || {});
                 });
-                columnTools(table, widthBar, widthColumns, widthRows, widths);
+                columnTools(table, widthBar, widthColumns, widthRows, widths,
+                  { allowHorizontalScroll: true, menuHost: rowsHost });
                 pagerHost.replaceChildren();
                 function pageButton(label, page, disabled) {
                   return h('button', { class: 'btn ghost mini', type: 'button', disabled: disabled,

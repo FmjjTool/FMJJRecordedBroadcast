@@ -6,7 +6,7 @@
     var h = helpers.h, api = helpers.api, withToken = helpers.withToken;
     var cycleSort = helpers.cycleSort, tableRequest = 0;
     var docKey = options.doc_key, request = 0, versions = [], opened = null, busy = false;
-    var page = 1, order = { order: '', asc: true };
+    var page = 1, order = { order: '', asc: true }, widths = [];
     var search = h('input', { class: 'input', type: 'search',
       placeholder: '按采集时间或版本号搜索', 'aria-label': '搜索采集版本' });
     var select = h('select', { class: 'select', style: 'flex:1;min-width:160px;max-width:100%',
@@ -98,11 +98,24 @@
         button.addEventListener('click', function () { page = item[1]; drawTable(sheet, area); });
         pager.appendChild(button);
       });
+      var table = h('table', { class: 'db-table', style: 'width:100%;min-width:0;table-layout:fixed' },
+        h('thead', null, head), body);
+      var widthBar = h('div', { class: 'toolbar', style: 'margin-top:8px;justify-content:flex-end' });
       area.replaceChildren(h('div', { class: 'small muted', style: 'margin:8px 0' },
         '只读历史 · 表头可排序 · 双击行或按 Enter 查看该行留存图片'),
-      result.total ? h('div', { class: 'table-wrap', style: 'max-height:55vh;overflow:auto' }, h('table', { class: 'db-table' },
-        h('thead', null, head), body)) : h('p', { class: 'muted small' }, '此版本的工作表没有记录，可切换其他工作表'),
-      pager, pictures);
+      result.total ? h('div', { class: 'table-wrap', style: 'max-height:55vh;overflow:auto' }, table)
+        : h('p', { class: 'muted small' }, '此版本的工作表没有记录，可切换其他工作表'),
+      widthBar, pager, pictures);
+      if (result.total) {
+        var widthColumns = [{ key: 'row_no', label: '行号' }].concat(columns.map(function (column) {
+          return { key: column, label: column };
+        }));
+        var widthRows = rows.map(function (row) {
+          return Object.assign({ row_no: row.row_no }, row.values || {});
+        });
+        helpers.columnTools(table, widthBar, widthColumns, widthRows, widths,
+          { allowHorizontalScroll: true, menuHost: area });
+      }
       }).catch(function (error) {
         if (!area.isConnected || serial !== tableRequest) return;
         var retry = h('button', { class: 'btn', type: 'button' }, '重试');
@@ -122,7 +135,8 @@
         });
         var table = h('div');
         sheetSelect.addEventListener('change', function () {
-          page = 1; order = { order: '', asc: true }; drawTable(sheets[Number(sheetSelect.value)], table);
+          page = 1; order = { order: '', asc: true }; widths = [];
+          drawTable(sheets[Number(sheetSelect.value)], table);
         });
         content.appendChild(h('div', { class: 'toolbar' }, h('span', null, '工作表'), sheetSelect));
         content.appendChild(table);
@@ -185,7 +199,7 @@
       api('/api/tcdoc/versions/open?doc_key=' + encodeURIComponent(docKey)
         + '&version_id=' + encodeURIComponent(versionId)).then(function (data) {
         if (!active(serial)) return;
-        opened = data; page = 1; order = { order: '', asc: true };
+        opened = data; page = 1; order = { order: '', asc: true }; widths = [];
         note.textContent = '当前打开：' + opened.meta.label + ' · 只读历史'
           + (opened.meta.complete ? '' : ' · 部分采集，含保留的旧内容')
           + (opened.meta.missing_images ? ' · 未留存图片 ' + opened.meta.missing_images + ' 张' : '');

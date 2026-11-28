@@ -396,7 +396,10 @@ class TcDocVersionsDialog(QDialog):
             button.setEnabled(self._page > 1)
         for button in (self.next_btn, self.last_btn):
             button.setEnabled(self._page < self._pages)
-        table_columns.configure_table_columns(self.table, fixed={0: 48}, stretch=range(1, len(names) + 1), auto_fit=True)
+        table_columns.configure_table_columns(
+            self.table, fixed={0: 48},
+            minimums={i: 120 for i in range(1, len(names) + 1)},
+            stretch=range(1, len(names) + 1), auto_fit=True, allow_horizontal_scroll=True)
 
         def render(start=0):
             if self._closed or serial != self._render:

@@ -1842,7 +1842,8 @@ class TcDocPage(BasePage):
         self.table_data.setHorizontalHeaderLabels(names)
         if columns_changed:
             table_columns.configure_table_columns(
-                self.table_data, stretch=range(len(names)), auto_fit=True)
+                self.table_data, minimums={i: 120 for i in range(len(names))},
+                stretch=range(len(names)), auto_fit=True, allow_horizontal_scroll=True)
         self.table_data.setRowCount(len(rows))
         for r, row in enumerate(rows):
             self.table_data.setVerticalHeaderItem(r, QTableWidgetItem(str(row["row_no"])))

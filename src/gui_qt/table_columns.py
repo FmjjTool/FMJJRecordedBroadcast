@@ -143,7 +143,7 @@ def _configured_widths(view, desired):
     available = max(0, view.viewport().width() - 2)
     overflow = sum(widths.values()) - available
     preferred = [i for i in policy["stretch"] if i in flexible]
-    if overflow > 0:
+    if overflow > 0 and not policy["allow_horizontal_scroll"]:
         # 先消化主文本列超出保底宽度的部分，再按其余列可收缩容量分摊。
         for columns in (preferred, [i for i in flexible if i not in preferred]):
             capacities = [max(0, widths[i] - minimums[i]) for i in columns]
@@ -229,11 +229,12 @@ class _ConfiguredColumnSizing(QObject):
 
 
 def configure_table_columns(view, *, minimums=None, fixed=None, stretch=None,
-                            auto_fit=False):
+                            auto_fit=False, allow_horizontal_scroll=False):
     """显式接入列宽策略；未调用的表格保持原行为。
 
     minimums/fixed 为「列编号: 像素宽度」，stretch 为吸收剩余空间的主文本列。
     auto_fit 随显示与窗口尺寸调整；手动调宽后暂停，点「自适应」恢复。
+    allow_horizontal_scroll 为宽表保留内容列宽，放不下时通过横向滚动查看。
     """
     if not isinstance(view, _TABLE_TYPES):
         raise TypeError("需要表格控件")
@@ -242,11 +243,14 @@ def configure_table_columns(view, *, minimums=None, fixed=None, stretch=None,
         "fixed": {int(i): max(1, int(w)) for i, w in (fixed or {}).items()},
         "stretch": list(dict.fromkeys(int(i) for i in (stretch or ()))),
         "auto_fit": bool(auto_fit),
+        "allow_horizontal_scroll": bool(allow_horizontal_scroll),
     }
     view._table_column_defaults = None
     header = _header_of(view)
-    # 保底算法已逐列约束；允许极窄窗口时弹性列进一步收缩。
-    header.setMinimumSectionSize(1)
+    # 宽表保留可读列宽；其他表格沿用极窄窗口下的收缩行为。
+    header.setMinimumSectionSize(_MIN_WIDTH if allow_horizontal_scroll else 1)
+    if allow_horizontal_scroll:
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     controller = getattr(view, "_table_column_sizing", None)
     if controller is None:
         controller = _ConfiguredColumnSizing(view)
