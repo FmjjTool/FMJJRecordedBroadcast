@@ -2257,10 +2257,8 @@ class TcDocPage(BasePage):
                 btn.setEnabled(not busy)
         if self.content_tab_index in self._panels:
             self.preview_panel.set_enabled(not busy)
-            if busy:
-                self.prev_btn.setEnabled(False)
-                self.next_btn.setEnabled(False)
-            elif refresh and self.tabs.currentIndex() == self.content_tab_index:
+            self._update_sheet_paging()
+            if not busy and refresh and self.tabs.currentIndex() == self.content_tab_index:
                 self._load_sheet_page()
         if refresh and not busy and self._page_visible:
             self._refresh_active_tab()
