@@ -3,7 +3,7 @@
 
   var state = { rows: [], page: 1, order: '', asc: true, busy: false, job: '',
     options: { path: '', recursive: true, template: '' },
-    backfill: { rows: [], preview: null, job: '' } };
+    backfill: { rows: [], preview: null, job: '', target: null, targets: [] } };
 
   function h(tag, props) {
     var node = document.createElement(tag);
@@ -24,7 +24,8 @@
     var api = helpers.api, post = helpers.post, watchJob = helpers.watchJob;
     var toast = helpers.toast, cycleSort = helpers.cycleSort, sortRows = helpers.sortRows;
     host.replaceChildren(h('div', { class: 'loading', text: '读取封面模板中…' }));
-    api('/api/cover/overview').then(function (overview) {
+    Promise.all([api('/api/cover/overview'), api('/api/cover/backfill/status')]).then(function (bundle) {
+      var overview = bundle[0], backfillStatus = bundle[1] || {};
       if (!host.isConnected) return;
       host.replaceChildren();
       var form = h('div', { class: 'card' });
@@ -60,6 +61,45 @@
         toolbar.appendChild(h('label', { class: 'small', style: 'display:flex;gap:6px;align-items:center' },
           spec.label, field));
       });
+      var targetSelect = h('select', { class: 'select', style: 'min-width:260px;max-width:360px' });
+      var targets = Array.isArray(backfillStatus.targets) ? backfillStatus.targets : [];
+      state.backfill.targets = targets;
+      if (!targets.length) {
+        targetSelect.appendChild(h('option', { value: '', text: '没有可回填的授权图片字段' }));
+        targetSelect.disabled = true;
+      } else {
+        targets.forEach(function (target) {
+          var key = String(target.doc_key || '') + '|' + String(target.tab_id || '');
+          targetSelect.appendChild(h('option', { value: key,
+            text: (target.doc_name || '腾讯文档') + ' · ' + (target.tab_name || target.tab_id)
+              + ' · 写入「' + (target.field || '图片字段') + '」' }));
+        });
+        var defaultTarget = backfillStatus.target || targets[0];
+        state.backfill.target = defaultTarget ? {
+          doc_key: defaultTarget.doc_key, tab_id: defaultTarget.tab_id,
+          tab_name: defaultTarget.tab_name, field: defaultTarget.field
+        } : null;
+        if (state.backfill.target) {
+          targetSelect.value = state.backfill.target.doc_key + '|' + state.backfill.target.tab_id;
+        }
+      }
+      targetSelect.addEventListener('change', function () {
+        var target = targets.find(function (item) {
+          return item.doc_key + '|' + item.tab_id === targetSelect.value;
+        });
+        state.backfill.target = target ? {
+          doc_key: target.doc_key, tab_id: target.tab_id,
+          tab_name: target.tab_name, field: target.field
+        } : null;
+        if (state.backfill.rows.length && state.backfill.preview && !state.busy) {
+          backfillHost.replaceChildren(h('div', { class: 'loading', text: '正在按所选表格重新匹配…' }));
+          post('/api/cover/backfill/preview', backfillPayload())
+            .then(function (next) { state.backfill.preview = next; drawBackfill(next); })
+            .catch(function (error) { backfillHost.replaceChildren(h('div', { class: 'error', text: '匹配失败：' + error.message })); });
+        }
+      });
+      toolbar.appendChild(h('label', { class: 'small', style: 'display:flex;gap:6px;align-items:center' },
+        '腾讯文档表格', targetSelect));
       var scan = h('button', { class: 'btn', type: 'button', text: '扫描预览' });
       var refresh = h('button', { class: 'btn', type: 'button', text: '刷新模板' });
       toolbar.appendChild(scan); toolbar.appendChild(refresh);
@@ -88,12 +128,22 @@
       var backfillHost = h('div'); host.appendChild(backfillHost);
       var backfillJobHost = h('div');
 
+      function backfillPayload(extra) {
+        var payload = { path: state.options.path, rows: state.backfill.rows };
+        if (state.backfill.target) {
+          payload.doc_key = state.backfill.target.doc_key;
+          payload.tab_id = state.backfill.target.tab_id;
+        }
+        return Object.assign(payload, extra || {});
+      }
+
       function selectable(row) { return row.status === 'ready' || row.status === 'invalid'; }
       function selected() { return state.rows.filter(function (row) { return selectable(row) && row._selected; }); }
       function refreshButtons() {
         start.disabled = state.busy || !selected().length || !state.options.template;
         scan.disabled = state.busy || !overview.has_work_dir;
         refresh.disabled = state.busy;
+        targetSelect.disabled = state.busy || !targets.length;
         selectAll.disabled = selectNone.disabled = state.busy || !state.rows.length;
         Object.keys(inputs).forEach(function (key) { inputs[key].disabled = state.busy; });
         summary.textContent = '共 ' + state.rows.length + ' 条 · 已选 ' + selected().length + ' 条 · 已有封面自动跳过';
@@ -104,7 +154,9 @@
         if (!data) return;
         var items = data.items || [];
         var card = h('div', { class: 'card' });
-        card.appendChild(h('div', { class: 'row-title', text: '回填腾讯文档「官方动态」封面图' }));
+        card.appendChild(h('div', { class: 'row-title', text: '回填腾讯文档「'
+          + (data.tab_name || (state.backfill.target && state.backfill.target.tab_name) || '目标表')
+          + '」·「' + (data.field || (state.backfill.target && state.backfill.target.field) || '图片字段') + '」' }));
         var counts = data.counts || {};
         card.appendChild(h('div', { class: 'muted small', style: 'margin-top:6px',
           text: '唯一匹配 ' + (counts.matched || 0) + ' 条 · 可回填 ' + (data.ready || 0)
@@ -149,15 +201,18 @@
         reload.addEventListener('click', function () {
           if (state.busy || !state.backfill.rows.length) return;
           backfillHost.replaceChildren(h('div', { class: 'loading', text: '正在重新匹配腾讯文档记录…' }));
-          post('/api/cover/backfill/preview', { path: state.options.path, rows: state.backfill.rows })
+          post('/api/cover/backfill/preview', backfillPayload())
             .then(function (next) { state.backfill.preview = next; drawBackfill(next); })
             .catch(function (error) { backfillHost.replaceChildren(h('div', { class: 'error', text: '匹配失败：' + error.message })); });
         });
         apply.addEventListener('click', function () {
           if (!readyRows.length || !(data.refresh && data.refresh.allowed)) return;
-          if (!window.confirm('将把 ' + readyRows.length + ' 条已唯一匹配的封面追加到「官方动态」的「封面图」字段，已有图片与未匹配记录会跳过。确定继续吗？')) return;
+          var target = state.backfill.target || {};
+          if (!window.confirm('将把 ' + readyRows.length + ' 条已唯一匹配的封面追加到「'
+            + (target.tab_name || data.tab_name || '目标表') + '」的「'
+            + (target.field || data.field || '图片字段') + '」字段，已有图片与未匹配记录会跳过。确定继续吗？')) return;
           state.busy = true; refreshButtons(); apply.disabled = true;
-          post('/api/cover/backfill/apply', { path: state.options.path, rows: state.backfill.rows, confirmed: true })
+          post('/api/cover/backfill/apply', backfillPayload({ confirmed: true }))
             .then(function (result) {
               state.backfill.job = result.job;
               watchJob(backfillJobHost, result.job, function (job) {
@@ -272,8 +327,8 @@
           if (generatedRows.length) {
             state.backfill.rows = generatedRows;
             state.backfill.preview = null;
-            backfillHost.replaceChildren(h('div', { class: 'loading', text: '封面已生成，正在匹配腾讯文档官方动态…' }));
-            post('/api/cover/backfill/preview', { path: state.options.path, rows: generatedRows })
+            backfillHost.replaceChildren(h('div', { class: 'loading', text: '封面已生成，正在匹配所选腾讯文档表格…' }));
+            post('/api/cover/backfill/preview', backfillPayload())
               .then(function (data) { state.backfill.preview = data; drawBackfill(data); })
               .catch(function (error) { backfillHost.replaceChildren(h('div', { class: 'error',
                 text: '腾讯文档匹配失败：' + error.message + '。封面已生成，可稍后重新匹配。' })); });

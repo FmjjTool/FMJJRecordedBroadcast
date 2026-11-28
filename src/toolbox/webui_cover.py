@@ -155,7 +155,7 @@ def generate(plan: tuple[Path, list[dict], dict], *, on_progress, is_cancelled) 
 
 
 def backfill_status() -> dict:
-    """返回腾讯文档官方动态封面回填的门禁与目标信息。"""
+    """返回腾讯文档图片回填门禁与可选目标表。"""
     return cover_backfill.status()
 
 
@@ -172,13 +172,33 @@ def _backfill_rows(payload: dict | None) -> tuple[Path, list[dict]]:
     return root, rows
 
 
+def _backfill_target(payload: dict | None) -> tuple[str, str]:
+    if not isinstance(payload, dict):
+        raise ValueError("封面回填参数格式不正确，请重新生成封面")
+    target = payload.get("target")
+    if isinstance(target, dict):
+        doc_key, tab_id = target.get("doc_key"), target.get("tab_id")
+    else:
+        doc_key, tab_id = payload.get("doc_key"), payload.get("tab_id")
+    if not doc_key or not tab_id:
+        default = cover_backfill.status().get("target") or {}
+        doc_key, tab_id = default.get("doc_key"), default.get("tab_id")
+    if not doc_key or not tab_id:
+        raise ValueError("没有可用于图片回填的腾讯文档表格，请先同步表格清单")
+    cover_backfill._target_spec(str(doc_key), str(tab_id))
+    return str(doc_key), str(tab_id)
+
+
 def preview_backfill(payload: dict | None = None) -> dict:
     root, rows = _backfill_rows(payload)
-    return cover_backfill.preview(root, rows)
+    doc_key, tab_id = _backfill_target(payload)
+    return cover_backfill.preview(root, rows, doc_key=doc_key, tab_id=tab_id)
 
 
 def apply_backfill(payload: dict | None = None) -> dict:
     if not isinstance(payload, dict) or payload.get("confirmed") is not True:
         raise ValueError("请先确认要回填的腾讯文档记录")
     root, rows = _backfill_rows(payload)
-    return cover_backfill.apply(root, rows, confirmed=True)
+    doc_key, tab_id = _backfill_target(payload)
+    return cover_backfill.apply(root, rows, doc_key=doc_key, tab_id=tab_id,
+                                confirmed=True)

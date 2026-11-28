@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QComboBox,
     QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
@@ -49,12 +50,15 @@ class CoverAutomationDialog(QDialog):
         self._cancel = Event()
         self._fill_position = 0
         self._page_rows: list[dict] = []
+        self._backfill_targets: list[dict] = []
+        self._backfill_target_loading = False
         self._centered = False
         self._fill_timer = QTimer(self)
         self._fill_timer.setInterval(0)
         self._fill_timer.timeout.connect(self._fill_next_rows)
         self._build_ui()
         self._refresh_controls()
+        self._load_backfill_targets()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -97,6 +101,23 @@ class CoverAutomationDialog(QDialog):
         self.scan_button.clicked.connect(self._scan)
         options.addWidget(self.scan_button)
         root.addLayout(options)
+
+        target_bar = QFrame(self)
+        target_bar.setProperty("variant", "toolbar")
+        target_layout = QHBoxLayout(target_bar)
+        target_layout.setContentsMargins(12, 8, 12, 8)
+        target_layout.setSpacing(8)
+        target_layout.addWidget(QLabel("腾讯文档表格", target_bar))
+        self.target_combo = QComboBox(target_bar)
+        self.target_combo.setMinimumWidth(260)
+        self.target_combo.setPlaceholderText("读取可回填的表格…")
+        self.target_combo.currentIndexChanged.connect(self._on_backfill_target_changed)
+        target_layout.addWidget(self.target_combo, 1)
+        self.target_refresh_button = QPushButton("刷新表格", target_bar)
+        self.target_refresh_button.setProperty("variant", "secondary")
+        self.target_refresh_button.clicked.connect(self._load_backfill_targets)
+        target_layout.addWidget(self.target_refresh_button)
+        root.addWidget(target_bar)
 
         card = QFrame(self)
         card.setProperty("variant", "card")
@@ -209,6 +230,59 @@ class CoverAutomationDialog(QDialog):
         self.status_label.setText("尚未扫描，已有封面将自动跳过")
         self.progress.hide()
         self._refresh_controls()
+
+    def _load_backfill_targets(self):
+        if self._backfill_target_loading or self._busy:
+            return
+        from toolbox.tcdoc import cover_backfill
+
+        self._backfill_target_loading = True
+        self.target_combo.setEnabled(False)
+        self.target_refresh_button.setEnabled(False)
+        self.target_combo.clear()
+        self.target_combo.addItem("读取可回填的腾讯文档表格…")
+
+        def done(result, error):
+            self._backfill_target_loading = False
+            self.target_refresh_button.setEnabled(not bool(self._busy))
+            self.target_combo.clear()
+            if error:
+                self.target_combo.addItem("读取失败，请点击刷新表格重试")
+                self.target_combo.setEnabled(False)
+                self.target_combo.setToolTip(str(error))
+                self.status_label.setText("腾讯文档表格读取失败：请刷新表格重试；仍可先生成本地封面")
+                self._refresh_controls()
+                return
+            self._backfill_targets = [dict(item) for item in (result or [])]
+            for target in self._backfill_targets:
+                label = (f"{target.get('doc_name') or '腾讯文档'} · "
+                         f"{target.get('tab_name') or target.get('tab_id')} · "
+                         f"写入「{target.get('field') or '图片字段'}」")
+                self.target_combo.addItem(label, target)
+            if self._backfill_targets:
+                self.target_combo.setCurrentIndex(0)
+                self.target_combo.setEnabled(not bool(self._busy))
+                self.target_combo.setToolTip("选择封面生成后要追加图片的腾讯文档表格")
+            else:
+                self.target_combo.addItem("没有可回填的授权图片字段")
+                self.target_combo.setEnabled(False)
+                self.target_combo.setToolTip("仅显示已同步且具备授权图片字段的表格")
+                self.status_label.setText("没有可回填的腾讯文档表格；可先生成本地封面，稍后刷新表格")
+            self._refresh_controls()
+
+        run_bg(cover_backfill.list_targets, done, owner=self.parentWidget())
+
+    def _on_backfill_target_changed(self, *_args):
+        target = self.target_combo.currentData()
+        if isinstance(target, dict):
+            self.status_label.setText(
+                f"封面生成后将匹配「{target.get('tab_name') or target.get('tab_id')}」"
+                f"并追加「{target.get('field') or '图片字段'}」")
+        self._refresh_controls()
+
+    def _selected_backfill_target(self) -> dict | None:
+        target = self.target_combo.currentData()
+        return dict(target) if isinstance(target, dict) else None
 
     def _scan(self):
         if self._busy or self._root is None:
@@ -402,6 +476,9 @@ class CoverAutomationDialog(QDialog):
                                      if self._template.get("bg") else "请先在封面制作页选择底图，再重新打开此窗口")
         self.cancel_button.setVisible(self._busy in {"scan", "generate"})
         self.cancel_button.setEnabled(not self._cancel.is_set())
+        self.target_combo.setEnabled(bool(self._backfill_targets) and
+                                     not busy and not self._backfill_target_loading)
+        self.target_refresh_button.setEnabled(not busy and not self._backfill_target_loading)
         self.close_button.setToolTip("关闭窗口后任务继续在后台执行" if busy else "关闭窗口")
 
     def _start(self):
@@ -468,10 +545,12 @@ class CoverAutomationDialog(QDialog):
         generated = [{"video": row["video"], "title": row.get("title", ""),
                       "date": row.get("date", ""), "cover": row.get("cover", "")}
                      for row in self._rows if row.get("status") == "generated"]
-        if generated and not result.get("cancelled"):
+        if generated and not result.get("cancelled") and self._selected_backfill_target():
             self._start_backfill_preview(generated)
         else:
             self._busy = ""
+            if generated and not result.get("cancelled"):
+                self.status_label.setText("封面已生成；未选择可回填的腾讯文档表格")
             self._refresh_controls()
 
     def _start_backfill_preview(self, rows):
@@ -480,13 +559,23 @@ class CoverAutomationDialog(QDialog):
         if self._root is None:
             self._busy = ""
             return
+        target = self._selected_backfill_target()
+        if not target:
+            self._busy = ""
+            self.status_label.setText("封面已生成；未选择可回填的腾讯文档表格")
+            self._refresh_controls()
+            return
         self._busy = "backfill_preview"
         self.progress.setRange(0, 0)
         self.progress.show()
-        self.status_label.setText("封面已生成，正在匹配腾讯文档「官方动态」…")
+        self.status_label.setText(
+            f"封面已生成，正在匹配腾讯文档「{target.get('tab_name') or target.get('tab_id')}」…")
         self._refresh_controls()
         root = self._root
-        run_bg(lambda: cover_backfill.preview(root, rows), self._backfill_preview_done,
+        run_bg(lambda: cover_backfill.preview(root, rows,
+                                              doc_key=target["doc_key"],
+                                              tab_id=target["tab_id"]),
+               self._backfill_preview_done,
                owner=self.parentWidget())
 
     def _backfill_preview_done(self, result, error):
@@ -514,7 +603,7 @@ class CoverAutomationDialog(QDialog):
         confirm.setIcon(QMessageBox.Icon.Question)
         confirm.setText(f"已生成 {len(data.get('items') or [])} 张封面，其中 {ready} 条可唯一匹配腾讯文档。")
         confirm.setInformativeText(
-            f"将追加到《封茗囧菌数据汇总库》→「官方动态」→「封面图」，保留已有图片；"
+            f"将追加到《封茗囧菌数据汇总库》→「{data.get('tab_name') or '目标表'}」→「{data.get('field') or '图片字段'}」，保留已有图片；"
             f"未匹配 {counts.get('unmatched', 0)} 条、多条匹配 {counts.get('ambiguous', 0)} 条将跳过。"
             "写入前仍需通过同步前刷新门禁。")
         cancel = confirm.addButton("仅保留本地封面", QMessageBox.ButtonRole.RejectRole)
@@ -527,9 +616,9 @@ class CoverAutomationDialog(QDialog):
             self.status_label.setText("封面已生成，未回填腾讯文档")
             self._refresh_controls()
             return
-        self._start_backfill_apply(data.get("items") or [])
+        self._start_backfill_apply(data.get("items") or [], data)
 
-    def _start_backfill_apply(self, rows):
+    def _start_backfill_apply(self, rows, target_data=None):
         from toolbox.tcdoc import cover_backfill
 
         if self._root is None:
@@ -544,7 +633,10 @@ class CoverAutomationDialog(QDialog):
         selected = [{"video": row.get("video"), "title": row.get("title"),
                      "date": row.get("date"), "cover": row.get("cover")}
                     for row in rows if row.get("status") == "matched" and not row.get("duplicate")]
-        run_bg(lambda: cover_backfill.apply(root, selected, confirmed=True),
+        data = target_data or {}
+        run_bg(lambda: cover_backfill.apply(
+            root, selected, doc_key=data.get("doc_key") or cover_backfill.DOC_KEY,
+            tab_id=data.get("tab_id") or cover_backfill.TAB_ID, confirmed=True),
                self._backfill_apply_done, owner=self.parentWidget())
 
     def _backfill_apply_done(self, result, error):

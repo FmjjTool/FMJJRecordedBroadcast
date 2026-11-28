@@ -1,7 +1,8 @@
 """批量补封面完成后的腾讯文档回填用例（Qt-free）。
 
-只允许向《封茗囧菌数据汇总库》的「官方动态」既有记录追加「封面图」图片，
-不新增、不删除、不覆盖已有图片或其它字段。桌面端与 WebUI 共用本模块。
+目标表由上层选择，但当前授权只允许《封茗囧菌数据汇总库》的「官方动态」
+（ss_h2uh2s）「封面图」字段。只追加图片，不新增、不删除、不覆盖已有图片
+或其它字段。桌面端与 WebUI 共用本模块。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from toolbox import sync_refresh
+from toolbox.tcdoc import bridge
 from toolbox.tcdoc import field_maps
 from toolbox.tcdoc import import_pending as pending
 from toolbox.tcdoc.import_local import (
@@ -27,6 +29,14 @@ DOC_NAME = "封茗囧菌数据汇总库"
 TAB_NAME = "官方动态"
 FIELD_NAME = "封面图"
 MAX_ITEMS = 1000
+
+# 图片追加字段与匹配字段集中定义，页面不复制目标表规则。
+TARGET_SPECS = {
+    (DOC_KEY, TAB_ID): {
+        "profile": "posts", "tab_name": "官方动态", "field": "封面图",
+        "title": "作品标题", "date": "发布时间",
+    },
+}
 
 
 def _normalize_title(value: object) -> str:
@@ -59,8 +69,21 @@ def _day(value: object) -> str:
         return ""
 
 
-def _field(fields: list[dict], semantic: str) -> dict:
-    title = field_maps.target(DOC_KEY, TAB_ID, semantic)
+def _target_spec(doc_key: str, tab_id: str) -> dict:
+    key = (str(doc_key or "").strip(), str(tab_id or "").strip())
+    from toolbox.tcdoc.import_local import validate_target
+    try:
+        validate_target(*key)
+    except ImportErrorDetail:
+        raise
+    spec = TARGET_SPECS.get(key)
+    if spec is None:
+        raise ImportErrorDetail("该表未授权批量补封面；请选择《封茗囧菌数据汇总库》的官方动态")
+    return {"doc_key": key[0], "tab_id": key[1], **spec}
+
+
+def _field(fields: list[dict], semantic: str, doc_key: str, tab_id: str) -> dict:
+    title = field_maps.target(doc_key, tab_id, semantic)
     if not title:
         raise ImportErrorDetail(f"字段已按映射配置为不写：{semantic}")
     hits = [item for item in fields if str(item.get("fieldTitle") or "") == title]
@@ -114,14 +137,14 @@ def _rows(rows: list[dict], root: Path) -> list[dict]:
     return result
 
 
-def _client_from_cookie() -> LocalImportClient:
+def _client_from_cookie(doc_key: str, tab_id: str) -> LocalImportClient:
     import auth as auth_module
 
     cookie = auth_module.get_cookie("tcdoc_openapi") or ""
     if not cookie:
         raise ValueError("尚未登录腾讯文档，请先在桌面端完成登录后重试")
     try:
-        client = LocalImportClient(ManagedAuth(lambda: cookie), DOC_KEY, TAB_ID)
+        client = LocalImportClient(ManagedAuth(lambda: cookie), doc_key, tab_id)
         client.connect()
         return client
     except ImportErrorDetail as exc:
@@ -172,52 +195,94 @@ def _match(rows: list[dict], cloud: list[dict], field_title: str,
     return out
 
 
+def list_targets() -> list[dict]:
+    """返回当前本地快照中可用于图片追加的授权目标表。"""
+    result = []
+    try:
+        candidates = bridge.list_targets()
+    except Exception:
+        candidates = []
+    for target in candidates:
+        try:
+            spec = _target_spec(target.get("doc_key"), target.get("tab_id"))
+        except ImportErrorDetail:
+            continue
+        names = {str(col.get("name") or col.get("fieldTitle") or "")
+                 for col in target.get("columns") or []}
+        image_name = field_maps.target(spec["doc_key"], spec["tab_id"], spec["field"])
+        title_name = field_maps.target(spec["doc_key"], spec["tab_id"], spec["title"])
+        date_name = field_maps.target(spec["doc_key"], spec["tab_id"], spec["date"])
+        if not image_name or not title_name or not date_name:
+            continue
+        if names and not {image_name, title_name, date_name}.issubset(names):
+            continue
+        result.append({"doc_key": spec["doc_key"], "tab_id": spec["tab_id"],
+                       "doc_name": target.get("doc_name") or DOC_NAME,
+                       "tab_name": target.get("tab_name") or spec["tab_name"],
+                       "n_rows": target.get("n_rows") or 0,
+                       "field": image_name, "title_field": title_name,
+                       "date_field": date_name, "profile": spec["profile"]})
+    return result
+
+
 def status() -> dict:
     allowed, message = sync_refresh.upload_allowed()
+    targets = list_targets()
+    default = next((item for item in targets
+                    if (item["doc_key"], item["tab_id"]) == (DOC_KEY, TAB_ID)),
+                   targets[0] if targets else None)
     return {"doc_name": DOC_NAME, "tab_name": TAB_NAME, "doc_key": DOC_KEY,
             "tab_id": TAB_ID, "field": FIELD_NAME, "max_items": MAX_ITEMS,
+            "targets": targets, "target": default,
             "refresh": {"allowed": bool(allowed), "message": str(message)},
             "bypass": bool(sync_refresh.bypass_enabled())}
 
 
-def preview(root: Path, rows: list[dict], *, client_factory: Callable[[], LocalImportClient] | None = None) -> dict:
+def preview(root: Path, rows: list[dict], *, doc_key: str = DOC_KEY,
+            tab_id: str = TAB_ID,
+            client_factory: Callable[[], LocalImportClient] | None = None) -> dict:
+    spec = _target_spec(doc_key, tab_id)
     root = _validate_root(root)
     local = _rows(rows, root)
-    client = client_factory() if client_factory else _client_from_cookie()
+    client = client_factory() if client_factory else _client_from_cookie(spec["doc_key"], spec["tab_id"])
     fields = client.get_fields()
-    field = _field(fields, FIELD_NAME)
-    title_field = _field(fields, "作品标题")
-    date_field = _field(fields, "发布时间")
+    field = _field(fields, spec["field"], spec["doc_key"], spec["tab_id"])
+    title_field = _field(fields, spec["title"], spec["doc_key"], spec["tab_id"])
+    date_field = _field(fields, spec["date"], spec["doc_key"], spec["tab_id"])
     if int(field.get("fieldType") or 0) != 5:
-        raise ValueError("腾讯文档「封面图」字段不是图片类型，已停止回填")
+        raise ValueError(f"腾讯文档「{field.get('fieldTitle') or spec['field']}」字段不是图片类型，已停止回填")
     cloud = client.get_records()
     items = _match(local, cloud, str(field.get("fieldTitle")),
                    str(title_field.get("fieldTitle")), str(date_field.get("fieldTitle")))
     counts = {key: sum(item.get("status") == key for item in items)
               for key in ("matched", "skipped", "ambiguous", "unmatched", "blocked")}
-    return {"doc_name": DOC_NAME, "tab_name": TAB_NAME, "doc_key": DOC_KEY,
-            "tab_id": TAB_ID, "field": str(field.get("fieldTitle")), "items": items,
+    return {"doc_name": DOC_NAME, "tab_name": spec["tab_name"], "doc_key": spec["doc_key"],
+            "tab_id": spec["tab_id"], "field": str(field.get("fieldTitle")),
+            "title_field": str(title_field.get("fieldTitle")),
+            "date_field": str(date_field.get("fieldTitle")), "items": items,
             "counts": counts, "refresh": status()["refresh"],
             "ready": counts["matched"] - counts["skipped"]}
 
 
-def apply(root: Path, rows: list[dict], *, confirmed: bool = False,
+def apply(root: Path, rows: list[dict], *, doc_key: str = DOC_KEY,
+          tab_id: str = TAB_ID, confirmed: bool = False,
           client_factory: Callable[[], LocalImportClient] | None = None) -> dict:
     if not confirmed:
         raise ValueError("请先确认腾讯文档回填范围")
+    spec = _target_spec(doc_key, tab_id)
     allowed, message = sync_refresh.upload_allowed()
     if not allowed:
         raise ValueError(f"当前数据未刷新，暂不允许回填腾讯文档：{message}。请先「同步前刷新」")
     root = _validate_root(root)
     local = _rows(rows, root)
-    client = client_factory() if client_factory else _client_from_cookie()
+    client = client_factory() if client_factory else _client_from_cookie(spec["doc_key"], spec["tab_id"])
     fields = client.get_fields()
-    field = _field(fields, FIELD_NAME)
-    title_field = _field(fields, "作品标题")
-    date_field = _field(fields, "发布时间")
+    field = _field(fields, spec["field"], spec["doc_key"], spec["tab_id"])
+    title_field = _field(fields, spec["title"], spec["doc_key"], spec["tab_id"])
+    date_field = _field(fields, spec["date"], spec["doc_key"], spec["tab_id"])
     field_title = str(field.get("fieldTitle"))
     if int(field.get("fieldType") or 0) != 5:
-        raise ValueError("腾讯文档「封面图」字段不是图片类型，已停止回填")
+        raise ValueError(f"腾讯文档「{field.get('fieldTitle') or spec['field']}」字段不是图片类型，已停止回填")
     with pending._write_lock():
         cloud = client.get_records()
         items = _match(local, cloud, field_title,
@@ -254,8 +319,8 @@ def apply(root: Path, rows: list[dict], *, confirmed: bool = False,
                 errors.append(item)
         if updated:
             sync_refresh.invalidate("批量补封面回填完成，需重新刷新后再写")
-    return {"doc_name": DOC_NAME, "tab_name": TAB_NAME, "doc_key": DOC_KEY,
-            "tab_id": TAB_ID, "field": field_title, "updated": len(updated),
+    return {"doc_name": DOC_NAME, "tab_name": spec["tab_name"], "doc_key": spec["doc_key"],
+            "tab_id": spec["tab_id"], "field": field_title, "updated": len(updated),
             "skipped": len(skipped), "failed": len(errors),
             "record_ids": [item["record_id"] for item in updated],
             "items": items,
