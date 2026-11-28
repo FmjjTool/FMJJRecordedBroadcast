@@ -28,12 +28,13 @@ _FIELDS = frozenset(("__biz", "biz", "key", "uin", "pass_ticket", "appmsg_token"
 _DIAGNOSTIC_STAGES = frozenset((
     "proxy_connections", "connect_requests", "wechat_connects",
     "upstream_tls", "client_tls", "http_requests",
+    "observer_disabled",
 ))
 _ARTICLE_PATH = re.compile(r"/s(?:/[A-Za-z0-9_-]+)?\Z")
 _READING_PATHS = frozenset((
     "/mp/getappmsgext", "/mp/profile_ext", "/mp/getappmsgad",
     "/mp/getappmsgcomment", "/mp/getmasssendmsg", "/mp/appmsgalbum",
-    "/mp/getappmsgalbum",
+    "/mp/getappmsgalbum", "/mp/appmsg_comment", "/mp/appmsg_like",
 ))
 _DNS_NAME = re.compile(
     r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
@@ -142,21 +143,34 @@ def extract_reading_request(target: str, headers: Mapping[str, str],
 class _RequestObserver:
     """Bounded HTTP/1 observer; malformed framing disables observation only."""
 
-    def __init__(self, callback: Callable[[str], None], on_request=None):
+    def __init__(self, callback: Callable[[str], None], on_request=None,
+                 on_disabled=None):
         self._callback = callback
         self._on_request = on_request
+        self._on_disabled = on_disabled
         self._buffer = bytearray()
         self._disabled = False
         self._remaining = 0
         self._form = False
+        self._chunked = False
+        self._chunk_size = None
+        self._body = bytearray()
         self._target = ""
         self._headers = {}
 
     def _disable(self):
+        if self._disabled:
+            return
         self._disabled = True
         self._buffer.clear()
+        self._body.clear()
         self._target = ""
         self._headers.clear()
+        if self._on_disabled is not None:
+            try:
+                self._on_disabled()
+            except Exception:
+                pass
 
     def _emit(self, body=b""):
         result = extract_reading_request(self._target, self._headers, body)
@@ -167,6 +181,9 @@ class _RequestObserver:
                 pass
         self._target = ""
         self._headers = {}
+        self._body.clear()
+        self._chunked = False
+        self._chunk_size = None
 
     def _header(self, block: bytes) -> bool:
         lines = block.split(b"\r\n")
@@ -190,12 +207,22 @@ class _RequestObserver:
                     framing[name] = value.strip()
                     if name in (b"host", b"referer", b"content-type"):
                         selected[name.decode("ascii")] = value.strip().decode("ascii")
-            if b"transfer-encoding" in framing or b"upgrade" in framing:
+            if b"upgrade" in framing:
                 return False
+            transfer_encoding = framing.get(b"transfer-encoding", b"").strip().lower()
             length = framing.get(b"content-length", b"0")
-            if not re.fullmatch(rb"[0-9]{1,18}", length):
-                return False
-            self._remaining = int(length)
+            if transfer_encoding:
+                # The bounded observer only accepts a single chunked coding and
+                # never forwards or interprets arbitrary transfer codings.
+                if transfer_encoding != b"chunked" or b"content-length" in framing:
+                    return False
+                self._remaining = 0
+                self._chunked = True
+            else:
+                if not re.fullmatch(rb"[0-9]{1,18}", length):
+                    return False
+                self._remaining = int(length)
+                self._chunked = False
             self._form = selected.get("content-type", "").split(";", 1)[0].strip().lower() == "application/x-www-form-urlencoded"
             self._target = target if method in ("GET", "POST") and selected.get("host", "").lower() in (_HOST, _HOST + ":443") else ""
             self._headers = selected
@@ -207,7 +234,9 @@ class _RequestObserver:
             if self._form and self._remaining > _FORM_LIMIT:
                 self._target = ""
                 self._form = False
-            if not self._form or not self._remaining:
+            if self._chunked and not self._form:
+                return False
+            if not self._chunked and (not self._form or not self._remaining):
                 self._emit()
             return True
         except (ValueError, UnicodeError):
@@ -221,6 +250,51 @@ class _RequestObserver:
             return
         self._buffer.extend(data)
         while self._buffer and not self._disabled:
+            if self._chunked:
+                if self._chunk_size is None:
+                    boundary = self._buffer.find(b"\r\n")
+                    if boundary < 0:
+                        if len(self._buffer) > 64:
+                            self._disable()
+                        return
+                    if boundary == 0 or boundary > 16:
+                        self._disable()
+                        return
+                    line = bytes(self._buffer[:boundary]).split(b";", 1)[0]
+                    if not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", line):
+                        self._disable()
+                        return
+                    self._chunk_size = int(line, 16)
+                    del self._buffer[:boundary + 2]
+                    if self._chunk_size == 0:
+                        # Accept the common empty trailer section. A non-empty
+                        # trailer is deliberately left unsupported and bounded.
+                        if len(self._buffer) < 2:
+                            return
+                        if self._buffer[:2] != b"\r\n":
+                            self._disable()
+                            return
+                        del self._buffer[:2]
+                        self._chunked = False
+                        self._chunk_size = None
+                        self._emit(bytes(self._body))
+                        continue
+                needed = self._chunk_size + 2
+                if len(self._buffer) < needed:
+                    if len(self._body) + len(self._buffer) > _FORM_LIMIT + 2:
+                        self._disable()
+                    return
+                chunk = bytes(self._buffer[:self._chunk_size])
+                if self._buffer[self._chunk_size:needed] != b"\r\n":
+                    self._disable()
+                    return
+                self._body.extend(chunk)
+                if len(self._body) > _FORM_LIMIT:
+                    self._disable()
+                    return
+                del self._buffer[:needed]
+                self._chunk_size = None
+                continue
             if self._remaining:
                 if self._form:
                     if len(self._buffer) < self._remaining:
@@ -395,7 +469,9 @@ class _CaptureHandler(socketserver.BaseRequestHandler):
                 if client.selected_alpn_protocol() not in (None, "http/1.1"):
                     return
                 observer = _RequestObserver(
-                    owner._on_capture, lambda: owner._record_stage("http_requests"))
+                    owner._on_capture,
+                    lambda: owner._record_stage("http_requests"),
+                    lambda: owner._record_stage("observer_disabled"))
             self._relay(owner, client, upstream, observer)
         except Exception:
             pass
