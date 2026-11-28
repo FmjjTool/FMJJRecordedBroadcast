@@ -23,7 +23,7 @@ _MAX_TIMEOUT = 120
 _DIAGNOSTIC_FIELDS = (
     "proxy_connections", "connect_requests", "wechat_connects",
     "upstream_tls", "client_tls", "http_requests",
-    "valid_candidates",
+    "observer_disabled", "valid_candidates",
 )
 _MAX_DIAGNOSTIC_COUNT = 1_000_000
 _SAFE_CODES = frozenset({

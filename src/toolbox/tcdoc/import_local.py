@@ -41,6 +41,8 @@ SONG_TABS = frozenset({"ss_ktwk0t"})
 CANDIDATE_TABS = frozenset({"ss_e1kkm2", "ss_ekd4cz"})
 # 2026-11-24 用户授权：线下活动已存在行只允许追加「宣传图」图片，不改其他字段。
 IMAGE_APPEND_TABS = frozenset({"ss_e1kkm2"})
+# 2026-11-28 用户授权：批量补封面仅向官方动态既有行追加「封面图」。
+OFFICIAL_COVER_APPEND_TAB = "ss_h2uh2s"
 # 2026-11-26 用户授权：线下活动「活动歌单_*」三列只允许写入歌单链接，不改其他列。
 PLAYLIST_LINK_TAB = "ss_e1kkm2"
 PLAYLIST_LINK_COLUMNS = frozenset({"活动歌单_网易云", "活动歌单_酷狗", "活动歌单_QQ"})
@@ -326,11 +328,17 @@ class LocalImportClient:
 
     def update_image_field(self, record_id: str, field_title: str,
                            entries: list[dict]) -> None:
-        """线下活动「宣传图」追加：只更新指定行的单个图片字段。"""
-        if self.doc_key != OFFICIAL_DOC or self.tab_id not in IMAGE_APPEND_TABS:
-            raise ImportErrorDetail("图片追加仅授权线下活动表")
-        if field_title != "宣传图":
-            raise ImportErrorDetail("图片追加仅授权「宣传图」列")
+        """按已授权范围追加单个图片字段，不覆盖已有图片。"""
+        from toolbox.tcdoc import field_maps
+        official_cover_title = field_maps.target(self.doc_key, self.tab_id, "封面图")
+        official_cover = (self.doc_key == OFFICIAL_DOC
+                          and self.tab_id == OFFICIAL_COVER_APPEND_TAB
+                          and field_title == official_cover_title)
+        event_promo = (self.doc_key == OFFICIAL_DOC
+                       and self.tab_id in IMAGE_APPEND_TABS
+                       and field_title == "宣传图")
+        if not (official_cover or event_promo):
+            raise ImportErrorDetail("图片追加仅授权官方动态「封面图」或线下活动「宣传图」")
         if not str(record_id or "").strip():
             raise ImportErrorDetail("追加图片缺少目标行 recordID")
         if not entries or not all(

@@ -2138,7 +2138,7 @@ class _TcdocOpenApiDialog(QDialog):
 _WECHAT_DIAGNOSTIC_FIELDS = (
     "proxy_connections", "connect_requests", "wechat_connects",
     "upstream_tls", "client_tls", "http_requests",
-    "valid_candidates",
+    "observer_disabled", "valid_candidates",
 )
 
 
@@ -2149,10 +2149,12 @@ def _wechat_detection_diagnostic_text(values):
     upstream_tls = values["upstream_tls"]
     client_tls = values["client_tls"]
     requests = values["http_requests"]
+    observer_disabled = values["observer_disabled"]
     candidates = values["valid_candidates"]
     counts = (
         f"观察计数：本机连接 {proxy} · HTTPS 建连 {connects} · 公众号站点 {wechat} · "
-        f"站点/微信握手 {upstream_tls}/{client_tls} · 文章请求 {requests} · 可用请求 {candidates}"
+        f"站点/微信握手 {upstream_tls}/{client_tls} · 文章请求 {requests} · "
+        f"解析器停用 {observer_disabled} · 可用请求 {candidates}"
     )
     if candidates:
         hint = "已识别到可用请求，正在完成系统设置还原。"
@@ -2165,6 +2167,9 @@ def _wechat_detection_diagnostic_text(values):
         hint = "公众号站点连接已到达，但站点安全握手尚未完成。"
     elif client_tls == 0:
         hint = "站点握手已完成，但微信客户端握手未完成，客户端可能未接受本次临时证书。"
+    elif observer_disabled:
+        hint = ("已收到公众号连接，但请求格式超出当前安全解析范围；请重开文章，"
+                "并保留此窗口以便继续观察。")
     elif requests == 0:
         hint = "安全连接已建立，尚未观察到文章请求；请关闭文章后重新打开，避免读取缓存。"
     else:
@@ -2339,7 +2344,8 @@ class _WechatReadingDetectionDialog(QDialog):
         elif self._close_requested and busy:
             message += "\n还原完成后会自动关闭。"
         self.feedback.setText(message)
-        show_diagnostics = busy and status["state"] == "detecting"
+        show_diagnostics = (self._watching_run and status["state"] != "idle"
+                            and not recovery_required)
         self.diagnostics_label.setVisible(show_diagnostics)
         if show_diagnostics:
             self.diagnostics_label.setText(
