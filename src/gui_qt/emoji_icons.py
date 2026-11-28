@@ -19,15 +19,17 @@ from __future__ import annotations
 import html as html_lib
 import re
 import weakref
+from html.parser import HTMLParser
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QCheckBox, QComboBox, QGroupBox, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton,
-    QRadioButton, QStatusBar, QTableWidget, QTableWidgetItem, QTabWidget,
-    QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem,
-    QTreeWidgetItemIterator, QWidget,
+    QProgressDialog, QRadioButton, QMessageBox, QStatusBar, QSystemTrayIcon,
+    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit,
+    QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator,
+    QWidget,
 )
 
 from gui_qt import theme
@@ -117,8 +119,18 @@ _EMOJI_ICONS = {key.translate(_VARIATION): value for key, value in _EMOJI_ICONS.
 _TOKEN_RE = re.compile(r"^(?P<token>[^\w\s\u4e00-\u9fff]+)(?P<rest>.*)$", re.S)
 # 句中 emoji 直接删除（不含箭头等普通符号），避免界面文案里混入彩色表情。
 _INLINE_EMOJI_RE = re.compile(
-    "[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2300-\u23FF]"
-    "[\ufe0f\ufe0e\u200d\U0001F3FB-\U0001F3FF]*")
+    "(?:[#*0-9]\ufe0f?\u20e3)|"
+    "[\U0001F000-\U0001FAFF\U0001F1E6-\U0001F1FF"
+    "\u2600-\u27BF\u2300-\u23FF\u2B05-\u2B07\u2B50\u2B55]"
+    "[\ufe0f\ufe0e\u200d\U0001F3FB-\U0001F3FF"
+    "\U000E0020-\U000E007F]*|"
+    "[©®‼⁉™ℹ〰〽㊗㊙]\ufe0f")
+_EMOJI_TAGS = dict.fromkeys(range(0xE0020, 0xE0080), None)
+_RICH_TEXT_RE = re.compile(
+    r"</?[A-Za-z][^>]*>|&(?:#(?:x[0-9a-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);",
+    re.I,
+)
+_EMOJI_IMAGE_RE = re.compile(r"(?:emoji|emote|emoticon|sticker)", re.I)
 
 _installed = False
 _orig_abstract_set_text = None
@@ -141,7 +153,7 @@ def strip_inline_emoji(text: str) -> str:
     """删除句中的 emoji（保留“→”“×”等普通排版符号），并收拢残留空白。"""
     if not text:
         return text
-    cleaned = _INLINE_EMOJI_RE.sub("", text)
+    cleaned = _INLINE_EMOJI_RE.sub("", text).translate(_VARIATION).translate(_EMOJI_TAGS)
     if cleaned == text:
         return text
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
@@ -155,7 +167,106 @@ def strip_emoji(text: str) -> str:
     """只删除 emoji，不改空白与缩进（供日志等保留排版的场景使用）。"""
     if not text:
         return text
-    return _INLINE_EMOJI_RE.sub("", str(text))
+    return _INLINE_EMOJI_RE.sub("", str(text)).translate(_VARIATION).translate(_EMOJI_TAGS)
+
+
+def _is_emoji_image(attrs) -> bool:
+    values = {name.lower(): value or "" for name, value in attrs}
+    marker = " ".join(str(values.get(key, "")) for key in
+                       ("class", "id", "data-type", "role"))
+    if _EMOJI_IMAGE_RE.search(marker):
+        return True
+    if _EMOJI_IMAGE_RE.search(str(values.get("src", ""))):
+        return True
+    return any(strip_emoji(str(values.get(key, ""))) != str(values.get(key, ""))
+               for key in ("alt", "title", "aria-label"))
+
+
+class _EmojiHTMLParser(HTMLParser):
+    """保留 HTML 结构，只清理可见文字与可识别的表情图片节点。"""
+
+    _VISIBLE_ATTRIBUTES = frozenset(("alt", "title", "aria-label"))
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts = []
+
+    def _start_tag(self, tag, attrs, self_closing=False):
+        if tag.lower() == "img" and _is_emoji_image(attrs):
+            return
+        changed = False
+        clean_attrs = []
+        for name, value in attrs:
+            if value is not None and name.lower() in self._VISIBLE_ATTRIBUTES:
+                clean = strip_inline_emoji(value)
+                changed = changed or clean != value
+                value = clean
+            clean_attrs.append((name, value))
+        if not changed:
+            self.parts.append(self.get_starttag_text())
+            return
+        suffix = " /" if self_closing else ""
+        rendered = "".join(
+            f" {name}=\"{html_lib.escape(value, quote=True)}\""
+            if value is not None else f" {name}"
+            for name, value in clean_attrs
+        )
+        self.parts.append(f"<{tag}{rendered}{suffix}>")
+
+    def handle_starttag(self, tag, attrs):
+        self._start_tag(tag, attrs)
+
+    def handle_startendtag(self, tag, attrs):
+        self._start_tag(tag, attrs, self_closing=True)
+
+    def handle_endtag(self, tag):
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        self.parts.append(strip_inline_emoji(data))
+
+    def handle_entityref(self, name):
+        raw = f"&{name};"
+        value = html_lib.unescape(raw)
+        clean = strip_emoji(value)
+        self.parts.append(html_lib.escape(clean, quote=False) if clean != value else raw)
+
+    def handle_charref(self, name):
+        raw = f"&#{name};"
+        try:
+            value = chr(int(name[1:], 16) if name.lower().startswith("x") else int(name))
+        except (ValueError, OverflowError):
+            self.parts.append(raw)
+            return
+        clean = strip_emoji(value)
+        self.parts.append(html_lib.escape(clean, quote=False) if clean != value else raw)
+
+    def handle_comment(self, data):
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl):
+        self.parts.append(f"<!{decl}>")
+
+    def unknown_decl(self, data):
+        self.parts.append(f"<![{data}]>")
+
+
+def strip_html_emoji(text: str) -> str:
+    """清理富文本中的 emoji 文本、实体及带有明确表情标记的图片节点。"""
+    if not text:
+        return text
+    parser = _EmojiHTMLParser()
+    try:
+        parser.feed(str(text))
+        parser.close()
+    except Exception:  # noqa: BLE001 - malformed rich text should still render
+        return strip_inline_emoji(str(text))
+    return "".join(parser.parts)
+
+
+def _clean_display_text(text) -> str:
+    value = str(text or "")
+    return strip_html_emoji(value) if _RICH_TEXT_RE.search(value) else strip_inline_emoji(value)
 
 
 def clean_text(text: str) -> tuple[str | None, str]:
@@ -362,8 +473,11 @@ def _apply_label(label):
 def _apply_label_impl(label):
     label._line_skip = False
     original = label.text()
-    name, clean = split_leading_emoji(original)
-    clean = strip_inline_emoji(clean if name is not None else original)
+    if _RICH_TEXT_RE.search(original):
+        name, clean = None, strip_html_emoji(original)
+    else:
+        name, clean = split_leading_emoji(original)
+        clean = strip_inline_emoji(clean if name is not None else original)
     if clean != original:
         label._line_busy = True
         try:

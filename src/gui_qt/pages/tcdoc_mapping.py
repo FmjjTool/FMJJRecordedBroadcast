@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QInputDialog,
-    QLineEdit, QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QLineEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget, QStackedWidget,
 )
 
@@ -69,6 +69,8 @@ class TcDocMappingPanel(QWidget):
         self._closed = False
         self._buttons: list[QPushButton] = []
         self._controls: list[QWidget] = []
+        self._local_only_widgets: list[QWidget] = []
+        self._cloud_controls: list[QWidget] = []
         self._build_ui()
         self._update_doc_label()
 
@@ -109,7 +111,8 @@ class TcDocMappingPanel(QWidget):
         self.sheet_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.sheet_combo.currentIndexChanged.connect(self.on_sheet_changed)
         target_bar.addWidget(self.sheet_combo, 1)
-        target_bar.addWidget(QLabel("匹配列"))
+        self.key_label = QLabel("匹配列")
+        target_bar.addWidget(self.key_label)
         self.key_combo = QComboBox()
         self.key_combo.setMinimumWidth(140)
         self.key_combo.setMinimumContentsLength(10)
@@ -169,9 +172,24 @@ class TcDocMappingPanel(QWidget):
             self.remote_refresh_btn, self.preview_btn, self.execute_btn,
             self.mapping_btn, self.local_prev_btn, self.local_next_btn,
             self.diff_prev_btn, self.diff_next_btn, self.clear_selection_btn,
+            self.cloud_columns_btn, self.cloud_reload_btn, self.cloud_prev_btn,
+            self.cloud_next_btn, self.cloud_apply_btn,
         ])
         self._controls.extend([self.sheet_combo, self.key_combo, self.remote_limit_combo,
-                               self.diff_filter])
+                               self.diff_filter, self.mode_combo, self.cloud_search])
+        self._local_only_widgets.extend([
+            self.key_label, self.key_combo, self.mapping_btn, self.preview_btn,
+            self.pick_btn, self.auto_btn, self.clear_map_btn, self.load_map_btn,
+            self.save_map_btn, self.remote_refresh_btn, self.remote_limit_combo,
+            self.diff_filter, self.local_prev_btn, self.local_next_btn,
+            self.diff_prev_btn, self.diff_next_btn, self.clear_selection_btn,
+            self.execute_btn,
+        ])
+        self._cloud_controls.extend([
+            self.cloud_table, self.cloud_search, self.cloud_columns_btn, self.cloud_reload_btn,
+            self.cloud_prev_btn, self.cloud_next_btn, self.cloud_apply_btn,
+        ])
+        self._update_mode_visibility()
 
     def _build_cloud_page(self) -> QWidget:
         page = QWidget()
@@ -233,6 +251,11 @@ class TcDocMappingPanel(QWidget):
         return page
 
     def _change_mode(self, _index: int) -> None:
+        if self._busy:
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(0 if self.mode_stack.currentIndex() == 0 else 1)
+            self.mode_combo.blockSignals(False)
+            return
         mode = self.mode_combo.currentData()
         if mode == "local" and self._cloud_drafts:
             answer = QMessageBox.question(
@@ -246,8 +269,18 @@ class TcDocMappingPanel(QWidget):
             self._cloud_drafts.clear()
             self._render_cloud_table()
         self.mode_stack.setCurrentIndex(0 if mode == "cloud" else 1)
+        self._update_mode_visibility()
         if mode == "cloud" and self.client and self.fields and not self._cloud_records:
             self.reload_cloud()
+
+    def _update_mode_visibility(self) -> None:
+        cloud = self.mode_combo.currentData() == "cloud"
+        for widget in self._local_only_widgets:
+            widget.setVisible(not cloud)
+        for widget in self._cloud_controls:
+            widget.setVisible(cloud)
+        if hasattr(self, "mapping_dialog"):
+            self.mapping_dialog.setVisible(False) if cloud else None
 
     def _cloud_search_changed(self, text: str) -> None:
         self._cloud_query = str(text or "").strip().casefold()
@@ -288,6 +321,12 @@ class TcDocMappingPanel(QWidget):
         hint.setProperty("role", "caption")
         layout.addWidget(hint)
         checks = []
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(260)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(6, 6, 6, 6)
         visible = set(self._cloud_field_ids())
         for fid, field in self.field_by_id.items():
             title = str(field.get("fieldTitle") or "")
@@ -297,7 +336,10 @@ class TcDocMappingPanel(QWidget):
             check.setChecked(fid in visible)
             check.setProperty("field_id", fid)
             checks.append(check)
-            layout.addWidget(check)
+            scroll_layout.addWidget(check)
+        scroll_layout.addStretch(1)
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -322,6 +364,21 @@ class TcDocMappingPanel(QWidget):
     def _clear_cloud_selection(self) -> None:
         self._cloud_selected.clear()
         self._render_cloud_table()
+
+    def _reset_cloud_state(self, clear_search: bool = True) -> None:
+        self._cloud_records = []
+        self._cloud_loaded = False
+        self._cloud_page = 1
+        self._cloud_selected.clear()
+        self._cloud_drafts.clear()
+        self._cloud_visible_fields = []
+        if clear_search and hasattr(self, "cloud_search"):
+            self.cloud_search.blockSignals(True)
+            self.cloud_search.clear()
+            self.cloud_search.blockSignals(False)
+        self._cloud_query = ""
+        if hasattr(self, "cloud_table"):
+            self._render_cloud_table()
 
     def _cloud_item_changed(self, item: QTableWidgetItem) -> None:
         if self._rendering_cloud:
@@ -452,16 +509,17 @@ class TcDocMappingPanel(QWidget):
         self.cloud_apply_btn.setText(f"预览并回写（{count} 条）")
         self.cloud_apply_btn.setEnabled(bool(count) and bool(self._cloud_drafts) and not self._busy)
 
-    def reload_cloud(self) -> None:
+    def reload_cloud(self, *, discard_drafts: bool | None = None) -> None:
         if not (self.client and self.file_id and self.fields and self.sheet_combo.currentData()):
             return
-        if self._cloud_drafts:
+        if discard_drafts is None:
+            discard_drafts = bool(self._cloud_drafts)
+        if discard_drafts and self._cloud_drafts:
             answer = QMessageBox.question(
                 self, "刷新云端数据", "刷新会丢弃尚未回写的编辑草稿，继续吗？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if answer != QMessageBox.Yes:
                 return
-        self._cloud_drafts.clear()
         client, file_id, sheet_id = self.client, self.file_id, self.sheet_combo.currentData()
 
         def work():
@@ -473,6 +531,8 @@ class TcDocMappingPanel(QWidget):
                 return
             self._cloud_records = records
             self._cloud_loaded = True
+            if discard_drafts:
+                self._cloud_drafts.clear()
             self._cloud_selected.intersection_update(
                 str(record.get("recordID") or "") for record in records)
             self._cloud_page = 1
@@ -542,14 +602,30 @@ class TcDocMappingPanel(QWidget):
 
         def done(result):
             self._record_history(result, sheet_id, doc=history_doc, sheet=history_sheet)
-            self._cloud_drafts.clear()
-            self._cloud_selected.clear()
+            succeeded = {str(rid) for rid in (result.get("record_ids") or [])}
+            for rid in succeeded:
+                self._cloud_drafts.pop(rid, None)
+                self._cloud_selected.discard(rid)
             self.log(f"云端编辑完成：更新 {result.get('updated', 0)} 条并读回核对")
-            self.reload_cloud()
+            self.reload_cloud(discard_drafts=False)
 
         self._run(work, done, f"正在回写 {len(plans)} 条云端记录…", "云端回写",
-                  receipt_callback=lambda result: self._record_history(
+                  receipt_callback=lambda result: self._cloud_receipt(
                       result, sheet_id, doc=history_doc, sheet=history_sheet))
+
+    def _cloud_receipt(self, result: dict, sheet_id: str, *,
+                       doc: dict, sheet: dict) -> None:
+        self._record_history(result, sheet_id, doc=doc, sheet=sheet)
+        if result.get("unknown_record_outcome"):
+            self.cloud_info.setText("回写结果不明，请刷新云端记录并人工核对后再操作")
+            return
+        succeeded = {str(rid) for rid in (result.get("record_ids") or [])}
+        for rid in succeeded:
+            self._cloud_drafts.pop(rid, None)
+            self._cloud_selected.discard(rid)
+        if succeeded:
+            self._update_cloud_selection()
+            self.reload_cloud(discard_drafts=False)
 
     def _validate_cloud_ready(self) -> bool:
         if not (self.client and self.file_id and self.sheet_combo.currentData()):
@@ -891,6 +967,7 @@ class TcDocMappingPanel(QWidget):
         self.sample_records = []
         self.remote_records = []
         self.remote_total = 0
+        self._reset_cloud_state()
         self.mapping = {}
         self._invalidate_preview("文档已切换，请连接后重新对比")
         self.sheet_combo.blockSignals(True)
@@ -932,6 +1009,8 @@ class TcDocMappingPanel(QWidget):
             button.setEnabled(not busy)
         for widget in self._controls:
             widget.setEnabled(not busy)
+        for widget in self._cloud_controls:
+            widget.setEnabled(not busy)
         if not busy:
             self.connect_btn.setEnabled(self.doc is not None)
             self.refresh_btn.setEnabled(bool(self.client and self.file_id))
@@ -940,6 +1019,8 @@ class TcDocMappingPanel(QWidget):
             self.local_prev_btn.setEnabled(self._local_page > 1)
             self.local_next_btn.setEnabled(self._local_page < local_pages)
             self._render_diff()
+            self._render_cloud_table()
+        self._update_mode_visibility()
 
     def _run(self, fn, on_done, label: str, action: str, receipt_callback=None) -> None:
         if self._busy or self._closed:
@@ -1071,6 +1152,7 @@ class TcDocMappingPanel(QWidget):
             self.sample_records = []
             self.remote_records = []
             self.remote_total = 0
+            self._reset_cloud_state()
             self._invalidate_preview("子表已切换，读取字段后请重新对比")
             self._rebuild_mapping_table()
             self._render_remote()
@@ -1088,23 +1170,30 @@ class TcDocMappingPanel(QWidget):
         def work():
             fields = client.get_fields(file_id, sheet_id)
             page = client.get_records_page(file_id, sheet_id, 0, limit)
-            return fields, page.get("records") or [], page.get("total") or 0
+            records = client.get_records(
+                file_id, sheet_id, lambda text: post_to_main(self.log, text))
+            return fields, page.get("records") or [], page.get("total") or 0, records
 
         def done(result):
             if (self.client is not client or self.file_id != file_id
                     or self.sheet_combo.currentData() != sheet_id):
                 return
-            fields, samples, total = result
+            fields, samples, total, records = result
             self.fields = fields
             self.field_by_id = {f["fieldID"]: f for f in fields}
             self.sample_records = samples
             self.remote_records = samples
             self.remote_total = total
+            self._cloud_records = records
+            self._cloud_loaded = True
+            self._cloud_selected.intersection_update(
+                str(record.get("recordID") or "") for record in records)
             self._invalidate_preview("字段已匹配，请点击「对比云端」")
             self._rebuild_mapping_table()
             self.auto_match(quiet=True)
             self._render_remote()
-            self.log(f"字段 {len(fields)} 个 · 记录 {total} 条 · 已自动同名匹配")
+            self._render_cloud_table()
+            self.log(f"字段 {len(fields)} 个 · 记录 {len(records)} 条 · 已自动同名匹配")
 
         self._run(work, done, "正在读取字段与腾讯表格预览…", "读取字段")
 

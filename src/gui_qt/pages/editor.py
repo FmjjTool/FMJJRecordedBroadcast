@@ -347,7 +347,8 @@ class EditorPage(BasePage):
         self.play_btn.setText("播放")
 
     def on_show(self):
-        self._sync_folders()
+        # 日期目录和视频扫描可能触发大量文件系统访问，不能在切页的 UI 线程执行。
+        self._sync_folders_async()
         if self.current_path:
             self.video.show()
             source = QUrl.fromLocalFile(self.current_path)
@@ -397,6 +398,8 @@ class EditorPage(BasePage):
         self._cancel: Optional[threading.Event] = None
         self._compress_queue: List[str] = []
         self._compress_thread = None
+        self._folder_request_serial = 0
+        self._media_request_serial = 0
         # 当前自动点入的日期文件夹；None 表示队列是手动添加/扫描得到的，自动识别不再覆盖
         self._auto_folder: Optional[str] = None
 
@@ -804,6 +807,52 @@ class EditorPage(BasePage):
         if reload_files:
             self._load_folder(target)
 
+    def _sync_folders_async(self, reload_files: bool = True):
+        """后台扫描日期目录，切页时立即让页面先完成绘制。"""
+        if self.running:
+            return
+        self._folder_request_serial += 1
+        request = self._folder_request_serial
+        root = self._work_dir_start()
+        queue_empty = not self.files
+
+        def work():
+            choices = [(name, os.path.join(root, name))
+                       for name, _label in scan_date_folders(root)]
+            fallback = []
+            if not choices and reload_files and queue_empty and root and Path(root).is_dir():
+                fallback = [str(p) for p in find_videos_in(root)]
+            return choices, fallback
+
+        def done(result, error):
+            if request != self._folder_request_serial or error:
+                return
+            choices, fallback = result
+            self.folder_combo.blockSignals(True)
+            self.folder_combo.clear()
+            for name, path in choices:
+                self.folder_combo.addItem(name, path)
+                self.folder_combo.setItemData(
+                    self.folder_combo.count() - 1, path, Qt.ToolTipRole)
+            self.folder_combo.blockSignals(False)
+            self.folder_combo.setEnabled(bool(choices))
+            if not choices:
+                if fallback and not self.files:
+                    self._log(f"扫描工作目录: {root} → {len(fallback)} 个视频")
+                    self.add_dropped_files(fallback)
+                return
+            if self.files and not self._auto_folder:
+                self._select_folder(self._folder_of_path(self.current_path, choices))
+                return
+            keep = (self._auto_folder
+                    if self._auto_folder and os.path.isdir(self._auto_folder) else "")
+            target = keep or choices[-1][1]
+            self._select_folder(target)
+            if reload_files:
+                self._load_folder_async(target)
+
+        run_bg(work, done, owner=self)
+
     def _refresh_folders(self):
         """刷新：重扫日期文件夹并重新载入当前文件夹的视频。"""
         if self.running:
@@ -843,9 +892,30 @@ class EditorPage(BasePage):
     def _load_folder(self, folder: str):
         """点入日期文件夹：队列换成该文件夹内的视频，并载入第一个预览。"""
         found = [str(p) for p in find_videos_in(folder)]
+        self._apply_folder_files(folder, found)
+
+    def _load_folder_async(self, folder: str):
+        """后台读取日期文件夹中的视频，完成后在主线程替换队列。"""
+        self._folder_request_serial += 1
+        request = self._folder_request_serial
+
+        def work():
+            return [str(p) for p in find_videos_in(folder)]
+
+        def done(found, error):
+            if (request != self._folder_request_serial
+                    or error
+                    or self.folder_combo.currentData() != folder):
+                return
+            self._apply_folder_files(folder, found)
+
+        run_bg(work, done, owner=self)
+
+    def _apply_folder_files(self, folder: str, found):
+        """把已完成的文件扫描结果应用到当前队列。"""
         self._auto_folder = folder
         if found and self.files == found and self.current_path in found:
-            return   # 内容没变：保留当前进度与已标记片段，不重置预览
+            return
         if not found:
             self.files = []
             self._refresh_files(select=-1)
@@ -1007,7 +1077,6 @@ class EditorPage(BasePage):
         self.partial_segments = []
         self._refresh_segments()
         self._load_preview(self.current_path)
-        self._refresh_tracks()
         self._refresh_meta()
         self._set_preview_enabled(True)
 
@@ -1018,13 +1087,52 @@ class EditorPage(BasePage):
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.pause()
         self.slider.setValue(0)
+        self.slider.setRange(0, 0)
+        self._duration_ms = 0
         self.play_btn.setText("播放")
-        try:
-            self._duration_ms = int(probe_media(Path(path)).duration * 1000)
-        except Exception:
-            self._duration_ms = 0
-        self.slider.setRange(0, max(0, self._duration_ms))
         self._update_time_label(0)
+        self._request_media_probe(path, reset_position=True)
+
+    def _request_media_probe(self, path: str, *, reset_position: bool = False,
+                             log_error: bool = False):
+        """后台读取一次媒体信息，同时更新时长和音频/字幕轨道。"""
+        self._media_request_serial += 1
+        request = self._media_request_serial
+        self.track_table.setRowCount(0)
+        previous_position = self.slider.value()
+
+        def done(info, error):
+            if request != self._media_request_serial or self.current_path != path:
+                return
+            if error or info is None:
+                self._duration_ms = 0
+                self.slider.setRange(0, 0)
+                if log_error:
+                    self._log(f"读取轨道失败: {error or '媒体信息为空'}")
+                return
+            self._duration_ms = int(max(0.0, float(info.duration)) * 1000)
+            self.slider.setRange(0, max(0, self._duration_ms))
+            if reset_position:
+                self.slider.setValue(0)
+                self._update_time_label(0)
+            else:
+                position = min(previous_position, self._duration_ms)
+                self.slider.setValue(position)
+                self._update_time_label(position)
+            tracks = [stream for stream in info.streams
+                      if stream.get("codec_type") in ("audio", "subtitle")]
+            self.track_table.setRowCount(len(tracks))
+            for row, stream in enumerate(tracks):
+                kind = "音轨" if stream.get("codec_type") == "audio" else "字幕"
+                language = ((stream.get("tags") or {}).get("language") or "-")
+                self.track_table.setItem(row, 0, QTableWidgetItem(str(stream.get("index"))))
+                self.track_table.setItem(row, 1, QTableWidgetItem(kind))
+                self.track_table.setItem(row, 2, QTableWidgetItem(str(stream.get("codec_name"))))
+                self.track_table.setItem(row, 3, QTableWidgetItem(str(language)))
+                self.track_table.item(row, 0).setData(Qt.UserRole, stream)
+            self._track_sorter.reapply()
+
+        run_bg(lambda: probe_media(Path(path)), done, owner=self)
 
     def _on_duration(self, duration: int):
         if duration > 0:
@@ -2249,24 +2357,10 @@ class EditorPage(BasePage):
     # ==================== 轨道 ====================
 
     def _refresh_tracks(self):
-        self.track_table.setRowCount(0)
         if not self.current_path:
+            self.track_table.setRowCount(0)
             return
-        try:
-            tracks = probe_tracks(Path(self.current_path))
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"读取轨道失败: {exc}")
-            return
-        self.track_table.setRowCount(len(tracks))
-        for row, stream in enumerate(tracks):
-            kind = "音轨" if stream.get("codec_type") == "audio" else "字幕"
-            language = ((stream.get("tags") or {}).get("language") or "-")
-            self.track_table.setItem(row, 0, QTableWidgetItem(str(stream.get("index"))))
-            self.track_table.setItem(row, 1, QTableWidgetItem(kind))
-            self.track_table.setItem(row, 2, QTableWidgetItem(str(stream.get("codec_name"))))
-            self.track_table.setItem(row, 3, QTableWidgetItem(str(language)))
-            self.track_table.item(row, 0).setData(Qt.UserRole, stream)
-        self._track_sorter.reapply()
+        self._request_media_probe(self.current_path, log_error=True)
 
     def _selected_track_streams(self):
         rows = sorted({i.row() for i in self.track_table.selectedItems()})

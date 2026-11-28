@@ -31,7 +31,7 @@ MAX_ITEMS = 1000
 
 def _normalize_title(value: object) -> str:
     text = str(value or "").strip().lower()
-    text = re.sub(r"[（(【[][^）)】]]*[）)】]]", "", text)
+    text = re.sub(r"[（(【\[][^）)】\]]*[）)】\]]", "", text)
     text = re.sub(r"[\s\u3000]+", "", text)
     return re.sub(r"[^\w\u4e00-\u9fff]", "", text)
 
@@ -148,7 +148,6 @@ def _match(rows: list[dict], cloud: list[dict], field_title: str,
         if len(candidates) == 1:
             record = candidates[0]
             values = record.get("values") or {}
-            raw = values.get(field_title)
             try:
                 existing = pending._image_write_entries(values, field_title)
             except ImportErrorDetail as exc:

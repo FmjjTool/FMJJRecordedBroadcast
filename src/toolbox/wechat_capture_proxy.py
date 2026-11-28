@@ -251,6 +251,17 @@ class _RequestObserver:
         self._buffer.extend(data)
         while self._buffer and not self._disabled:
             if self._chunked:
+                if self._chunk_size == 0:
+                    if len(self._buffer) < 2:
+                        return
+                    if self._buffer[:2] != b"\r\n":
+                        self._disable()
+                        return
+                    del self._buffer[:2]
+                    self._chunked = False
+                    self._chunk_size = None
+                    self._emit(bytes(self._body))
+                    continue
                 if self._chunk_size is None:
                     boundary = self._buffer.find(b"\r\n")
                     if boundary < 0:
@@ -266,19 +277,6 @@ class _RequestObserver:
                         return
                     self._chunk_size = int(line, 16)
                     del self._buffer[:boundary + 2]
-                    if self._chunk_size == 0:
-                        # Accept the common empty trailer section. A non-empty
-                        # trailer is deliberately left unsupported and bounded.
-                        if len(self._buffer) < 2:
-                            return
-                        if self._buffer[:2] != b"\r\n":
-                            self._disable()
-                            return
-                        del self._buffer[:2]
-                        self._chunked = False
-                        self._chunk_size = None
-                        self._emit(bytes(self._body))
-                        continue
                 needed = self._chunk_size + 2
                 if len(self._buffer) < needed:
                     if len(self._body) + len(self._buffer) > _FORM_LIMIT + 2:

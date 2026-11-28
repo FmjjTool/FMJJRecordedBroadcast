@@ -99,6 +99,79 @@
         summary.textContent = '共 ' + state.rows.length + ' 条 · 已选 ' + selected().length + ' 条 · 已有封面自动跳过';
       }
 
+      function drawBackfill(data) {
+        backfillHost.replaceChildren();
+        if (!data) return;
+        var items = data.items || [];
+        var card = h('div', { class: 'card' });
+        card.appendChild(h('div', { class: 'row-title', text: '回填腾讯文档「官方动态」封面图' }));
+        var counts = data.counts || {};
+        card.appendChild(h('div', { class: 'muted small', style: 'margin-top:6px',
+          text: '唯一匹配 ' + (counts.matched || 0) + ' 条 · 可回填 ' + (data.ready || 0)
+            + ' 条 · 已有封面跳过 ' + (counts.skipped || 0) + ' 条 · 未匹配/歧义 '
+            + ((counts.unmatched || 0) + (counts.ambiguous || 0)) + ' 条' }));
+        if (data.refresh && data.refresh.message) {
+          card.appendChild(h('div', { class: 'muted small', style: 'margin-top:4px',
+            text: data.refresh.message }));
+        }
+        var tableHost = h('div', { style: 'margin-top:12px' });
+        if (items.length) {
+          var table = h('table', { class: 'table', style: 'width:100%;min-width:0;table-layout:fixed' });
+          var head = h('tr');
+          ['视频', '标题', '日期', '状态', '说明'].forEach(function (label) {
+            head.appendChild(h('th', { text: label }));
+          });
+          table.appendChild(h('thead', {}, head));
+          var body = h('tbody');
+          items.forEach(function (item) {
+            var labels = { matched: '待回填', skipped: '已跳过', unmatched: '未匹配',
+              ambiguous: '有歧义', blocked: '不可用', updated: '已回填', failed: '失败' };
+            var line = h('tr');
+            line.appendChild(h('td', { class: 'ellipsis', title: item.video || '', text: item.video || '-' }));
+            line.appendChild(h('td', { class: 'ellipsis', title: item.title || '', text: item.title || '-' }));
+            line.appendChild(h('td', { text: item.date || '-' }));
+            line.appendChild(h('td', { text: labels[item.status] || item.status || '-' }));
+            line.appendChild(h('td', { class: 'ellipsis', title: item.reason || '', text: item.reason || '-' }));
+            body.appendChild(line);
+          });
+          table.appendChild(body); tableHost.appendChild(table);
+        } else {
+          tableHost.appendChild(h('div', { class: 'empty', text: '没有可回填的封面结果。' }));
+        }
+        card.appendChild(tableHost);
+        var actions = h('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:12px' });
+        var apply = h('button', { class: 'btn primary', type: 'button', text: '回填匹配记录' });
+        var reload = h('button', { class: 'btn', type: 'button', text: '重新匹配' });
+        var readyRows = items.filter(function (item) { return item.status === 'matched' && !item.duplicate; });
+        apply.disabled = state.busy || !readyRows.length || !(data.refresh && data.refresh.allowed);
+        actions.appendChild(apply); actions.appendChild(reload); card.appendChild(actions);
+        backfillHost.appendChild(card); backfillHost.appendChild(backfillJobHost);
+        reload.addEventListener('click', function () {
+          if (state.busy || !state.backfill.rows.length) return;
+          backfillHost.replaceChildren(h('div', { class: 'loading', text: '正在重新匹配腾讯文档记录…' }));
+          post('/api/cover/backfill/preview', { path: state.options.path, rows: state.backfill.rows })
+            .then(function (next) { state.backfill.preview = next; drawBackfill(next); })
+            .catch(function (error) { backfillHost.replaceChildren(h('div', { class: 'error', text: '匹配失败：' + error.message })); });
+        });
+        apply.addEventListener('click', function () {
+          if (!readyRows.length || !(data.refresh && data.refresh.allowed)) return;
+          if (!window.confirm('将把 ' + readyRows.length + ' 条已唯一匹配的封面追加到「官方动态」的「封面图」字段，已有图片与未匹配记录会跳过。确定继续吗？')) return;
+          state.busy = true; refreshButtons(); apply.disabled = true;
+          post('/api/cover/backfill/apply', { path: state.options.path, rows: state.backfill.rows, confirmed: true })
+            .then(function (result) {
+              state.backfill.job = result.job;
+              watchJob(backfillJobHost, result.job, function (job) {
+                var finalResult = job.result || {};
+                toast(finalResult.summary || '腾讯文档回填完成', finalResult.failed ? 'warning' : 'success');
+                state.backfill.preview = { items: finalResult.items || items, counts: {}, ready: 0,
+                  refresh: { allowed: false, message: '回填完成后需要重新刷新数据' } };
+                drawBackfill(state.backfill.preview);
+              }, { cancelable: true, onSettled: function () { state.busy = false; state.backfill.job = ''; refreshButtons(); } });
+            })
+            .catch(function (error) { state.busy = false; refreshButtons(); toast('回填失败：' + error.message, 'error'); });
+        });
+      }
+
       function draw() {
         tableHost.replaceChildren();
         var count = state.rows.length, pages = Math.max(1, Math.ceil(count / 200));
@@ -191,6 +264,20 @@
             row._selected = false; row._edited = false; row.reason = item.reason || '';
             row.status = item.status === 'failed' ? 'invalid' : item.status;
           });
+          var generatedRows = (result.items || []).map(function (item) {
+            var row = state.rows.find(function (candidate) { return candidate.video === item.video; });
+            if (!row || item.status !== 'generated' || !item.cover) return null;
+            return { video: row.video, title: row.title, date: row.date, cover: item.cover };
+          }).filter(function (item) { return !!item; });
+          if (generatedRows.length) {
+            state.backfill.rows = generatedRows;
+            state.backfill.preview = null;
+            backfillHost.replaceChildren(h('div', { class: 'loading', text: '封面已生成，正在匹配腾讯文档官方动态…' }));
+            post('/api/cover/backfill/preview', { path: state.options.path, rows: generatedRows })
+              .then(function (data) { state.backfill.preview = data; drawBackfill(data); })
+              .catch(function (error) { backfillHost.replaceChildren(h('div', { class: 'error',
+                text: '腾讯文档匹配失败：' + error.message + '。封面已生成，可稍后重新匹配。' })); });
+          }
         }, { cancelable: true, onSettled: function () { state.busy = false; state.job = ''; draw(); } });
       }
       draw();

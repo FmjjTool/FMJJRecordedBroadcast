@@ -26,4 +26,73 @@
       lyrics ? h('pre', { class: 'music-song-lyrics', tabindex: '0', 'aria-label': '歌曲歌词' }, lyrics)
         : h('div', { class: 'muted small' }, '平台未提供歌词。'));
   };
+
+  window.renderMusicResolvedEntity = function (h, outcome, onSelect) {
+    var kind = outcome.kind || '';
+    var detail = outcome.detail || {};
+    var title = {
+      playlist: '歌单信息', album: '专辑信息', artist: '歌手信息',
+      albums: '专辑候选', artists: '歌手候选'
+    }[kind] || '音乐信息';
+    var root = h('div', { class: 'music-song-detail' });
+
+    function candidateRows(candidates, mode) {
+      var host = h('div', { class: 'grid' });
+      (candidates || []).forEach(function (candidate) {
+        if (!candidate || !candidate.id || !candidate.name) return;
+        var secondary = [candidate.artist, candidate.count ? candidate.count + ' 首' : '']
+          .filter(Boolean).join(' · ');
+        var select = h('button', {
+          class: 'btn small', type: 'button',
+          onclick: function () { if (onSelect) onSelect(mode, String(candidate.id)); }
+        }, mode === 'artist' ? '查看歌手' : '解析专辑');
+        host.appendChild(h('div', { class: 'kv' },
+          h('div', { style: 'min-width:0;overflow-wrap:anywhere' },
+            h('strong', null, candidate.name),
+            secondary ? h('div', { class: 'muted small' }, secondary) : null),
+          select));
+      });
+      if (!host.childNodes.length) {
+        host.appendChild(h('div', { class: 'muted small' }, '没有可显示的候选项。'));
+      }
+      return host;
+    }
+
+    function appendFields(fields) {
+      fields.forEach(function (field) {
+        var value = detail[field[0]];
+        if (value === null || value === undefined || value === '') return;
+        root.appendChild(h('div', { class: 'kv' },
+          h('span', { class: 'muted small' }, field[1]),
+          h('span', { style: 'min-width:0;text-align:right;overflow-wrap:anywhere' }, String(value))));
+      });
+    }
+
+    if (kind === 'albums' || kind === 'artists') {
+      var candidates = outcome.entities || detail.candidates || [];
+      root.appendChild(h('div', { class: 'row-title' }, title));
+      root.appendChild(candidateRows(candidates, kind === 'artists' ? 'artist' : 'album'));
+      return root;
+    }
+
+    root.appendChild(h('div', { class: 'row-title' }, detail.name || title));
+    if (kind === 'playlist') {
+      appendFields([['creator', '创建者'], ['song_count', '歌曲数'],
+        ['returned_count', '已读取'], ['play_count', '播放数'], ['tags', '标签']]);
+    } else if (kind === 'album') {
+      appendFields([['singer', '歌手'], ['release_date', '发行日期'],
+        ['album_type', '专辑类型'], ['language', '语种'], ['genre', '流派'],
+        ['company', '发行公司'], ['song_count', '歌曲数'], ['returned_count', '已读取']]);
+    } else if (kind === 'artist') {
+      appendFields([['song_count', '歌曲数'], ['album_count', '专辑数'], ['fans', '粉丝数']]);
+    }
+    if (detail.description || detail.desc) {
+      root.appendChild(h('pre', { class: 'music-song-lyrics' }, detail.description || detail.desc));
+    }
+    if (kind === 'artist' && (detail.albums || []).length) {
+      root.appendChild(h('div', { class: 'row-title' }, '相关专辑'));
+      root.appendChild(candidateRows(detail.albums, 'album'));
+    }
+    return root;
+  };
 })();

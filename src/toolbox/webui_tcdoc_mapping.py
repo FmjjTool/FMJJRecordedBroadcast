@@ -140,6 +140,149 @@ class MappingSessions:
         self._lock = threading.RLock()
         self._sessions = {}
 
+    @staticmethod
+    def _cloud_fields(fields):
+        return [{
+            "id": str(field.get("fieldID") or ""),
+            "name": str(field.get("fieldTitle") or ""),
+            "type": openapi.FIELD_TYPES.get(int(field.get("fieldType") or 0), "其他"),
+            "field_type": int(field.get("fieldType") or 0),
+            "editable": int(field.get("fieldType") or 0) in workflow.CLOUD_EDITABLE_TYPES,
+            "options": deepcopy(field.get("_options") or []),
+        } for field in fields if field.get("fieldID") and field.get("fieldTitle")]
+
+    @classmethod
+    def _cloud_rows(cls, records, fields):
+        result = []
+        for record in records:
+            rid = str(record.get("recordID") or "").strip()
+            if not rid:
+                continue
+            values = record.get("values") or {}
+            shown = {}
+            for field in fields:
+                fid = str(field.get("fieldID") or "")
+                shown[fid] = openapi.display_value(
+                    field, values.get(field.get("fieldTitle"), values.get(fid)))
+            result.append({"record_id": rid, "values": shown})
+        return result
+
+    def _cloud_read(self, tab, log):
+        target = _target(tab)
+        client = _client()
+        file_id = client.convert_file_id(openapi.WRITABLE_DOC_KEY)
+        client.validate_write_target(file_id, target["tab_id"])
+        fields = client.get_fields(file_id, target["tab_id"])
+        records = client.get_records(file_id, target["tab_id"], log)
+        return target, client, file_id, fields, records
+
+    def cloud_schema(self, tab, log, is_cancelled, session_id=None):
+        target = _target(tab)
+        if is_cancelled():
+            return {"cancelled": True}
+        target, client, file_id, fields, records = self._cloud_read(tab, log)
+        if is_cancelled():
+            return {"cancelled": True}
+        with self._lock:
+            now = time.monotonic()
+            sid = str(session_id or secrets.token_urlsafe(24))
+            self._sessions[sid] = {
+                "headers": [], "rows": [], "tab": tab,
+                "fields": deepcopy(fields), "mapping": {}, "key_col": "",
+                "actions": [], "preview": "", "busy": False,
+                "touched": now, "identity": _identity(client),
+                "cloud_records": deepcopy(records), "cloud_preview": "",
+                "cloud_plans": [], "file_id": file_id,
+            }
+        return {"session": sid, "tab": tab, "target": target["name"],
+                "fields": self._cloud_fields(fields),
+                "total": len(records)}
+
+    def cloud_rows(self, sid, page=1, query="", sort_column="", direction="", visible=None):
+        if direction not in {"", "asc", "desc"}:
+            raise ValueError("排序方向无效")
+        with self._lock:
+            item = self._get(sid)
+            if not item.get("cloud_records") and not item.get("fields"):
+                raise ValueError("云端数据已过期，请重新读取")
+            fields = item["fields"]
+            allowed = {str(field.get("fieldID")): field for field in fields}
+            visible_ids = [str(fid) for fid in (visible or []) if str(fid) in allowed]
+            if not visible_ids:
+                visible_ids = [str(field.get("fieldID")) for field in fields[:8]]
+            rows = self._cloud_rows(item.get("cloud_records") or [], fields)
+            query = str(query or "").strip().casefold()
+            if query:
+                rows = [row for row in rows if query in (row["record_id"] + " " +
+                    " ".join(str(row["values"].get(fid) or "") for fid in allowed)).casefold()]
+            if sort_column:
+                if sort_column != "record_id" and sort_column not in allowed:
+                    raise ValueError("排序列不存在")
+                rows = sort_records(rows, lambda row: sort_key(
+                    row["record_id"] if sort_column == "record_id"
+                    else row["values"].get(sort_column, "")), ascending=direction == "asc")
+            total = len(rows)
+            pages = max(1, (total + 199) // 200)
+            try:
+                page = int(page)
+            except (TypeError, ValueError):
+                page = 1
+            page = max(1, min(page, pages))
+            return {"rows": rows[(page - 1) * 200:page * 200], "total": total,
+                    "page": page, "pages": pages, "visible": visible_ids,
+                    "fields": self._cloud_fields(fields)}
+
+    def cloud_preview(self, payload, log, is_cancelled):
+        sid = str(payload.get("session") or "")
+        item = self._begin(sid)
+        try:
+            if is_cancelled():
+                return {"cancelled": True}
+            updates = payload.get("updates")
+            if not isinstance(updates, list):
+                raise ValueError("修改清单格式无效")
+            fields = {str(field.get("fieldID")): field for field in item["fields"]}
+            plans = workflow.prepare_cloud_updates(fields, item.get("cloud_records") or [], updates)
+            token = secrets.token_urlsafe(24)
+            with self._lock:
+                item["cloud_preview"] = token
+                item["cloud_plans"] = deepcopy(plans)
+            changes = [change for plan in plans for change in plan["changes"]]
+            return {"preview": token, "plans": [{"record_id": plan["record_id"],
+                "changes": deepcopy(plan["changes"])} for plan in plans],
+                "updated": len(plans), "changes": len(changes)}
+        finally:
+            self.release(sid)
+
+    def cloud_execute(self, payload, log, is_cancelled):
+        if payload.get("confirmed") is not True:
+            raise ValueError("请先确认回写范围")
+        sid = str(payload.get("session") or "")
+        item = self._begin(sid)
+        try:
+            if str(payload.get("preview") or "") != item.get("cloud_preview"):
+                raise ValueError("云端编辑预览已失效，请重新预览")
+            target = _target(item["tab"])
+            client = _client()
+            if _identity(client) != item.get("identity"):
+                raise ValueError("登录状态已变化，请重新读取云端数据")
+            file_id = client.convert_file_id(openapi.WRITABLE_DOC_KEY)
+            client.validate_write_target(file_id, target["tab_id"])
+            try:
+                result = workflow.execute_cloud_updates(
+                    client, file_id, target["tab_id"], item["cloud_plans"], log, is_cancelled)
+            except workflow.MappingError as exc:
+                result = dict(getattr(exc, "receipt", {}) or {})
+                result.update(summary=str(exc), error=str(exc), cancelled=bool(is_cancelled()))
+            self._history(target, result)
+            if not result.get("unknown_record_outcome") and not result.get("error"):
+                with self._lock:
+                    item["cloud_preview"] = ""
+                    item["cloud_plans"] = []
+            return result
+        finally:
+            self.release(sid)
+
     def _get(self, session_id):
         now = time.monotonic()
         for key, item in list(self._sessions.items()):
