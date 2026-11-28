@@ -1821,7 +1821,7 @@ class TcDocPage(BasePage):
             result = []
             for name in names:
                 value = str(row["values"].get(name, "") or "")
-                item = QTableWidgetItem(value.replace("\n", " ⏎ ")[:200])
+                item = QTableWidgetItem(value.replace("\n", " / ")[:200])
                 if value:
                     item.setToolTip(value[:1500])
                 result.append(item)
