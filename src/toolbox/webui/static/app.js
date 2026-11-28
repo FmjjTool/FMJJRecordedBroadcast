@@ -72,9 +72,9 @@
     fan_groups: { title: '粉丝群', load: renderFanGroups },
     tickets: { title: '票务解析', load: renderTickets },
     shopping: { title: '购物解析', load: renderShoppingHub },
-    music_playlist: { title: '歌单', load: renderMusicPlaylist },
-    music_download: { title: '下载', load: renderMusicDownload },
-    music_tag: { title: '标签', load: renderMusicTag },
+    music_playlist: { title: '歌单制作', load: renderMusicPlaylist },
+    music_download: { title: '歌曲下载', load: renderMusicDownload },
+    music_tag: { title: '音乐标签', load: renderMusicTag },
     performance: { title: '性能诊断', load: renderPerformance },
     image_crop: { title: '图片裁切', load: function (host) {
       renderDesktopOnly(host, '图片裁切',
