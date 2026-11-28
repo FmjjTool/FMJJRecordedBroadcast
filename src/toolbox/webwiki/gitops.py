@@ -180,19 +180,50 @@ def _advance(log, name: str, target: Path, token: str, old_commit: str) -> None:
          title=f"同步 {name}")
 
 
-def pull_all(token: str, log, root: Path | None = None) -> str:
-    """依次更新主源仓库与 Web 投影仓库；某仓库失败不影响另一个。"""
-    errors: list[str] = []
-    for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
+def pull_repositories(repositories, token: str, log, root: Path | None = None,
+                      is_cancelled=None) -> str:
+    """按白名单更新所选仓库；支持单仓库或全部，不构建 / 启动服务。"""
+    allowed = tuple(item["name"] for item in config.REPO_OPTIONS)
+    if isinstance(repositories, str):
+        requested = [repositories.strip()]
+    elif isinstance(repositories, (list, tuple, set, frozenset)):
+        requested = [str(item).strip() for item in repositories]
+    else:
+        raise GitError("仓库选择无效，请重新选择")
+    if requested == ["all"]:
+        selected = allowed
+    else:
+        if not requested or "all" in requested:
+            raise GitError("仓库选择无效，请重新选择")
+        unknown = [name for name in requested if name not in allowed]
+        if unknown:
+            raise GitError("仓库选择无效，请重新选择")
+        selected_set = set(requested)
+        selected = tuple(name for name in allowed if name in selected_set)
+    if not selected:
+        raise GitError("请至少选择一个仓库")
+
+    errors = []
+    completed = []
+    for name in selected:
+        if is_cancelled is not None and is_cancelled():
+            raise GitError(f"更新已取消（完成 {len(completed)}/{len(selected)} 个仓库）")
         try:
             ensure_repo(name, token, log, root)
+            completed.append(name)
         except GitError as exc:
             errors.append(str(exc))
-            log(f"{name} 未更新，继续下一个仓库")
+            log(f"{config.REPO_LABELS[name]}未更新，继续处理所选仓库")
     if errors:
         raise GitError("\n\n".join(errors))
+
     parts = []
-    for name in ("mandisa-miniprogram", "webwiki-api", "webwiki"):
+    for name in selected:
         state = repo_state(name, root)
-        parts.append(f"{name}@{state.get('commit') or '?'}")
+        parts.append(f"{config.REPO_LABELS[name]}@{state.get('commit') or '?'}")
     return " · ".join(parts)
+
+
+def pull_all(token: str, log, root: Path | None = None) -> str:
+    """兼容入口：更新三个仓库，不构建 / 启动服务。"""
+    return pull_repositories("all", token, log, root)

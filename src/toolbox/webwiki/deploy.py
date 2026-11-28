@@ -236,7 +236,7 @@ def warm_covers(root: Path | None = None, log=print, limit: int = 12) -> str:
 
 def deploy_all(root: Path | None = None, token: str = "", log=print,
                progress=None, cancel=None) -> Path:
-    """一键部署：同步小程序主源与 Web 投影 → 装依赖 → 重建站点库 → 构建前端。
+    """一键部署 Wiki：更新三仓库 → 装依赖 → 重建并构建 Wiki 网页。
 
     progress(step, total, label) 用于界面进度；cancel() 返回真时在步骤之间停止。
     """
@@ -244,9 +244,7 @@ def deploy_all(root: Path | None = None, token: str = "", log=print,
 
     root = Path(root or config.root_dir())
     steps = [
-        ("拉取代码", lambda: (gitops.ensure_repo("mandisa-miniprogram", token, log, root),
-                          gitops.ensure_repo("webwiki-api", token, log, root),
-                          gitops.ensure_repo("webwiki", token, log, root))),
+        ("更新全部仓库", lambda: gitops.pull_repositories("all", token, log, root)),
         ("安装依赖", lambda: (ensure_python_env(root, log),
                           ensure_node_deps(root, log))),
         ("重建站点数据", lambda: sync_docs(root, log)),
