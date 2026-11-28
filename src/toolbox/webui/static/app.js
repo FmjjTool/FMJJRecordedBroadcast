@@ -11111,8 +11111,9 @@ function renderLivestreamSummary(root) {
     var resultHost = h('div');
     var rows = [];
     var detailResult = null;
-    var modeDrafts = { search: '', single: '' };
+    var modeDrafts = { search: '', single: '', playlist: '', album: '', artist: '' };
     var previousMode = 'search';
+    var selectedEntityId = '';
     var busy = false;
     var searchOrder = { order: '', asc: true };
     var exportControl = window.createMusicExportControl({
@@ -11148,10 +11149,19 @@ function renderLivestreamSummary(root) {
       exportControl.setResult({ export_message: '' });
       renderRows();
     }
+    function selectEntity(kind, id) {
+      modeSel.value = kind;
+      modeSel.dispatchEvent(new Event('change'));
+      modeDrafts[kind] = String(id || '');
+      keyword.value = modeDrafts[kind];
+      selectedEntityId = modeDrafts[kind];
+      searchBtn.click();
+    }
 
     modeSel.addEventListener('change', function () {
       modeDrafts[previousMode] = keyword.value;
       previousMode = modeSel.value;
+      selectedEntityId = '';
       keyword.value = modeDrafts[previousMode];
       platformSel.options[0].disabled = isResolveMode();
       if (isResolveMode() && platformSel.value === 'all') platformSel.value = 'netease';
@@ -11167,10 +11177,12 @@ function renderLivestreamSummary(root) {
       invalidateResult();
     });
     platformSel.addEventListener('change', function () {
-      if (isSingle()) { jobHost.replaceChildren(); invalidateResult(); }
+      selectedEntityId = '';
+      if (isResolveMode()) { jobHost.replaceChildren(); invalidateResult(); }
     });
     keyword.addEventListener('input', function () {
-      if (isSingle() && detailResult) { jobHost.replaceChildren(); invalidateResult(); }
+      selectedEntityId = '';
+      if (isResolveMode() && detailResult) { jobHost.replaceChildren(); invalidateResult(); }
     });
 
     function syncSelection() {
@@ -11203,13 +11215,7 @@ function renderLivestreamSummary(root) {
         return;
       }
       if (!rows.length && isEntityMode()) {
-        resultHost.replaceChildren(window.renderMusicResolvedEntity(h, detailResult, function (kind, id) {
-          modeSel.value = kind;
-          keyword.value = id;
-          modeSel.dispatchEvent(new Event('change'));
-          keyword.value = id;
-          searchBtn.click();
-        }));
+        resultHost.replaceChildren(window.renderMusicResolvedEntity(h, detailResult, selectEntity));
         syncSelection();
         return;
       }
@@ -11258,13 +11264,7 @@ function renderLivestreamSummary(root) {
       window.installMusicSearchColumns(table, footer, h);
       footer.appendChild(exportControl.button);
       var detailPanel = isEntityMode() && detailResult
-        ? window.renderMusicResolvedEntity(h, detailResult, function (kind, id) {
-          modeSel.value = kind;
-          keyword.value = id;
-          modeSel.dispatchEvent(new Event('change'));
-          keyword.value = id;
-          searchBtn.click();
-        }) : null;
+        ? window.renderMusicResolvedEntity(h, detailResult, selectEntity) : null;
       resultHost.replaceChildren(
         detailPanel,
         h('div', { class: 'toolbar', style: 'margin:8px 0' },
@@ -11287,13 +11287,15 @@ function renderLivestreamSummary(root) {
       busy = true;
       syncSelection();
       searchBtn.textContent = label + '中…';
-      post(isResolveMode() ? '/api/tools/music/resolve' : '/api/tools/music/search', isResolveMode() ? {
+      var request = isResolveMode() ? {
         platform: platformSel.value, reference: keyword.value,
         entity: modeSel.value === 'single' ? 'song' : modeSel.value
-      } : {
+       } : {
         platform: platformSel.value, keyword: keyword.value,
         limit: limitSel.value
-      }).then(function (result) {
+       };
+       if (isEntityMode() && selectedEntityId) request.entity_id = selectedEntityId;
+       post(isResolveMode() ? '/api/tools/music/resolve' : '/api/tools/music/search', request).then(function (result) {
         watchJob(jobHost, result.job, function (job) {
           busy = false;
           searchBtn.textContent = label;
