@@ -96,15 +96,23 @@ class ShoppingService:
         return {"job": job.id}
 
     def start_taobao_export(self, payload: dict) -> dict:
+        return self._start_taobao_export(payload, json_format=False)
+
+    def start_taobao_json_export(self, payload: dict) -> dict:
+        return self._start_taobao_export(payload, json_format=True)
+
+    def _start_taobao_export(self, payload: dict, *, json_format: bool) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")
         from toolbox.webui_taobao import TaobaoCancelled, TaobaoExportError
         prepared = self.taobao_exports.prepare(payload)
+        runner = self.taobao_exports.run_json if json_format else self.taobao_exports.run
+        kind = "shopping_taobao_json_export" if json_format else "shopping_taobao_export"
 
         def run(task):
             artifact = None
             try:
-                result, artifact = self.taobao_exports.run(
+                result, artifact = runner(
                     prepared, task.workspace, on_log=task.log,
                     on_progress=lambda message, value: task.update(message, value),
                     is_cancelled=lambda: bool(task.cancel_requested))
@@ -135,7 +143,7 @@ class ShoppingService:
                     raise JobCancelled() from None
                 raise TaobaoExportError("淘宝商品详情导出失败，请稍后重试") from None
 
-        job = self.jobs.submit("shopping_taobao_export", run)
+        job = self.jobs.submit(kind, run)
         return {"job": job.id}
 
     def start_xianyu_search(self, payload: dict) -> dict:

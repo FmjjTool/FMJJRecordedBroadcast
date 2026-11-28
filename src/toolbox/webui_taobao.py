@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from platforms.taobao_media import (TaobaoImageDownloader, TaobaoMediaError,
                                     below as _below, cdn_url as _cdn_url,
@@ -42,6 +43,7 @@ MAX_MEDIA_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_JSON_BYTES = 64 * 1024 * 1024
 REQUEST_INTERVAL = 3.0
 _RESULT_ID = re.compile(r"[A-Za-z0-9_-]{32}")
 _ITEM_ID = re.compile(r"[0-9]{1,32}")
@@ -171,6 +173,47 @@ def _finish_workbook(path, detail, downloaded):
 def _credential():
     from auth import get_cookie
     return get_cookie("taobao") or ""
+
+
+def _safe_shop_url(value):
+    if type(value) is not str or not value or len(value) > 2048:
+        return ""
+    try:
+        parsed = urlsplit(value.strip())
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (parsed.scheme.lower() not in {"http", "https"} or not host
+            or parsed.username or parsed.password or port not in (None, 80, 443)
+            or not any(host == domain or host.endswith("." + domain)
+                       for domain in ("taobao.com", "tmall.com"))):
+        return ""
+    path = parsed.path if parsed.path.startswith("/") else "/"
+    return "https://" + host + path
+
+
+def _fallback_product(value, item_id, message):
+    value = value if type(value) is dict else {}
+    image = value.get("pic") or ""
+    try:
+        image = _cdn_url(image) if image else ""
+    except (TaobaoMediaError, TypeError, ValueError):
+        image = ""
+    price = value.get("price") or ""
+    row = {
+        "商品ID": item_id, "标题": value.get("title") or "", "价格": price,
+        "销量": value.get("sales") or "", "图片": image,
+        "链接": f"https://item.taobao.com/item.htm?id={item_id}",
+        "获取时间": datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M:%S"),
+        "详情获取失败": message,
+    }
+    reserve_price = value.get("reserve_price") or ""
+    if reserve_price and reserve_price != price:
+        row["原价"] = reserve_price
+    if value.get("coupon"):
+        row["优惠券"] = value["coupon"]
+    return row
 
 
 def _export_root():
@@ -432,3 +475,142 @@ class TaobaoExports:
                             on_log("部分临时文件未能清理，已完成的本地文件仍保留")
             finally:
                 self._run_lock.release()
+
+    def run_json(self, prepared, workspace, on_log=None, on_progress=None, is_cancelled=None):
+        """Export selected full detail DTOs as a bounded JSON attachment."""
+        if not self._run_lock.acquire(blocking=False):
+            raise TaobaoExportError("已有淘宝商品详情任务正在执行，请等待完成")
+        rows, product_rows = [], {}
+        stopped, reason = False, ""
+        temporary = None
+        try:
+            snapshot = self._snapshot(prepared)
+            captured = json.loads(snapshot.models.decode("utf-8"))
+            ids = prepared.item_ids
+            products = {item.get("item_id"): item for item in captured.get("products", [])
+                        if type(item) is dict}
+            shop = captured.get("shop")
+            if type(shop) is not dict:
+                raise TaobaoExportError("店铺结果无效，请重新解析")
+            shop_output = {"店铺名": shop.get("shop_name") or "",
+                           "卖家ID": shop.get("seller_id") or "",
+                           "店铺ID": shop.get("shop_id") or ""}
+            shop_url = _safe_shop_url(shop.get("url"))
+            if shop_url:
+                shop_output["店铺链接"] = shop_url
+            shop_output = {key: value for key, value in shop_output.items() if value}
+
+            def checkpoint():
+                if is_cancelled and is_cancelled():
+                    raise TaobaoCancelled(_summary(ids, rows, cancelled=True))
+
+            checkpoint()
+            credential = self._credential_reader()
+            if not credential:
+                raise TaobaoExportError("抓取淘宝商品详情需要登录")
+
+            def identity():
+                checkpoint()
+                if self._credential_reader() != credential:
+                    raise TaobaoExportError("登录状态已变化，本次任务已停止，请重新解析后重试")
+
+            workspace = _mkdir(Path(workspace).absolute())
+            _plain_chain(workspace)
+            import shopping
+
+            for index, item_id in enumerate(ids):
+                checkpoint()
+                try:
+                    identity()
+                    if index:
+                        remaining = REQUEST_INTERVAL
+                        while remaining > 0:
+                            identity()
+                            step = min(0.2, remaining)
+                            self._waiter(step)
+                            remaining -= step
+                    if on_log:
+                        on_log(f"正在抓取商品 {item_id} 的详情（{index + 1}/{len(ids)}）")
+                    if on_progress:
+                        on_progress(f"抓取商品详情 {index + 1}/{len(ids)}", index / len(ids))
+                    detail = _detail(shopping.fetch_taobao_item_detail(item_id, credential, log=None), item_id)
+                    identity()
+                    item = detail.to_dict()
+                    if type(item) is not dict:
+                        raise TaobaoExportError("商品详情格式无效，本项已停止")
+                    # This attachment contains remote image URLs, never server-local paths.
+                    item.pop("本地图片目录", None)
+                    item.pop("本地图片", None)
+                    item["链接"] = f"https://item.taobao.com/item.htm?id={item_id}"
+                    _texts(item, MAX_DETAIL_BYTES)
+                    product_rows[item_id] = item
+                    rows.append({"item_id": item_id, "status": "completed",
+                                 "message": "商品完整详情已加入 JSON"})
+                    if on_log:
+                        on_log(f"商品 {item_id} 详情已加入 JSON")
+                except TaobaoCancelled:
+                    raise
+                except Exception as error:
+                    message = "商品详情获取失败，以下保留解析列表信息"
+                    product_rows[item_id] = _fallback_product(products.get(item_id), item_id, message)
+                    rows.append({"item_id": item_id, "status": "failed", "message": message})
+                    raw = str(error).lower()
+                    if (isinstance(error, TaobaoExportError) and "登录状态" in str(error)
+                            or any(word in raw for word in ("cookie", "token", "登录", "captcha",
+                                                            "rgv", "风控", "验证", "429", "403"))):
+                        stopped = True
+                        reason = (str(error) if isinstance(error, TaobaoExportError)
+                                  else "平台暂未允许继续抓取详情，请稍后重试")
+                    if on_log:
+                        on_log(f"商品 {item_id} 详情未获取，已保留解析列表信息")
+                    if stopped:
+                        break
+
+            checkpoint()
+            for item_id in ids:
+                if item_id not in product_rows:
+                    product_rows[item_id] = _fallback_product(
+                        products.get(item_id), item_id, "未抓取详情，以下保留解析列表信息")
+            result = _summary(ids, rows, stopped=stopped, reason=reason)
+            payload = {"店铺": shop_output, "商品数": len(ids),
+                       "商品": [product_rows[item_id] for item_id in ids]}
+            warnings = [f"商品 {row['item_id']}：{row['message']}" for row in rows
+                        if row["status"] != "completed"]
+            if warnings:
+                payload["导出告警"] = warnings
+            _texts(shop_output, MAX_DETAIL_BYTES)
+            _texts(payload["商品"], MAX_JSON_BYTES)
+            data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            if not data or len(data) > MAX_JSON_BYTES:
+                raise TaobaoExportError("所选商品 JSON 超过 64 MB 上限，请减少选择数量")
+
+            target = _below(workspace / ("淘宝商品详情_" + secrets.token_hex(6) + ".json"), workspace)
+            if target.exists():
+                raise TaobaoExportError("JSON 附件已存在，请重新导出")
+            temporary = target.with_name("." + secrets.token_hex(8) + ".partial")
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                 | getattr(os, "O_BINARY", 0))
+            with os.fdopen(descriptor, "wb") as output_stream:
+                output_stream.write(data)
+                output_stream.flush()
+                os.fsync(output_stream.fileno())
+            if _regular(temporary).st_size != len(data):
+                raise TaobaoExportError("JSON 附件写入校验失败，请稍后重试")
+            checkpoint()
+            os.replace(temporary, target)
+            temporary = None
+            if on_progress:
+                on_progress(result["message"], 1.0)
+            return result, target
+        except (TaobaoCancelled, TaobaoExportError):
+            raise
+        except Exception:
+            raise TaobaoExportError("淘宝商品 JSON 导出失败，请稍后重试") from None
+        finally:
+            try:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            except OSError:
+                if on_log:
+                    on_log("JSON 临时附件未能清理")
+            self._run_lock.release()

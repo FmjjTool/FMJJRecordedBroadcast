@@ -559,6 +559,8 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.post("/api/tools/shopping/export", lambda req: shopping.start_export(req.json))
     server.post("/api/tools/shopping/taobao/export",
                 lambda req: shopping.start_taobao_export(req.json))
+    server.post("/api/tools/shopping/taobao/export-json",
+                lambda req: shopping.start_taobao_json_export(req.json))
 
     def search_xianyu_shopping(req):
         """JSON page 默认为 1，由购物用例校验平台允许的页码范围。"""
@@ -989,6 +991,9 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         content_type = "application/zip"
         if job is not None and job.kind == "shopping_export" and path.suffix.lower() == ".xlsx":
             content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        elif (job is not None and job.kind == "shopping_taobao_json_export"
+              and path.suffix.lower() == ".json"):
+            content_type = "application/json; charset=utf-8"
         return FileResponse(path, path.name, content_type)
 
     def cancel_job(req, job_id):
