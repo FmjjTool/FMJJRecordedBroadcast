@@ -38,7 +38,8 @@ def _as_number(text: str):
         return None
 
 
-def _as_datetime(text: str):
+def parse_datetime(text: str):
+    """解析排序器支持的日期文本，不转换为平台相关的时间戳。"""
     for fmt in _DT_FORMATS:
         try:
             return datetime.strptime(text, fmt)
@@ -57,7 +58,7 @@ def sort_key(text) -> tuple:
     num = _as_number(s)
     if num is not None:
         return (0, num)
-    dt = _as_datetime(s)
+    dt = parse_datetime(s)
     if dt is not None:
         return (1, dt.timestamp())
     return (2, s.casefold())

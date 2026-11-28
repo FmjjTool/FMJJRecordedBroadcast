@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from toolbox.table_sort_keys import sort_key, sort_records
+from toolbox.table_sort_keys import parse_datetime, sort_key, sort_records
 
 from . import config, tables
 
@@ -16,6 +16,13 @@ CHANGES_DESCRIPTION = (
     "检测时间不是云端编辑时间；首次同步的记录也会显示为新增。"
     "云端版本和编辑人请查看「修订记录」。"
 )
+
+
+def _preview_sort_key(value):
+    parsed = parse_datetime(str(value).strip()) if value is not None else None
+    if parsed is not None:
+        return (1, parsed)
+    return sort_key(value)
 
 
 def date_column(sheet: dict, rows: list[dict]) -> str:
@@ -27,7 +34,7 @@ def date_column(sheet: dict, rows: list[dict]) -> str:
     for name in names:
         sample = [str(row["values"].get(name) or "").strip() for row in rows[:20]]
         nonempty = [value for value in sample if value]
-        hits = sum(sort_key(value)[0] == 1 for value in nonempty)
+        hits = sum(_preview_sort_key(value)[0] == 1 for value in nonempty)
         if nonempty and hits >= min(5, len(nonempty)):
             return name
     return ""
@@ -37,7 +44,7 @@ def sort_newest_first(rows: list[dict], sheet: dict) -> list[dict]:
     column = date_column(sheet, rows)
     if not column:
         return list(reversed(rows))
-    return sort_records(rows, lambda row: sort_key(row["values"].get(column)),
+    return sort_records(rows, lambda row: _preview_sort_key(row["values"].get(column)),
                         ascending=False)
 
 
@@ -59,7 +66,7 @@ def read_page(doc_key: str, sheet: dict, offset: int = 0, page_size: int = 200,
         if newest_first:
             rows = sort_newest_first(rows, sheet)
         if sort_column:
-            rows = sort_records(rows, lambda row: sort_key(row["values"].get(sort_column)),
+            rows = sort_records(rows, lambda row: _preview_sort_key(row["values"].get(sort_column)),
                                 ascending=not descending)
         total = len(rows)
         offset = min(offset, max(0, (total - 1) // page_size * page_size))
