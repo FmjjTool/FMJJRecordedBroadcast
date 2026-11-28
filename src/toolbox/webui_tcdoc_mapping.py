@@ -192,7 +192,7 @@ class MappingSessions:
                 "actions": [], "preview": "", "busy": False,
                 "touched": now, "identity": _identity(client),
                 "cloud_records": deepcopy(records), "cloud_preview": "",
-                "cloud_plans": [], "file_id": file_id,
+                "cloud_plans": [], "cloud_needs_refresh": False, "file_id": file_id,
             }
         return {"session": sid, "tab": tab, "target": target["name"],
                 "fields": self._cloud_fields(fields),
@@ -230,12 +230,15 @@ class MappingSessions:
             page = max(1, min(page, pages))
             return {"rows": rows[(page - 1) * 200:page * 200], "total": total,
                     "page": page, "pages": pages, "visible": visible_ids,
-                    "fields": self._cloud_fields(fields)}
+                    "fields": self._cloud_fields(fields),
+                    "needs_refresh": bool(item.get("cloud_needs_refresh"))}
 
     def cloud_preview(self, payload, log, is_cancelled):
         sid = str(payload.get("session") or "")
         item = self._begin(sid)
         try:
+            if item.get("cloud_needs_refresh"):
+                raise ValueError("回写状态已变化，请先刷新云端数据")
             if is_cancelled():
                 return {"cancelled": True}
             updates = payload.get("updates")
@@ -260,6 +263,8 @@ class MappingSessions:
         sid = str(payload.get("session") or "")
         item = self._begin(sid)
         try:
+            if item.get("cloud_needs_refresh"):
+                raise ValueError("回写状态已变化，请先刷新云端数据")
             if str(payload.get("preview") or "") != item.get("cloud_preview"):
                 raise ValueError("云端编辑预览已失效，请重新预览")
             target = _target(item["tab"])
@@ -274,11 +279,15 @@ class MappingSessions:
             except workflow.MappingError as exc:
                 result = dict(getattr(exc, "receipt", {}) or {})
                 result.update(summary=str(exc), error=str(exc), cancelled=bool(is_cancelled()))
-            self._history(target, result)
-            if not result.get("unknown_record_outcome") and not result.get("error"):
-                with self._lock:
+            needs_refresh = bool(result.get("error") or result.get("updated")
+                                 or result.get("unknown_record_outcome"))
+            with self._lock:
+                if needs_refresh:
+                    item["cloud_needs_refresh"] = True
                     item["cloud_preview"] = ""
                     item["cloud_plans"] = []
+                result["needs_refresh"] = bool(item.get("cloud_needs_refresh"))
+            self._history(target, result)
             return result
         finally:
             self.release(sid)

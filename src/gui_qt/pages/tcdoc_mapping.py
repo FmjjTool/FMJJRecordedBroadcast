@@ -48,6 +48,8 @@ class TcDocMappingPanel(QWidget):
         self.remote_total = 0
         self._cloud_records: list[dict] = []
         self._cloud_loaded = False
+        self._cloud_needs_refresh = False
+        self._cloud_sheet_id = ""
         self._cloud_page = 1
         self._cloud_page_size = 200
         self._cloud_query = ""
@@ -368,6 +370,8 @@ class TcDocMappingPanel(QWidget):
     def _reset_cloud_state(self, clear_search: bool = True) -> None:
         self._cloud_records = []
         self._cloud_loaded = False
+        self._cloud_needs_refresh = False
+        self._cloud_sheet_id = ""
         self._cloud_page = 1
         self._cloud_selected.clear()
         self._cloud_drafts.clear()
@@ -397,6 +401,8 @@ class TcDocMappingPanel(QWidget):
         field = self.field_by_id.get(fid)
         if not rid or field is None:
             return
+        if self._cloud_needs_refresh:
+            return
         original = str(item.data(Qt.UserRole) or "")
         current = item.text()
         draft = self._cloud_drafts.setdefault(rid, {})
@@ -418,6 +424,9 @@ class TcDocMappingPanel(QWidget):
         rid = str(check.data(Qt.UserRole + 2) or "")
         fid = self._cloud_field_ids()[column - 1]
         field = self.field_by_id.get(fid)
+        if self._cloud_needs_refresh:
+            QMessageBox.information(self, "请先刷新", "回写状态需要先刷新云端记录，再继续编辑")
+            return
         if not field or int(field.get("fieldType") or 0) not in workflow.CLOUD_EDITABLE_TYPES:
             QMessageBox.information(self, "字段只读", "该字段类型暂不支持直接编辑")
             return
@@ -497,7 +506,9 @@ class TcDocMappingPanel(QWidget):
             self.cloud_prev_btn.setEnabled(self._cloud_page > 1 and not self._busy)
             self.cloud_next_btn.setEnabled(self._cloud_page < pages and not self._busy)
             title = self.sheet_combo.currentText().split("  (")[0] if self.sheet_combo.count() else ""
-            self.cloud_info.setText(f"{title} · 云端 {len(self._cloud_records)} 条 · 显示 {len(records)} 条")
+            suffix = " · 需刷新云端" if self._cloud_needs_refresh else ""
+            self.cloud_info.setText(
+                f"{title} · 云端 {len(self._cloud_records)} 条 · 显示 {len(records)} 条{suffix}")
             self._update_cloud_selection()
         finally:
             self.cloud_table.blockSignals(False)
@@ -505,9 +516,15 @@ class TcDocMappingPanel(QWidget):
 
     def _update_cloud_selection(self) -> None:
         count = len(self._cloud_selected)
-        self.cloud_selection_label.setText(f"已选择 {count} 条 · 未回写草稿 {sum(len(v) for v in self._cloud_drafts.values())} 项")
+        draft_count = sum(len(values) for values in self._cloud_drafts.values())
+        selected_drafts = any(rid in self._cloud_selected and values
+                              for rid, values in self._cloud_drafts.items())
+        suffix = " · 请先刷新" if self._cloud_needs_refresh else ""
+        self.cloud_selection_label.setText(
+            f"已选择 {count} 条 · 未回写草稿 {draft_count} 项{suffix}")
         self.cloud_apply_btn.setText(f"预览并回写（{count} 条）")
-        self.cloud_apply_btn.setEnabled(bool(count) and bool(self._cloud_drafts) and not self._busy)
+        self.cloud_apply_btn.setEnabled(
+            bool(count) and selected_drafts and not self._busy and not self._cloud_needs_refresh)
 
     def reload_cloud(self, *, discard_drafts: bool | None = None) -> None:
         if not (self.client and self.file_id and self.fields and self.sheet_combo.currentData()):
@@ -531,6 +548,8 @@ class TcDocMappingPanel(QWidget):
                 return
             self._cloud_records = records
             self._cloud_loaded = True
+            self._cloud_needs_refresh = False
+            self._cloud_sheet_id = sheet_id
             if discard_drafts:
                 self._cloud_drafts.clear()
             self._cloud_selected.intersection_update(
@@ -542,6 +561,9 @@ class TcDocMappingPanel(QWidget):
         self._run(work, done, "正在读取云端记录…", "读取云端数据")
 
     def _preview_cloud_updates(self) -> None:
+        if self._cloud_needs_refresh:
+            QMessageBox.information(self, "请先刷新", "云端状态已变化，请刷新记录后再预览回写")
+            return
         if not self._validate_cloud_ready():
             return
         updates = [{"record_id": rid, "values": dict(values)}
@@ -603,11 +625,12 @@ class TcDocMappingPanel(QWidget):
         def done(result):
             self._record_history(result, sheet_id, doc=history_doc, sheet=history_sheet)
             succeeded = {str(rid) for rid in (result.get("record_ids") or [])}
+            self._cloud_needs_refresh = True
             for rid in succeeded:
                 self._cloud_drafts.pop(rid, None)
                 self._cloud_selected.discard(rid)
             self.log(f"云端编辑完成：更新 {result.get('updated', 0)} 条并读回核对")
-            self.reload_cloud(discard_drafts=False)
+            self.reload_cloud()
 
         self._run(work, done, f"正在回写 {len(plans)} 条云端记录…", "云端回写",
                   receipt_callback=lambda result: self._cloud_receipt(
@@ -616,16 +639,20 @@ class TcDocMappingPanel(QWidget):
     def _cloud_receipt(self, result: dict, sheet_id: str, *,
                        doc: dict, sheet: dict) -> None:
         self._record_history(result, sheet_id, doc=doc, sheet=sheet)
-        if result.get("unknown_record_outcome"):
-            self.cloud_info.setText("回写结果不明，请刷新云端记录并人工核对后再操作")
-            return
         succeeded = {str(rid) for rid in (result.get("record_ids") or [])}
+        self._cloud_needs_refresh = True
         for rid in succeeded:
             self._cloud_drafts.pop(rid, None)
             self._cloud_selected.discard(rid)
-        if succeeded:
+        if result.get("unknown_record_outcome"):
             self._update_cloud_selection()
-            self.reload_cloud(discard_drafts=False)
+            self.cloud_info.setText("回写结果不明；请先人工核对，再刷新云端记录")
+            return
+        if succeeded:
+            self.reload_cloud()
+        else:
+            self._update_cloud_selection()
+            self.cloud_info.setText("回写已停止；请刷新云端记录后再继续")
 
     def _validate_cloud_ready(self) -> bool:
         if not (self.client and self.file_id and self.sheet_combo.currentData()):
@@ -952,11 +979,17 @@ class TcDocMappingPanel(QWidget):
 
     # ==================== 文档 / 任务状态 ====================
 
-    def set_doc(self, doc: dict | None) -> None:
+    def set_doc(self, doc: dict | None) -> bool:
         if doc and self.doc and doc.get("key") == self.doc.get("key"):
             self.doc = doc
             self._update_doc_label()
-            return
+            return True
+        if self._cloud_drafts:
+            answer = QMessageBox.question(
+                self, "切换文档", "还有未回写的云端修改草稿。切换后会清除这些草稿，继续吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return False
         self.doc = doc
         self.client = None
         self.file_id = ""
@@ -979,6 +1012,7 @@ class TcDocMappingPanel(QWidget):
         self.refresh_btn.setEnabled(False)
         self.conn_status.setText("")
         self._update_doc_label()
+        return True
 
     def refresh(self) -> None:
         self._update_doc_label()
@@ -1093,7 +1127,8 @@ class TcDocMappingPanel(QWidget):
         if not doc:
             QMessageBox.warning(self, "没有文档", "请先在页面顶部选择腾讯文档")
             return
-        self.set_doc(doc)
+        if not self.set_doc(doc):
+            return
         self._invalidate_preview("正在连接，连接后请对比云端")
         if doc.get("key") != openapi.WRITABLE_DOC_KEY:
             QMessageBox.warning(self, "禁止回写此文档",
@@ -1147,6 +1182,19 @@ class TcDocMappingPanel(QWidget):
 
     def on_sheet_changed(self, _index: int) -> None:
         if self.client and self.file_id:
+            new_sheet_id = self.sheet_combo.currentData()
+            if (self._cloud_drafts and self._cloud_sheet_id
+                    and new_sheet_id != self._cloud_sheet_id):
+                answer = QMessageBox.question(
+                    self, "切换子表", "还有未回写的云端修改草稿。切换后会清除这些草稿，继续吗？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if answer != QMessageBox.Yes:
+                    self.sheet_combo.blockSignals(True)
+                    old_index = self.sheet_combo.findData(self._cloud_sheet_id)
+                    if old_index >= 0:
+                        self.sheet_combo.setCurrentIndex(old_index)
+                    self.sheet_combo.blockSignals(False)
+                    return
             self.fields = []
             self.field_by_id = {}
             self.sample_records = []
@@ -1161,6 +1209,13 @@ class TcDocMappingPanel(QWidget):
     def load_fields(self) -> None:
         if not (self.client and self.file_id and self.sheet_combo.currentData()):
             return
+        discard_drafts = bool(self._cloud_drafts)
+        if discard_drafts:
+            answer = QMessageBox.question(
+                self, "刷新字段", "刷新会丢弃尚未回写的云端修改草稿，继续吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
         client = self.client
         file_id = self.file_id
         sheet_id = self.sheet_combo.currentData()
@@ -1186,6 +1241,10 @@ class TcDocMappingPanel(QWidget):
             self.remote_total = total
             self._cloud_records = records
             self._cloud_loaded = True
+            self._cloud_needs_refresh = False
+            self._cloud_sheet_id = sheet_id
+            if discard_drafts:
+                self._cloud_drafts.clear()
             self._cloud_selected.intersection_update(
                 str(record.get("recordID") or "") for record in records)
             self._invalidate_preview("字段已匹配，请点击「对比云端」")

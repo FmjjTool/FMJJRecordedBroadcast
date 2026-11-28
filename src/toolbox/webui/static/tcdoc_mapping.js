@@ -7,7 +7,7 @@
     var c = state.cloud || (state.cloud = {
       session: '', tab: 'official', fields: [], visible: [], selected: new Set(),
       drafts: {}, page: 1, query: '', order: { order: '', asc: true },
-      preview: '', plans: [], job: '', action: '', result: ''
+      preview: '', plans: [], needsRefresh: false, job: '', action: '', result: ''
     });
     var busy = !!c.job, serial = 0, rows = [];
     var target = h('select', { class: 'select', 'aria-label': '目标工作表' },
@@ -29,13 +29,27 @@
       status.className = kind === 'error' ? 'error small' : 'muted small';
       status.textContent = text || ''; c.result = text || '';
     }
+    function hasDrafts() { return Object.keys(c.drafts).some(function (rid) {
+      return Object.keys(c.drafts[rid] || {}).length > 0;
+    }); }
+    function hasSelectedDrafts() { return Array.from(c.selected).some(function (rid) {
+      return Object.keys(c.drafts[rid] || {}).length > 0;
+    }); }
+    function confirmDraftDiscard(action) {
+      return !hasDrafts() || window.confirm(action + '会清除尚未回写的云端修改草稿，继续吗？');
+    }
+    function refreshCloud() {
+      if (!confirmDraftDiscard('刷新')) return;
+      run('refresh', { tab: c.tab, session: c.session });
+    }
     function update() {
       busy = !!c.job;
       target.disabled = busy; search.disabled = busy; refresh.disabled = busy;
       clear.disabled = busy || !c.selected.size;
-      previewBtn.disabled = busy || !c.selected.size || !Object.keys(c.drafts).length;
+      previewBtn.disabled = busy || c.needsRefresh || !c.selected.size || !hasSelectedDrafts();
       selection.textContent = '已选择 ' + c.selected.size + ' 条 · 未回写草稿 ' +
-        Object.keys(c.drafts).reduce(function (sum, key) { return sum + Object.keys(c.drafts[key]).length; }, 0) + ' 项';
+        Object.keys(c.drafts).reduce(function (sum, key) { return sum + Object.keys(c.drafts[key]).length; }, 0) +
+        ' 项' + (c.needsRefresh ? ' · 请先刷新' : '');
       previewBtn.textContent = '预览并回写（' + c.selected.size + ' 条）';
       columns.querySelectorAll('input').forEach(function (input) { input.disabled = busy; });
       tableHost.querySelectorAll('input,button').forEach(function (input) { input.disabled = busy; });
@@ -62,18 +76,26 @@
           });
           if (!c.visible.length) c.visible = c.fields.slice(0, 8).map(function (field) { return field.id; });
           c.selected.clear(); c.drafts = {}; c.preview = ''; c.plans = []; c.page = 1;
+          c.needsRefresh = false;
           message((result.target || '云端数据') + ' · 已读取 ' + (result.total || 0) + ' 条');
           drawColumns(); loadRows();
         } else if (action === 'preview') {
           if (result.error) message(result.error, 'error');
           else { c.preview = result.preview || ''; c.plans = result.plans || []; drawPreview(); message('已生成回写预览，请核对后确认'); }
         } else if (action === 'apply') {
+          (result.record_ids || []).forEach(function (rid) { delete c.drafts[rid]; c.selected.delete(rid); });
+          c.preview = ''; c.plans = []; c.needsRefresh = !!(result.needs_refresh || result.updated ||
+            result.unknown_record_outcome || result.error);
+          drawPreview(); drawTable();
           if (result.error || result.unknown_record_outcome) {
-            message(result.error || '回写结果不明，请刷新云端记录并人工核对', 'error');
+            message(result.error || '回写结果不明，请先人工核对，再刷新云端记录', 'error');
           } else {
-            (result.record_ids || []).forEach(function (rid) { delete c.drafts[rid]; c.selected.delete(rid); });
-            c.preview = ''; c.plans = []; message(result.summary || '回写完成，已读回核对');
-            run('refresh', { tab: c.tab, session: c.session });
+            message(result.summary || '回写完成，已读回核对');
+            if (c.needsRefresh && (!hasDrafts() || confirmDraftDiscard('刷新'))) {
+              run('refresh', { tab: c.tab, session: c.session });
+            } else if (c.needsRefresh) {
+              message('回写已完成；刷新前无法继续回写，未回写草稿仍保留。');
+            }
           }
         }
         update();
@@ -106,7 +128,9 @@
         + '&direction=' + (c.order.order ? (c.order.asc ? 'asc' : 'desc') : '')
         + '&visible=' + encodeURIComponent(c.visible.join(','))).then(function (result) {
         if (!host.isConnected || request !== serial) return;
-        rows = result.rows || []; c.page = result.page || 1; drawTable();
+        rows = result.rows || []; c.page = result.page || 1;
+        c.needsRefresh = !!result.needs_refresh;
+        drawTable();
         helpers.pager(paging, result.page, result.pages, result.total, function (page) { c.page = page; loadRows(); });
       }).catch(function (error) { if (request === serial) message(error.message, 'error'); });
     }
@@ -144,6 +168,7 @@
           var cell = h('td', { class: 'ellipsis', title: value || original }, value || '-');
           if (c.drafts[row.record_id] && c.drafts[row.record_id][field.id] !== undefined) cell.className += ' changed';
           if (field.editable) cell.addEventListener('dblclick', function () {
+            if (c.needsRefresh) { toast('请先刷新云端记录，再继续编辑', 'info'); return; }
             if (!c.selected.has(row.record_id) || busy) { toast('请先勾选记录后再编辑', 'info'); return; }
             var next = window.prompt('编辑「' + field.name + '」', value);
             if (next === null) return;
@@ -175,14 +200,23 @@
         h('div', { class: 'card-title' }, '回写预览'), h('pre', { class: 'small', style: 'white-space:pre-wrap;max-height:260px;overflow:auto' }, lines.join('\n')), confirm));
     }
     target.addEventListener('change', function () {
-      c.tab = target.value; c.session = ''; c.fields = []; c.visible = []; c.selected.clear(); c.drafts = {}; c.preview = ''; c.plans = [];
+      var nextTab = target.value;
+      if (nextTab !== c.tab && !confirmDraftDiscard('切换子表')) {
+        target.value = c.tab; return;
+      }
+      c.tab = nextTab; c.session = ''; c.fields = []; c.visible = []; c.selected.clear();
+      c.drafts = {}; c.preview = ''; c.plans = []; c.needsRefresh = false;
       drawColumns(); drawTable(); run('schema', { tab: c.tab });
     });
     search.addEventListener('input', function () { c.query = search.value; c.page = 1; loadRows(); });
-    refresh.addEventListener('click', function () { run('refresh', { tab: c.tab, session: c.session }); });
+    refresh.addEventListener('click', refreshCloud);
     clear.addEventListener('click', function () { c.selected.clear(); drawTable(); update(); });
     previewBtn.addEventListener('click', function () {
-      var updates = Array.from(c.selected).map(function (rid) { return { record_id: rid, values: c.drafts[rid] || {} }; });
+      if (c.needsRefresh) { message('请先刷新云端记录，再预览回写', 'error'); return; }
+      var updates = Array.from(c.selected).filter(function (rid) {
+        return Object.keys(c.drafts[rid] || {}).length > 0;
+      }).map(function (rid) { return { record_id: rid, values: c.drafts[rid] }; });
+      if (!updates.length) { toast('请先选择含有修改草稿的记录', 'info'); return; }
       run('preview', { session: c.session, updates: updates });
     });
     host.replaceChildren(
