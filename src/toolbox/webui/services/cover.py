@@ -73,7 +73,7 @@ class CoverService:
                 self._running = False
 
     def _backfill(self, job, payload: dict) -> dict:
-        job.update("正在读取腾讯文档官方动态记录…", 0.1)
+        job.update("正在读取腾讯文档目标表记录…", 0.1)
         try:
             result = webui_cover.apply_backfill(payload)
             job.update(result.get("summary", "腾讯文档回填完成"), 1.0)
