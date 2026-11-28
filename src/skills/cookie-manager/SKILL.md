@@ -19,6 +19,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 4. 业务使用当前账号的有效登录态，遵守总开关、过期、清除和账号变化。请求所需的 CSRF/签名字段从同一次有效凭据快照派生；任务启动/重试前重新确认账号与状态，不能混用两次登录的身份。
 5. 未登录、关闭或失效时，按功能需要进入公开/游客流程，或报告认证不可用；Agent 不代为重新登录、清除、刷新或回写真实 Cookie。不能偷偷使用旧文件、浏览器 profile 或快照恢复登录。
 6. 登录票据只传给对应平台的认证目标；上传/CDN 的临时授权由平台适配处理，不能附带转发账户 Cookie。Cookie、Token、登录快照等敏感内容不进入源码、skill、报告、日志、Git 提交或发行包。
+7. 上述统一入口约束应用内业务账户。开发工具的 git / Git Credential Manager / gh 可按原生机制只读使用宿主现有认证；不为技能整理复制、保存、修改或迁移凭据，不虚构应用已支持的适配接口。当前程序对外可见名称为「账号与登录」（含登录状态 / 账号配置），与项目约定中的「Cookie 管理」指向同一总管理器；此处记录实际名称，不声明已完成界面改名，也不允许业务页新增登录引导。
 
 ## 当前代码接口与边界
 
@@ -36,7 +37,7 @@ description: "统一账户登录与认证管理。涉及登录界面、Cookie/To
 | `src/toolbox/tcdoc/session.py` | `cookie_string()`、`apply_to_context()`、`save_state_snapshot()`、`clear()` | 读取/注入须确认不会回写真实状态；快照保存和清除只在隔离虚构环境验证 |
 | `src/toolbox/webwiki/credentials.py`、`auth.py`，`src/gui_qt/cookie_manager.py` | GitHub Token 统一凭据适配与 `_GitHubTokenDialog` | 已迁入统一管理；新文件 `config/github_auth.json`，旧 `config/webwiki_auth.json` 只读兼容；业务不得直接读写凭据文件 |
 
-现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`netease_playlist`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`xianyu`、`tcdoc`、`qqgroup`。引用现有入口时使用实际 key；新增 GitHub 等账户须补实际注册与凭据类型接口，不能假定已经存在。QQ 群的登录态用于粉丝群页的群号查询兜底（qinfo / 群搜索），业务只读获取，不在页面保存或展示凭据。
+现有平台 key：`bilibili`、`douyin`、`weibo`、`netease`、`netease_playlist`、`qq`、`kugou`、`kugou_lite`、`kuwo`、`5sing`、`xiaohongshu`、`kuaishou`、`taobao`、`xianyu`、`tcdoc`、`qqgroup`。引用现有入口时使用实际 key；新增其他账户或凭据类型时须核对实际注册与接口，不能据示例假定已存在；GitHub 的既有适配以上表当前实现为准。QQ 群的登录态用于粉丝群页的群号查询兜底（qinfo / 群搜索），业务只读获取，不在页面保存或展示凭据。
 
 闲鱼（2026-11-26）：使用独立 `xianyu` 槽位，不复用淘宝账号。统一入口支持官网浏览器登录与输入；`tracker.whoami` 已注册只读验证器，依据官网 `mtop.idle.web.user.page.nav` 返回的 `data.module.base.displayName` 判定账号，禁止仅凭本地账号 ID 判为有效。明确会话失效与网络 / 验证码 / 限流 / 结构变化分开；临时票据缺失时仅在新建内存浏览器上下文中补验，不保存浏览器状态，不回写响应票据。购物业务只通过 `auth.get_cookie("xianyu")` 按总开关读取；任务中账号变化后停止，不能自动换号继续。所有验证仅使用隔离虚构数据，未代用户验证或修改真实登录记录。
 

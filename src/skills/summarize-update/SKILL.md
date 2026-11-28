@@ -1,213 +1,107 @@
 ---
-name: "summarize-update"
-description: "开发阶段质量闭环与版本发布流程：编辑后适用测试、唯一当日报告和本地提交；明确请求推送/发布时按用户范围处理。总结文章、工作总结、直播总结及仅要求「总结此次更新」排除自动推送和发布；提及/否定推送不授权执行。未命中排除项的发布工作按全文流程执行。"
+name: summarize-update
+description: "更新总结与明确授权的 Git 推送、版本发布。总结默认不推送；普通 push 只同步指定分支，不附带打包、改版本或 Release。完整发布按版本、构建、日志与资产校验流程执行；双版本细节见 references/release-editions.md。"
 ---
 
-# 更新总结与版本发布流程
+# 更新总结与版本发布
 
-发布相关触发词：用户明确要求「**开始推送**」「**远端推送**」「**更新推送**」「**推送**」或发布新版本。仅要求「**总结此次更新**」按下面的总结排除项处理。
+先遵守 [总约定](../convention-skill/SKILL.md)；所有操作前阅读 [真实凭据保护](../cookie-data-protection/SKILL.md)，任何更新前核对 [录播核心保护](../recording-toolbox-core/SKILL.md) 与 [运行中实例保护](../testing-quality-gates/references/running-instance-guard.md)。本 skill 只补发布特有的范围判断、版本与交付规则；Git 备份、远端领先/分叉、网络顺序、唯一当日报告和本地提交以总约定为唯一来源。
 
-## 总结工作排除项（先判断，优先适用）
+## 先区分用户请求
 
-- 用户仅要求总结文章、直播总结、工作总结、更新内容汇总或「总结此次更新」时，只完成总结及项目要求的报告/必要本地提交，**不执行本 skill 第1—6步，不 push、不打包、不改版本、不创建 tag/Release**。
-- 引用、解释、检查推送流程，或说「不需要 push」「不推送」，都不是执行授权；创建/修改本 skill 也不触发发布。
-- 用户另行明确要求推送/发布时，才按其具体范围进入相应流程，用户的限制优先于默认流程。总结工作与发布工作分别判断，本地提交不自动升级为推送。
+| 请求 | 执行范围 |
+| --- | --- |
+| 总结文章、直播总结、工作总结、更新汇总、“总结此次更新” | 生成总结，完成必要项目报告/本地提交；不 push、不打包、不递增版本、不创建 tag/Release |
+| 阅读、检查或维护技能；引用、解释或否定 push / 发布 | 只处理所要求的维护/解释，不因此执行发布 |
+| 明确要求推送 / push | 按用户指定仓库与分支同步已确认提交；不自动升级为完整发布 |
+| 明确要求发布新版本 / 完整发布 | 按下文完整流程；用户限定“不打包”“仅标准版”等时只执行获准范围，缺少的产物如实说明 |
 
-本流程 = 把本次累积的提交发布为新版本并上传安装包到 GitHub Releases。本 skill 同时固化开发阶段约定（每部分编辑质量闭环），发布流程须待大任务结束、离屏测试全过后执行。
+用户的当次范围优先；发布授权不是运行实例关闭授权、真实数据写入授权或真实凭据修改授权。仅阅读此 skill 或旧名 release-editions 不触发任何外部动作。总结类请求也不因出现“push”一词就获得推送授权。
 
-## 执行要求（强制，不可跳过）
+## 开发与验证衔接
 
-1. 先核对总结排除项；仅在明确请求的推送/发布任务中，必须**完整阅读本 skill 全文**（含硬性前提、版本号规则、第 1-6 步、安全红线），理解每一步的输入、产物与失败处理。
-2. 按第 1 步到第 6 步**顺序完整执行**，不得跳步、合并步骤或提前结束；任何一步失败立即停止并报告，不得续跑。
-3. 未命中总结排除项、且用户没有另外限定范围时，触发词「推送 / 开始推送 / 远端推送 / 更新推送」按既有完整发布流程处理；总结请求、引用词汇和否定推送不构成该授权。用户明确只推送或不打包等限制时，以用户具体范围为准。
-4. 每一步完成后核对产物：提交已推送、版本号已改、安装包存在且可启动、README 已更新、Release 资产大小与本地一致。
-5. 全流程结束后按「验证与汇报」向用户汇报版本号、Release 链接、更新摘要与提交哈希。
+代码改动的用例、导入/实例化冒烟、offscreen 和最终适用完整测试统一按 [测试与质量门禁](../testing-quality-gates/SKILL.md)，清理按其中参考正文执行。每部分的实际结果、唯一当日报告和本地提交按总约定；不重复定义第二套测试顺序。仅 Markdown 技能维护静态核对即可，不启动应用、打包或真实认证。
 
-## 开发阶段约定：每部分编辑质量闭环（必须执行）
+## 完整发布前提
 
-任何代码更新/修改任务，**每完成一个部分**（一个页面/模块/功能的一次编辑批次）后，依次执行：
+- 已有明确完整发布授权，目标分支/仓库和版本范围清楚；已有业务改动已本地提交，工作区无未备份内容。
+- 按总约定重新成功 fetch 并比较目标分支；分叉先列差异、等待明确取舍，禁止强制推送。
+- 本次适用测试通过，未验证的真实 UI、平台和硬件行为明确列出。涉及发布、依赖或产物先读 [安全基线](../security-baseline/SKILL.md)。
+- 构建、打包态冒烟只在独立目录/程序副本执行，运行数据与端口隔离；不会清理或覆盖用户运行实例、真实 `config/` 或 `download/`。
+- 构建双版本、改 build.py / 内置清单 / 依赖查找顺序或排查缺依赖时，完整读取 [标准版与 FULL 内置版](references/release-editions.md)。旧名 [release-editions](../release-editions/SKILL.md) 仅作兼容入口。
 
-1. **冒烟测试**：对本部分改动涉及的模块做导入/实例化级验证（页面实例化冒烟需 `QT_QPA_PLATFORM=offscreen` 下建 QApplication，且 app 实例需补 `work_dir`/`toast`/`show_page` 属性）；导入错误、启动即崩必须当场暴露。冒烟失败先修复到通过。
-2. **更新当日报告**：按 `convention-skill` 约定 4，在项目根目录写（或更新）`Progress/YYYY-MM-DD_当日总结.md`，日期取北京时间的完成日期；内容含：问题/需求 → 根因/方案 → 改动文件清单 → 验证结果 → 待处理问题 → Git 提交信息。同一天的多个任务、多部分修改和后续验证都汇入同一文档；更新前读取已有内容，保留其他任务的记录，不另开主题报告。文档与代码一起提交进库。
-3. **传本地 git 一次**：先清理测试脚本/临时文件/无用代码（项目规则：垃圾不进库），再连同 Progress 文档一起提交本部分改动。
-4. **提交结果**：向用户汇报本部分改动内容、冒烟测试结果、提交哈希。
+## 版本号
 
-**离屏测试是最后的测试**：不在每部分后运行；待**所有部分编辑完成、当前大任务结束后**统一执行一次完整离屏测试——发现问题修复→重测直至通过，通过后做收尾 git 提交并向用户汇报最终结果。
+- 唯一应用版本来源为 `src/version.py` 的 APP_VERSION；标准版与 FULL 共用，不新增第二套版本号。
+- 完整新版本发布默认补丁位加 1；沿用项目单数字补丁规则，2.8.9 的下一版为 2.9.0，不自动生成 2.8.10。用户明确指定版本或 major/minor 幅度时按其要求。
+- 上一发布版本从当前可达的发布 tag 与 APP_VERSION 核对，按版本数字排序，不用字符串最大值、提交日期或随意最新标签猜测；非发布标签不纳入统计。
+- 同一 tag 的后补资产必须来自相同发布源码；已有 tag 指向不同内容或同名 Release 已存在时先核对，不覆盖历史、不重写 tag。补发真实情况在发布说明中准确记录。
 
-上述闭环走完、工作区干净后，方可触发下方发布流程。
+## 完整发布流程
 
-## 硬性前提
+仅对明确完整发布请求顺序执行；任何一步失败停止后续发布动作，保留已完成状态并报告，不伪装成整次发布成功。修复后从实际状态重新核对，避免重复上传、创建 tag 或 Release。
 
-1. **工作区必须干净**（`git status` 无未提交修改）。有未提交内容先按项目规范提交（测试脚本/临时文件必须先清理再提交）。
-2. 仅明确的发布请求且未附“不打包”等限制时，才适用打包前提；总结排除项或对本 skill 的维护/阅读不授权打包。
-3. 所有 GitHub 网络动作（推送、API、上传）按 `convention-skill` 约定 15 执行：**优先直连 → 失败回退代理 → 最后才用其他方式**。
+### 1. 同步已确认的本地提交
 
-## 版本号规则（重要）
+按总约定的目标分支、远端比较与 GitHub 网络顺序推送已有提交。网络必须直连（显式清空代理）→ 失败后代理 → 最后其他方式，逐档记录真实错误；详细命令只维护在总约定约定 15。本地领先不自动授权推送，执行此步依赖本次明确发布授权。
 
-- **默认补丁位 +0.0.1**（如 2.8.4 → 2.8.5），**除非用户明确要求**其他递增幅度（如 minor/major）。
-- **补丁位到 9 后必须进位**：不存在 2.8.10 这类两位补丁号——2.8.9 + 0.0.1 = **2.9.0**（次版本 +1、补丁归 0）。历史 tag 全部符合此规（2.8.8 → 2.8.9 → 下一个就是 2.9.0）。
-- 版本号唯一来源：`src/version.py` 的 `APP_VERSION`，改这里且只改这里。
-- 上一版本 tag = 当前 git 最新 tag（`git tag -l` 取最大值），用于提交范围与统计。
+### 2. 设置新版本
 
-## 流程（顺序执行，不可跳步）
+按上节改 APP_VERSION，必须在构建前完成；安装包文件名嵌入该版本。仅 push 请求不执行本步。
 
-### 第 1 步：推送本地提交
+### 3. 构建与产物验证
 
-```
-git -c http.proxy= -c https.proxy= push origin main
-```
+标准版：python build.py --edition standard。FULL 在明确要求时按双版本参考追加准备、构建与验收；同版本共用一个 Release。
 
-先把手头累积的全部提交同步到远端，再做后续动作。
+- 构建环境使用当前可用的可信 Python、PyInstaller 和 Inno Setup，运行前探测能力；不把某个宿主路径、历史耗时、固定体积或“未安装 gh”等事实写成前提。
+- 不通过清空安全注入、卸载 shim、绕过删除保护或 ExecutionPolicy Bypass 来使构建通过。被保护阻止时按受支持路径处理并报告，不能禁用保护续跑。
+- build.py 的隐私扫描失败即中止整个发布；禁止绕过。验证实际安装器存在、非零字节，名称为 `FengMingToolbox_Setup_<版本>.exe` 或 `FengMingToolbox_Full_Setup_<版本>.exe`，文件名版本无 v 前缀。
+- 打包态必须实际启动一次并检查关键懒加载页面；在 `_smoking/` 下的可写独立产物副本中启动，隔离 `config/`、`download/`、`logs/` 与端口。只记录“启动成功”不能代表所有页面通过；出现 Traceback、导入缺失或异常即停止发布。
+- 只有自己创建且完全隔离的进程可正常收尾。不要在待上传的 dist 里生成运行数据后再靠批量删除补救；最终待分发目录继续隐私扫描。
+- 页面懒加载的 hidden-import 以 build.py 当前按 src/gui_qt/pages/*.py 生成的收集逻辑核对；不能只信 PyInstaller 静态分析已收齐。
+- 记录实际字节数、构建日志和 SHA-256。体积、耗时与完成条件以本次工具结果为准，不使用历史固定值作验收。
 
-**网络顺序（按 `convention-skill` 约定 15）**：默认直连（如上，显式清空代理）→ 直连失败才回退代理
-（`git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main`，
-候选顺序：用户指定 / `HTTPS_PROXY` / 7890 / 10809 / 12450 / `git config http.proxy`，切档前先探测端口）
-→ 都不通才用其他方式（交回宿主执行、SSH over 443）并向用户说明。逐档记录真实错误，禁止静默换档。
+### 4. 更新说明与本地提交
 
-### 第 2 步：递增版本号（打包前置）
+README 的当前下载入口更新到新 tag，更新日志在已有最新条目之前插入，与历史语气一致；按内容定位，不依赖固定行号。变更来源为上一发布 tag 到本次 HEAD 的实际提交和差异，按主题归纳，过滤无关 WIP 与隐私数据。
 
-改写 `src/version.py` 的 `APP_VERSION` 为新版本号（规则见上）。
-必须在打包**前**完成——安装器文件名内嵌版本号。
-
-### 第 3 步：打包
-
-```
-python build.py
-```
-
-- **bash 里跑必须加 `PYTHONPATH=` 前缀**（如 `PYTHONPATH= python build.py`）：WorkBuddy 沙箱的 safe-delete shim 会拦截 dist 清理（文件数超阈值直接 SystemExit），清空 PYTHONPATH 等价于卸掉 shim
-- 产物：`dist/installer/FengMingToolbox_Setup_{新版本}.exe`（约 92MB，**文件名无 v 前缀**，轻量版定版后体积从 275MB 降至此；PyInstaller + Inno Setup）
-- 耗时 3 分钟级：后台运行 + 等待完成通知，不要前台死等
-- build.py 内置隐私扫描（Cookie/配置/账号进包自动中止）——扫描失败立即**中止整个流程**并报告，严禁绕过
-- **打包后必须真的跑一次 exe**（隐私扫描 + 体积检查发现不了「能启动但切页就炸」）：
-  `cd dist/FengMingToolbox && QT_QPA_PLATFORM=offscreen timeout 12 ./FengMingToolbox.exe`，
-  退出码 124（跑到超时）= 正常；stderr 出现 Traceback 即中止流程。跑完删掉它生成的
-  `config/ download/ logs/` 再压缩/上传（否则把本机数据打进包）。
-  实测坑：页面是懒加载的（`importlib` 按字符串导入），PyInstaller 静态分析看不到
-  `gui_qt.pages.*`，`--collect-submodules` 在 spec 阶段 sys.path 无 src 时收集为空——
-  必须在 build.py 里按 `src/gui_qt/pages/*.py` 目录生成 hidden-import。
-- 打包失败：中止流程并报告错误，不执行后续步骤
-- **FULL 内置版**：用户要求同时发布 FULL 版时，按 [release-editions](../release-editions/SKILL.md) 追加构建与验收；标准版的 PyInstaller 参数不得因 FULL 改造而增删。FULL 包作为同版本额外资产上传，不新建 tag、不新建 Release。
-
-### 第 4 步：更新 README
-
-- README.md 第 7 行附近「当前版本下载」链接改为 `releases/tag/{新版本}`
-- 「### 更新日志」标题下、最新条目之上插入新条目：
-
-```
-#### v{新版本}（YYYY-MM-DD 当天日期）
+~~~text
+#### v<版本>（YYYY-MM-DD）
 
 - **分组标题**：改动归纳……
-```
+~~~
 
-- 内容来源：`git log {上一版本tag}..HEAD --oneline`，按主题分组归纳（如 新功能 / 修复 / 重构），语气与历史条目一致
-- 与 `src/version.py` 一起提交：
+日期按北京时间发布当天。将版本、README、唯一当日报告及本次获准改动按路径核对后本地提交。报告自身不为补写自身哈希重复提交。
 
-```
-git add src/version.py README.md
-git commit -m "docs: v{新版本} 版本发布（更新日志 + 版本号）"
-```
+### 5. 同步发布提交
 
-### 第 5 步：推送 GitHub
+重新 fetch/比较，再推送目标分支，遵守总约定网络顺序。仅创建 Release 的 tag 必须指向实际发布提交；发现新增远端分叉停止，不用强制推送。
 
-```
-git -c http.proxy= -c https.proxy= push origin main
-```
+### 6. 创建 tag / Release 并上传
 
-网络顺序同第 1 步（约定 15）：直连 → 代理 → 其他；不带 tag，tag 在第 6 步单独推。
+先查询同名 tag/Release 的实际状态，避免重复创建或覆盖资产；新 tag 与 APP_VERSION 一致，Release 默认非 draft、非 prerelease，name 与 tag 一致，除非用户明确要求其他形态。
 
-### 第 6 步：创建 Release 并上传安装包
+发布认证只使用当前宿主已配置的 Git/gh 认证或可信凭据助手；应用内账户仍遵守统一管理，不借发布读写应用凭据。先探测 gh 是否可用且已认证、git config --show-origin --get-all credential.helper 和 Get-Command git-credential-manager 等环境信息，不硬编码 WorkBuddy/PortableGit 的版本目录。可用时由已有工具原生认证；必须 REST 调用时只在内存捕获现有凭据助手的只读结果，不打印返回对象或认证头。
 
-**凭据获取**（GCM，token 仅内存传递，严禁打印/落盘/写日志/提交进 git）：
+不新建长期凭据文件，不调用保存/删除凭据、登录刷新或重新授权流程。当前工具拿不到可用授权时停止认证步骤并报告，不以手工读取应用真实凭据或另建凭据系统绕过。Token 不假定固定前缀，任何类型均不得进入终端、脚本文件、日志、报告或 Git。
 
-```powershell
-$in = "protocol=https`nhost=github.com`n`n"
-$out = $in | & "C:/Users/$env:USERNAME/.workbuddy/binaries/PortableGit/versions/1.3.0/mingw64/bin/git-credential-manager.exe" get
-$tok = ""
-foreach ($l in ($out -split "`n")) {
-  if ($l -match "^password=(.+)$") { $tok = $Matches[1].Trim() }
-}
-$H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json" }
-```
+Release 正文与非秘密临时辅助文件放本任务 `_smoking/` 子目录；使用 UTF-8，按当前 shell 正确传递变量和中文，不固化“必须纯 ASCII 脚本/必须某个宿主执行法”。REST JSON 显式按 UTF-8 编码，请求只发到对应 GitHub API/上传域名，网络顺序仍引用总约定约定 15。
 
-> PortableGit 版本目录会随客户端升级变化（实测 1.2.0 → 1.3.0）。先
-> `ls ~/.workbuddy/binaries/PortableGit/versions/` 取当前版本；找不到时退回
-> `D:/Program File/WorkbuddyAI/resources/vendor/PortableGit/mingw64/bin/git-credential-manager.exe`
-> （即 `git config credential.helper` 指向的那个）。
-
-**执行方式注意（实测坑）**：
-- 必须把 PowerShell 代码写成 `.ps1` 文件后 `powershell -ExecutionPolicy Bypass -File xxx.ps1` 执行——不能 `powershell -Command "..."`（外层双引号会吞掉 `$` 变量），也不能 `cmd /c`（工具宿主禁用）
-- 子 PowerShell 里 `git credential fill` 包装层不工作（报 missing protocol field），必须直接调用 GCM exe（上面写法）
-- `.ps1` 文件必须**纯 ASCII**：PS 5.1 把无 BOM 的 UTF-8 脚本当 ANSI 读，中文会乱码甚至语法错误——中文内容（Release 正文等）写到单独的 UTF-8 `.txt`，脚本里用 `[IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)` 读入
-
-**网络顺序（约定 15，REST API 同样适用）**：默认直连，脚本开头先清 `$env:HTTP_PROXY/$env:HTTPS_PROXY/$env:ALL_PROXY` 并 `[System.Net.WebRequest]::DefaultWebProxy = $null`；直连失败才加 `-Proxy "http://127.0.0.1:7890"`（候选端口 7890 / 10809 / 12450，先 `Test-NetConnection` 探测）；仍失败按"交回宿主执行 → SSH over 443（仅 git）"处理并告知用户。逐档记录真实错误，禁止静默换档。
-
-**a) 建本地 tag 并推送**：
-
-```powershell
-git tag {新版本}
-git -c http.proxy= -c https.proxy= push origin {新版本}
-```
-
-**b) 创建 Release**（非 draft、非 prerelease，name = tag，与历史格式一致）：
-
-Release 正文写到 UTF-8 文本文件（如 `_tmp_notes.txt`），格式：
-
-```
+~~~text
 ## 更新说明
 
-> 对比 v{上一版本}：共 N 个提交、N 个文件变更（+N / −N 行）
+> 对比 v<上一版本>：共 N 个提交、N 个文件变更（+N / −N 行）
 
 ### 分组标题
-- 条目……（与 README 更新日志同内容）
-```
+- 与 README 相同口径的条目……
+~~~
 
-```powershell
-$notes = [IO.File]::ReadAllText("<notes.txt 绝对路径>", [Text.Encoding]::UTF8)
-$json = @{
-  tag_name = "{新版本}"; name = "{新版本}"
-  body = $notes
-} | ConvertTo-Json
-$rel = Invoke-RestMethod -Method Post `
-  -Uri "https://api.github.com/repos/FmjjTool/FMJJRecordedBroadcast/releases" `
-  -Headers $H -ContentType "application/json; charset=utf-8" `
-  -Body ([Text.Encoding]::UTF8.GetBytes($json))
-```
+统计取实际 `git log <上一tag>..HEAD` 与 `git diff --shortstat <上一tag>..HEAD`。上传**本次声明提供的全部安装器 + 一个 `SHA256SUMS.txt`**：标准单包通常共 2 个必需资产；标准/FULL 双包通常共 3 个必需资产。额外已授权资产另列，不把固定资产数作为唯一完成依据。
 
-- 统计头数字来自 `git log {上一tag}..HEAD --oneline | Measure-Object -Line` 和 `git diff --shortstat {上一tag}..HEAD`
-- JSON body 必须走 `UTF8.GetBytes`（PS5.1 直接传字符串会乱码）
-- release id 存临时文件供上传步骤用：`$rel.id | Out-File -Encoding ascii _tmp_relid.txt`
+`SHA256SUMS.txt` 由 build.py 按当前版本磁盘实际存在的安装器生成，每包一行。上传前核对它不含旧版本或本轮未验证的旧产物；缺该文件客户端拒绝自动安装，只允许手动下载。上传时长与超时按实测包体、网络和可用工具配置，不固化历史秒数。
 
-**c) 上传安装包与校验文件资产**（两个都要传）：
+## 验证与汇报
 
-```powershell
-$files = @(
-  "dist/installer/FengMingToolbox_Setup_{新版本}.exe",
-  "dist/installer/SHA256SUMS.txt"
-)
-foreach ($f in $files) {
-  $uri = "https://uploads.github.com/repos/FmjjTool/FMJJRecordedBroadcast/releases/$($rel.id)/assets?name=$(Split-Path $f -Leaf)"
-  Invoke-RestMethod -Method Post -Uri $uri `
-    -Headers @{ Authorization = "Bearer $tok" } `
-    -InFile $f -ContentType "application/octet-stream" -TimeoutSec 1800
-}
-```
+查询该 tag 的 Release：核对 tag/提交、draft/prerelease 状态、每个声明资产名称与字节数；取回校验文件，逐行与本地安装器 SHA-256 相同。私有仓库或受限仓库使用已有合适认证；404 需区分权限、tag 不存在与网络故障，不能直接认定未发布。不得只看上传请求返回成功。
 
-- `SHA256SUMS.txt` 由 `build.py` 自动生成（`<sha256>  <安装包名>`）；客户端的「检查更新」强校验它，**缺这个文件时自动安装会拒绝，只允许手动下载**
-- 同时发布 FULL 内置版时，`SHA256SUMS.txt` 含两行（标准 + FULL），Release 资产数为 3（两个 exe + 一个校验文件）
-- 92MB 上传按分钟计，超时给足（1800s）
-- 未安装 gh CLI，一律走 REST API，不要尝试 gh 命令
-
-### 验证与汇报
-
-- `GET /repos/FmjjTool/FMJJRecordedBroadcast/releases/tags/{新版本}` 确认：非 draft、assets=2（安装包 + SHA256SUMS.txt）、安装包大小 ≈92MB（与本地 `dist/installer` 产物字节数一致）
-- 再取 `SHA256SUMS.txt` 内容，确认哈希与本地 `Get-FileHash` 结果逐字一致（客户端按它校验，不一致会导致所有用户更新失败）
-- **仓库为私有仓库**：验证的 GET 也必须带 Authorization 头（GCM 取 token 同上）——无凭据返回 404，曾被误判为 Release 不存在
-- **网络顺序按约定 15**：直连（`-NoProxy` / 清空 `DefaultWebProxy`）→ 代理（`-Proxy "http://127.0.0.1:7890"`）→ 其他；GET 失败要区分「404 无凭据」与「网络不通」，不要把网络错误报成 Release 不存在
-- 向用户汇报：新版本号、Release 链接（`https://github.com/FmjjTool/FMJJRecordedBroadcast/releases/tag/{新版本}`）、本次更新内容摘要
-
-## 安全红线
-
-- token（gho_ 开头）只允许在内存变量中传递，任何情况下不得打印、写入文件、出现在提交或日志里
-- 隐私扫描中止 = 流程中止，不得以任何方式绕过
-- 全流程任何一步失败：报告用户并停止，不跳步续跑
+向用户汇报实际版本、Release 链接、摘要、提交哈希、已提供形态、验证和未完成项。若部分已推送但后续失败，明确远端已发生的动作与剩余步骤。流程结束按总约定收尾，不自动增加发布范围。

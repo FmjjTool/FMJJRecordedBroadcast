@@ -1,277 +1,52 @@
 ---
 name: quick-commands
-description: "项目快捷指令分发表：用户发送 /约定、/视觉、/腾讯文档、/总结文章、/测试 等快捷短语，或说「快捷指令」「快捷短语列表」「快速看一下某 skill 要点」时使用。按短语定位到对应 skill，输出该 skill 的核心约束要点（不替代完整阅读）；不含未登记的短语，不触发推送、发布、打包、定时任务或文档写入。"
+description: "项目 /短语与 skill 要点查询。只按现行原文生成简短摘要或输出路由表，不执行外部操作；实际总结任务仍按主入口文件与授权要求处理。"
 ---
 
-# 快捷指令（短语 → skill 要点）
+# 快捷指令路由
 
-## 定位
-
-用一条短指令替代「去读某个 skill」的长句。本 skill 是唯一的分发表：短语命中后定位到 `src/skills/<name>/SKILL.md`，输出该 skill 的核心约束要点，供快速查阅与自查。
-
-本 skill 不新增任何项目规则，也不改动被指向的 skill；要点与原文冲突时以原文为准。
-
-## 触发方式
-
-以下任一形式视为命中：
-
-1. 消息以 `/` 加短语开头，例如 `/视觉`、`/腾讯文档`。
-2. 消息以「快捷指令」开头并跟短语，例如「快捷指令 测试」。
-3. 消息只有「快捷指令」「快捷短语」「快捷短语列表」「skill 有哪些快捷指令」——输出下方「短语总表」。
-
-短语与表格第一列完全一致才算命中；不做模糊联想，不做同义词扩展。
+用户发送 /短语、以“快捷指令”开头查询某项，或索要快捷列表时使用。精确匹配下表短语；消息带具体工作任务时仍按主入口的触发规则执行，不能把“查询总结规则”误当成实际文章总结。
 
 ## 输出规则
 
-1. 格式固定：首行 `【/短语】→ src/skills/<name>/SKILL.md`，随后按序号列出要点，每条一行。
-2. 每个短语最多 5 条要点，只写约束与禁止项，不写背景、出处、举例。
-3. 末行固定输出：`要点仅供快速查阅，执行任务前仍须完整阅读 <路径>。`
-4. 用户明确要求「全文」时，直接输出对应 `SKILL.md` 原文，不改写、不省略。
-5. 一条消息含多个短语时，按出现顺序逐条输出；相互冲突时以 `cookie-data-protection` > `convention-skill` > 其他 skill 的顺序取上位，并单列一行说明冲突。
-6. 短语未登记时：不猜测、不套用相近条目，列出最接近的 2—3 个已登记短语供选择。
-7. 输出要点不构成强制阅读的替代：命中后若要实际执行任务，仍须按对应 skill 的触发条件完整阅读。
-8. 本 skill 只做查阅与分发；输出要点不触发推送、发布、打包、版本递增、定时任务安装或腾讯文档写入。
+1. 先读目标主入口与本次选中的 reference，直接从当前原文提炼，最多 5 条要点；本文件不保存规则摘要副本或固定条数 / 旧版本状态。
+2. 首行标明“/短语 → 实际文档路径”，后附最多五条核心限制；末尾提醒“要点不替代执行任务前的完整阅读”。用户要全文时给实际目标文档全文，不凭旧摘要补写。
+3. 只要列表时输出下表；多个短语按出现顺序处理。未登记则说明，并提供最接近的已登记项，不擅自新增同义词。
+4. 快捷查询不触发 push、打包、改版本、tag / Release、任务安装、登录、数据写入或修改技能；携带具体行动请求时，其授权范围与保护规则仍逐项判断。
+5. 优先级按真实 Cookie 保护 → 总约定 → 任务主规则处理，实际用户授权不能由历史记录或摘要推定；冲突需要报告，不用快捷词绕开。
 
-## 短语总表
+## 唯一路由表
 
-| 快捷短语 | 目标 skill | 一句话定位 |
+旧名仍可跳转，维护位置已经合并到目标主目录；实际执行时先读对应 SKILL.md 再读分支 reference。单独导出 / 复制兼容旧目录时须同时携带对应主目录和依赖，不能只带转交页。
+
+| 快捷短语 | 当前维护位置（src/skills/ 下） | 定位 |
 | --- | --- | --- |
-| `/约定` | `convention-skill` | 项目强制约定总纲（15 条） |
-| `/网络` | `convention-skill` | GitHub 访问顺序：直连 → 代理 → 其他 |
-| `/管理入口` | `convention-skill` | 管理器 / 中心 / 面板的分级与登记 |
-| `/Cookie保护` | `cookie-data-protection` | 已存真实 Cookie 绝对禁改 |
-| `/登录` | `cookie-manager` | 统一登录入口与只读取用 |
-| `/核心模块` | `recording-toolbox-core` | 录播工具箱八个核心模块保护 |
-| `/分层` | `layering-contract` | 五层架构与依赖方向 |
-| `/平台适配` | `platform-adapter-policy` | Adapter 契约与回退策略 |
-| `/安全` | `security-baseline` | 密钥、输入、文件、网络、依赖基线 |
-| `/运行中` | `running-instance-guard` | 软件运行中禁止关闭 / 结束进程 |
-| `/数据` | `data-lifecycle` | 存储、迁移、去重、备份 |
-| `/出图` | `image-output-spec` | 程序生成图片的版式与令牌 |
-| `/视觉` | `ui-visual-spec` | 主题、颜色、字号、布局、页签层级、按钮、溢出、下拉、图标 |
-| `/交互` | `ui-interaction-spec` | 弹窗、表格、状态反馈、长任务、表单、文案 |
-| `/腾讯文档` | `tcdoc-sync-scope` | 腾讯文档可写表白名单 |
-| `/总结文章` | `summarize-article` | 文件总结入口与前置阅读 |
-| `/直播总结` | `fengming-livestream-summary` | 直播转录纠错与固定模板 |
-| `/更新发布` | `summarize-update` | 质量闭环与版本发布流程 |
-| `/双版本` | `release-editions` | 标准版 / FULL 内置版双形态打包 |
-| `/并行` | `agent-coordination` | 多 Agent / 并行协作约束 |
-| `/测试` | `testing-quality-gates` | 测试层级与质量门禁 |
-| `/测试清理` | `test-cleanup` | 任务完成后删除测试文件与测试缓存；烟测文件固定放 `_smoking/` |
-| `/隔离测试` | `isolated-testing` | 默认隔离实例测试；接入真实实例需申请；测试后必须还原数据 |
-| `/功能说明` | `software-feature-guide` | 各页面功能唯一说明处 |
-| `/WebUI同步` | `webui-sync` | 桌面功能变化后四层同步到 WebUI |
-| `/shaman` | `shaman-jobs` | 可选 persona，非强制 |
-| `/快捷指令` | 本 skill | 输出本表 |
+| `/约定` | [convention-skill/SKILL.md](../convention-skill/SKILL.md) | 现行 17 条约定与任务路由 |
+| `/网络` | [convention-skill/references/git-workflow.md](../convention-skill/references/git-workflow.md) | 约定 15；逐档网络与远端保护 |
+| `/管理入口` | [convention-skill/references/product-boundaries.md](../convention-skill/references/product-boundaries.md) | 约定 9—12、17；账户 / 任务 / 安装 / 备份入口 |
+| `/Cookie保护` | [cookie-data-protection/SKILL.md](../cookie-data-protection/SKILL.md) | 真实 Cookie 绝对保护 |
+| `/登录` | [cookie-manager/SKILL.md](../cookie-manager/SKILL.md) | 统一认证接口与已有实现边界 |
+| `/核心模块` | [recording-toolbox-core/SKILL.md](../recording-toolbox-core/SKILL.md) | 八模块具体授权与影响范围 |
+| `/分层` | [layering-contract/SKILL.md](../layering-contract/SKILL.md) | 五层与横切，按需读架构参考 |
+| `/平台适配` | [layering-contract/references/platform-adapter-policy.md](../layering-contract/references/platform-adapter-policy.md) | 平台契约、回退与错误分类 |
+| `/安全` | [security-baseline/SKILL.md](../security-baseline/SKILL.md) | 密钥 / 文件 / 网络 / 依赖 / 打包 |
+| `/运行中` | [testing-quality-gates/references/running-instance-guard.md](../testing-quality-gates/references/running-instance-guard.md) | 用户实例保护与隔离进程收尾 |
+| `/数据` | [layering-contract/references/data-lifecycle.md](../layering-contract/references/data-lifecycle.md) | 数据 owner / primary / derived / 迁移 |
+| `/出图` | [ui-visual-spec/references/generated-images.md](../ui-visual-spec/references/generated-images.md) | 程序输出图，非 AI 图像生成 |
+| `/视觉` | [ui-visual-spec/references/screen-visual.md](../ui-visual-spec/references/screen-visual.md) | 主题 / 排版 / 布局 / 组件 |
+| `/交互` | [ui-visual-spec/references/interaction.md](../ui-visual-spec/references/interaction.md) | 弹窗 / 表格 / 四态 / 表单 / 文案 |
+| `/腾讯文档` | [tcdoc-sync-scope/SKILL.md](../tcdoc-sync-scope/SKILL.md) | 现行两表白名单与写入门禁 |
+| `/总结文章` | [fengming-livestream-summary/SKILL.md](../fengming-livestream-summary/SKILL.md) | 文件门槛、全文纠错与固定模板 |
+| `/直播总结` | [fengming-livestream-summary/SKILL.md](../fengming-livestream-summary/SKILL.md) | 直播输入与领域规范 |
+| `/更新发布` | [summarize-update/SKILL.md](../summarize-update/SKILL.md) | 总结 / 推送 / 完整发布动作区分 |
+| `/双版本` | [summarize-update/references/release-editions.md](../summarize-update/references/release-editions.md) | 标准 / FULL 产物与验收 |
+| `/并行` | [convention-skill/references/coordination.md](../convention-skill/references/coordination.md) | 文件所有权 / WIP / 合回 |
+| `/测试` | [testing-quality-gates/SKILL.md](../testing-quality-gates/SKILL.md) | 风险对应的质量门禁与验证 |
+| `/测试清理` | [testing-quality-gates/references/test-cleanup.md](../testing-quality-gates/references/test-cleanup.md) | 先测后清，本任务与并行边界 |
+| `/隔离测试` | [testing-quality-gates/references/isolated-testing.md](../testing-quality-gates/references/isolated-testing.md) | 独立程序副本与受控真实接入 |
+| `/功能说明` | [software-feature-guide/SKILL.md](../software-feature-guide/SKILL.md) | 按页面读取使用说明 |
+| `/WebUI同步` | [layering-contract/references/webui-sync.md](../layering-contract/references/webui-sync.md) | 桌面变化的四层接入和三层验收 |
+| `/shaman` | [convention-skill/references/craftsmanship.md](../convention-skill/references/craftsmanship.md) | 默认不读的可选风格 |
+| `/快捷指令` | [quick-commands/SKILL.md](../quick-commands/SKILL.md) | 本映射表 |
 
-## 各短语要点
-
-### /约定 → `convention-skill`
-
-1. 任何操作前先完整读完本 skill 与任务相关 skill，未读不得动手。
-2. 更新前按 `git status` → 备份提交 → 确认 `origin` → `fetch` → 比较领先；分叉先列差异并询问，禁止强推。
-3. 存在未备份改动时先本地提交备份；每次任务完成后必须本地提交一次。
-4. 每次任务结束写唯一当日报告 `Progress/YYYY-MM-DD_当日总结.md`，同一天只保留一份，写完再连同改动提交。
-5. skill 只用 Markdown（`SKILL.md` + 可选 `.md`），禁止附带脚本或机器可读配置。
-6. GitHub 动作按约定 15：先直连（清空代理）→ 失败回退代理 → 最后才用其他方式并告知用户。
-
-### /网络 → `convention-skill`（约定 15）
-
-1. 第一档直连：`git -c http.proxy= -c https.proxy= push origin main`，并清空 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY`。
-2. 直连失败才回退代理，候选顺序：用户指定或 `HTTPS_PROXY` → 7890 → 10809 → 12450 → `git config http.proxy`；切档前先探测端口。
-3. 前两档都失败才用其他方式（交回宿主执行、SSH over 443、只读镜像），且先告知用户；镜像不用于 push。
-4. 一次只升一档、记录真实错误；不把代理长期写进 `.git/config`，三档都失败即停止并报告。
-
-### /管理入口 → `convention-skill`
-
-1. 只有跨页面 + 单一事实来源 + 独立生命周期，才可叫「管理器」；页面内只叫设置 / 列表 / 面板。
-2. 「中心」只聚合既有能力，必须复用既有服务与数据，不得持有第二套数据、备份或定时入口。
-3. 新建入口先判定能否并入 L0 侧栏常驻 / L1 跨页中心 / L2 页面内面板，不默认新建页面。
-4. 新增入口或数据实体必须在 `software-feature-guide` 登记，并在当日报告写明判定依据与不并入现有层的理由。
-5. 命名不得与约定 9 / 10 / 11 冲突：登录、定时、依赖安装各有唯一入口。
-
-### /Cookie保护 → `cookie-data-protection`
-
-1. 最高优先级禁令：已保存的真实 Cookie 原值、平台/账号归属、保存时间、加密表示与存储文件全部禁改。
-2. 无例外：覆盖、清空、删除、迁移、重加密、整份改写凭据文件一律禁止，不接受「确认后修改」。
-3. 禁止经登录、扫码、快照、导入恢复、`Set-Cookie` 回写等间接方式改动，也不得输出到日志、报告、发行包或 Git。
-4. 业务可通过确认无写入副作用的接口只读使用现有凭据，不转储、不回写。
-5. 写入/清除/迁移类验证只允许新建独立临时目录 + 虚构凭据。
-
-### /登录 → `cookie-manager`
-
-1. 全项目唯一登录入口是「Cookie 管理」，页面不得自建管理器、登录窗口或第二套凭据列表。
-2. 页面文案、提示、日志不得出现「Cookie」等凭据字样，也不得展示凭据文件名或路径。
-3. 业务只通过管理层接口只读获取当前登录态，不读凭据文件、不硬编码、不各页面独立保存。
-4. 总开关、失效、清除与账号变化必须对全部调用方一致生效。
-5. 先服从 `/Cookie保护`：真实凭据只读使用，写入能力仅对隔离虚构数据验证。
-
-### /核心模块 → `recording-toolbox-core`
-
-1. 八个核心：自动整理、视频操作、命名投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移。
-2. 默认禁改入口、路由、别名、控件、参数、算法、输出命名、错误处理与任务取消行为。
-3. 共享代码（主窗口路由、`toolbox_common`、`base.py`、`config_manager` 等）间接改变核心同样受限。
-4. 允许只读分析、写保护文档与本地备份；需要改动先列出模块、文件、拟改内容与影响并取得本次明确授权。
-5. 授权只针对本次具体范围，不自动扩大，也不永久解除保护。
-
-### /分层 → `layering-contract`
-
-1. 五层：L1 入口/任务编排 → L2 UI 表现 → L3 应用服务/用例 → L4 平台适配/领域引擎 → L5 基础设施/数据，外加横切层。
-2. 只允许上层依赖下层；禁止 UI 直接承载业务逻辑、引擎反向依赖 UI。
-3. 禁止数据层双写、第二套凭据入口或第二套定时入口。
-4. 新增代码按职责放层，跨层调用走已有接口，不绕过层级直连。
-
-### /平台适配 → `platform-adapter-policy`
-
-1. 平台调用统一走 Adapter 契约与能力矩阵，页面不得直连平台协议。
-2. HTTP 优先，失败时有界回退到浏览器通道，禁止无限重试。
-3. 超时、重试、限流与错误分类统一，签名与反爬按平台隔离。
-4. 新平台接入按清单补齐 adapter、能力声明与契约测试 fixture。
-
-### /安全 → `security-baseline`
-
-1. 密钥分级保存，日志脱敏，不输出凭据、完整路径与敏感请求。
-2. 防路径穿越、ZIP Slip、命令注入、SSRF。
-3. 文件导入导出、ZIP、`subprocess`、网络请求都要有边界校验与来源限制。
-4. 依赖与发布产物需扫描；真实 Cookie 部分另按 `/Cookie保护` 执行。
-
-### /数据 → `data-lifecycle`
-
-1. 一个存储一个写入方，`primary` 与 `derived` 分清，派生数据可重建。
-2. schema 版本化，迁移前备份、可回滚、可重复执行。
-3. 去重键归属明确，导出采用原子写入。
-4. 缓存类派生库删除或换模型后必须能自动重建，不得当作事实来源。
-
-### /出图 → `image-output-spec`
-
-1. 程序生成图片统一走共享渲染模块与设计令牌，1080 px 基准宽度、固定页头页脚。
-2. 颜色、字体、字号、数字格式、文件命名、PNG/JPG 参数统一，禁止私有色板与第二套字体表。
-3. 用户自定义封面、裁切图、截图与下载图例外，不受本规范约束。
-4. 渲染阶段不发网络请求，输出确定性可复现。
-
-### /视觉 → `ui-visual-spec`
-
-1. `theme.py` 是唯一色板来源，页面不得自带第二套配色或硬编码颜色。
-2. 只用 palette 角色与允许的字号阶梯，禁止自造字号、间距、圆角。
-3. 结构性图标统一用 `navigation.line_icon` 线形图标；UI 文案与只读日志去 emoji。
-4. 主题切换铁律：切浅/深色不得白块、黑字黑底或错位；改 UI 必须过四条验证路径。
-5. 页面顶端不再显示页面标题与说明文字，身份由顶栏与侧栏提供。
-6. 布局：页面四边留白 16，卡片间距 12，卡片内 12；页签最多四级，三级/四级不得长得像二级；边框 1px（页签选中 2px 下边线）。
-7. 工具栏一行一件事、主操作最右、单行 ≤5 个按钮；放不下按「更多 → 换行 → 缩文案」，禁止横向滚动与文字截断。
-8. 同组下拉等宽、有最小宽度、不响应滚轮改值；数字框、滑条、页签同样不响应滚轮；新图标先查 4.4 清单再画。
-
-### /交互 → `ui-interaction-spec`
-
-1. 弹窗只用于「不回答就不能继续」；长任务、配置、要边看主界面边操作的，用非模态独立窗口。
-2. 按钮区右对齐，顺序「危险 … 取消 主操作」；Esc 取消，破坏性操作不绑 Enter。
-3. 破坏性操作必须二次确认，写清对象、影响，默认按钮是取消。
-4. 表格：列宽自适应/重置走 `table_columns`、长文本省略 + tooltip、排序走 `table_sort`、分页文案 `第 x / y 页 · 共 n 条`。
-5. 空态写「为什么空 + 下一步」，禁止只写「暂无数据」；加载不遮挡主界面。
-6. 长任务必须有可见进度条、可取消、完成说明结果去向；成功用 toast 不弹窗。
-7. 错误三段式：做什么失败 + 原因 + 下一步；不出现堆栈、路径、凭据。
-8. 表单左标签右控件，必填 `*`，失焦校验格式、提交校验完整性，错误显示在控件下方。
-9. 按钮与状态词按词表：抓取/开始/停止/暂停/重试/导出/保存/删除；未开始/进行中/已完成/失败/已取消/已跳过。
-
-### /腾讯文档 → `tcdoc-sync-scope`
-
-1. 只允许写两张表：「官方动态」`ss_h2uh2s`、「直播记录」`ss_1xgstm`。
-2. 「线下活动」「完整歌曲」「歌曲片段」、奖讯热榜、周边图鉴、更新日志、图集数据库、囧菌百科等一律禁止编辑。
-3. 任何同步、写回、表格增删改、导出覆盖前，逐项核对 `doc_key` 与 `tab_id`，不通过立即停止并询问。
-4. 不得以「顺手」「测试」「只改一行」为由越界。
-
-### /总结文章 → `summarize-article`
-
-1. 必须携带待总结文件或可访问路径；缺文件、不可读、目标不明时先提示补充，不猜正文。
-2. 先完整阅读 `fengming-livestream-summary` 的主指令、纠错表、分类库与输出模板，再处理全文。
-3. 先完整提取与纠错，再按固定维度与模板总结，不能只看文件名或开头。
-4. 总结类工作默认不推送、不发布；提及或否定 push 都不构成授权。
-
-### /直播总结 → `fengming-livestream-summary`
-
-1. 数据源按优先级，优先读离线数据库索引，按需取用，不整库通读。
-2. 一件事一条，禁止合并；先判级再起名，分类名称必须具体。
-3. 维度与行序固定（1—7 级），纯文本模板，禁止调换、合并或删减。
-4. 全量纠错优先，专有名词按固定列表匹配，禁止错误纠错与随意改写。
-
-### /更新发布 → `summarize-update`
-
-1. 先判排除项：总结文章、工作总结、直播总结、仅「总结此次更新」都不触发推送与发布。
-2. 发布流程顺序：推送本地提交 → 递增版本号 → 打包 → 更新 README → 推送 GitHub → 创建 Release。
-3. 版本号与 README 更新格式固定，不跳步、不合并步骤；所有 GitHub 动作按约定 15（直连 → 代理 → 其他）。
-4. 安全红线：不强推、不覆盖远端历史；未命中排除项才按全文流程执行。
-
-### /双版本 → `release-editions`
-
-1. 共用一份代码、一个版本号、一个 AppId、一个 Release；FULL 版只作为额外资产。
-2. FULL 只内置 `base` 转写模型与 headless shell，不内置完整 Chromium、不复制本机 `models/`。
-3. node、CLIP 模型、Playwright 内核必须有「包内优先」的查找回退，否则 FULL 仍提示缺依赖。
-4. 资产按 edition 严格筛选，标准版不得匹配到 `_Full_` 安装包；FULL→标准 需卸载重装。
-
-### /并行 → `agent-coordination`
-
-1. 开工前声明文件与模块所有权，共享文件串行修改。
-2. 未完成的改动按路径备份，提交按主题拆分。
-3. 禁止破坏性 Git 操作（强推、`reset --hard`、清空他人改动）。
-4. 冲突或分叉先列差异再询问，不自动合并、不覆盖其他任务成果。
-
-### /测试 → `testing-quality-gates`
-
-1. 层级：Domain/L3 单测、Adapter 契约测试、L5 集成测试、L2 offscreen 冒烟 + 手工验证。
-2. Bug 修复必须补回归测试，不能只改代码。
-3. 测试数据隔离，不碰真实 Cookie、真实网络或生产数据库；需要接入用户实例或真实数据时按 `/隔离测试` 申请、快照并还原。
-4. 提交前运行适用门禁命令，报告中写实际结果，不虚报通过项。
-
-### /测试清理 → `test-cleanup`
-
-1. 先按 `/测试` 完成本次验证并记录真实结果，再删除 `tests/` 全部测试文件与测试缓存；不得为清理跳过测试。
-2. 删除范围：`tests/` 整目录 + 测试缓存 + 用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；不保留空目录。烟测脚本/harness/临时数据/过程截图固定放根目录 `_smoking/`（已忽略、不提交不推送），不要散落；最终证据截图才放 `Progress/ui/<日期>/`。
-3. 每个待删路径先核对 `git ls-files` 为空；被跟踪的本地数据文件只 `git rm --cached` 移出版本跟踪并补忽略规则，不删本地文件。
-4. 不清理用户数据与运行产物（`config/`、`download/`、`logs/`、`models/`、`Progress/`、构建产物等）；备份/快照目录经用户确认后移入回收站。
-5. 文件被占用时停止、不结束进程；清理后更新当日报告并本地提交，写明范围、释放空间与残留。
-
-### /隔离测试 → `isolated-testing`
-
-1. 测试 / 验证 / 演示默认跑隔离版本：项目副本 + 独立 `config/`、`download/`、`logs/`、独立端口；不要在真实根目录启动，不连接用户实例。
-2. 隔离副本不复制真实 Cookie、真实主播列表或真实数据库；启动前确认 `get_config_dir()` 指向副本。
-3. 接入用户当前实例 / 真实数据必须先申请：写清范围、数据清单、快照、还原方案、风险与时长，取得当次明确同意。
-4. 真实写入前快照并记 SHA-256；测试后按快照整文件还原并校验（直播录制核对主播数量、房间号、备注、顺序与录制设置）。
-5. 禁止用「删掉测试主播 / 清理测试项」代替还原；还原失败或被运行中实例覆盖时停止并如实报告。
-
-### /运行中 → `running-instance-guard`
-
-1. 软件在运行（进程 / 窗口 / 托盘 / 端口 / 录制采集中）时，不允许关闭窗口、结束或重启进程。
-2. 需要验证改动只能新建实例：新进程、新端口、独立临时目录。
-3. 重启交给用户操作；用户明确授权时也要先提示录制 / 采集的损坏风险。
-4. 禁止覆盖、替换、删除运行中的 exe、dll 与被占用的配置目录。
-
-### /功能说明 → `software-feature-guide`
-
-1. 页面功能的唯一说明处；软件内已移除所有「功能介绍 / 使用说明 / 使用教程」入口。
-2. 按「页面索引」查用途、操作入口、保存位置与限制。
-3. 新增或调整页面功能时同步更新本 skill，不回头加页面内帮助控件或标题头部。
-
-### /WebUI同步 → `webui-sync`
-
-1. 桌面端新增或改动页面、用例、配置键、写操作、导出、行为修复后，必须同一批接入 WebUI，不允许只做桌面。
-2. 四层缺一不可：`toolbox/webui_*.py`（Qt-free）→ `webui/services/*.py` → `webui/app.py` 路由 → `static/app.js` + `index.html` 导航（名称/分组照 `page_index.py`）。
-3. 业务规则复用共享模块，配置与数据与桌面同源，不写第二套实现或第二份数据。
-4. 只有自绘画布、本机原生窗口或进程启停、桌面进程内状态可列桌面专属；须登记理由并保留 `renderDesktopOnly` 说明页。
-5. 四层同一 commit，提交后 `git show --stat` 核对；验收按「页面接入 / 功能可执行 / 布局对齐」三层分开报。
-
-### /shaman → `shaman-jobs`
-
-1. 可选 persona，非强制，默认不读，用户点名才用。
-2. 取向：求至臻之境、删繁就简、像素级完美、打磨到极致。
-3. 仅影响表达与打磨标准，不解除任何项目约定与保护条款。
-
-### /快捷指令 → 本 skill
-
-1. 输出上方「短语总表」全部条目，不附加要点。
-2. 新短语只在用户明确要求时追加，并保持与现有短语不重名。
-
-## 维护规则
-
-1. 新增或重命名 `src/skills/` 下的 skill 时，同步更新「短语总表」与该 skill 的要点段；删除 skill 时一并移除条目。
-2. 短语保持短、可键入、与 skill 职责对应，不使用标点与其他条目重名。
-3. 要点只提炼该 skill 已写明的约束，不新增规则、不弱化禁令；原文修改后要点随之核对。
-4. 本 skill 只使用 Markdown，不附带脚本或配置；新增短语不需要运行任何校验程序。
+应用内技能发现仍会显示 25 个旧 ID；这表示 13 个主入口 + 12 个兼容入口，不等于维护 25 套正文。新增技能类型或路由时同步 AGENTS.md、主技能描述与本表，不再复制长规则摘要。

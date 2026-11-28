@@ -1,230 +1,48 @@
-# 项目级强制约定（所有 Agent 必读）
+# 项目级强制入口（所有 Agent 必读）
 
-> 本文件是项目级的必读入口。任何 Agent（AI 编程助手、子 Agent、自动化任务）在执行任何操作前，必须先完整阅读本文件及所引用的约定 skill，阅读后方可操作。
+操作前完整阅读本文件、[总约定](src/skills/convention-skill/SKILL.md)、[真实 Cookie 绝对保护](src/skills/cookie-data-protection/SKILL.md)；任何更新前再读 [核心八模块保护](src/skills/recording-toolbox-core/SKILL.md)。然后按任务加载下表主入口及其相关 references，已读且未变化的不重复读取。
 
-## 约定 skill
+本文件只维护入口与不可忽略边界；17 条约定的现行正文及唯一细则在 convention-skill，不再复制整套流程。用户明确要求规则修订时可在指定范围合并、更新，不能把技能整理视为应用改动或线上写入授权。
 
-完整内容见 [src/skills/convention-skill/SKILL.md](src/skills/convention-skill/SKILL.md)。
+## 主入口与兼容路由
 
-## Skill 分类索引
-
-| 类别 | Skill | 触发 |
+| 主入口 | 触发与内容 | 保留的旧名兼容入口 |
 | --- | --- | --- |
-| 总约定 / 流程 | `convention-skill`、`layering-contract`、`agent-coordination`、`testing-quality-gates`、`test-cleanup` | 所有操作；新增/重构/跨层；并行编辑；代码修改/测试；任务完成后清理测试文件、缓存与根目录临时产物 |
-| 桌面 / Web 同步 | `webui-sync` | 桌面端新增或改动功能后同步到 WebUI：四层接入、桌面专属白名单、同批提交与三层验收 |
-| 安全 / 凭据 | `cookie-data-protection`、`cookie-manager`、`security-baseline` | Cookie/登录；其他密钥、文件、网络、依赖、打包 |
-| 运行保护 | `running-instance-guard`、`isolated-testing` | 软件运行中禁止关闭 / 结束进程；测试默认隔离实例，接入真实实例需申请，测试后必须还原数据 |
-| 数据 / 平台 | `data-lifecycle`、`platform-adapter-policy` | 存储/迁移/备份；平台接口/回退 |
-| 视觉 / 交互 / 输出 | `ui-visual-spec`、`ui-interaction-spec`、`image-output-spec` | 屏幕 UI 外观与布局；弹窗/表格/状态/表单/文案；导出图/报表图/封面图 |
-| 业务领域 | `recording-toolbox-core`、`tcdoc-sync-scope`、`fengming-livestream-summary`、`summarize-article`、`summarize-update` | 对应领域任务 |
-| 说明文档 | `software-feature-guide` | 需要了解页面功能、操作入口与使用说明时 |
-| 快捷指令 | `quick-commands` | 用户发送 `/短语`、要求短语清单或快速查阅某 skill 要点时 |
-| 可选 persona | `shaman-jobs` | 非强制，默认不读 |
+| [convention-skill](src/skills/convention-skill/SKILL.md) | 所有操作；Git / 报告 / 入口约定；并行时读 coordination | agent-coordination、shaman-jobs（仅可选风格） |
+| [cookie-data-protection](src/skills/cookie-data-protection/SKILL.md) | 所有操作前必读；真实 Cookie 无例外保护 | — |
+| [cookie-manager](src/skills/cookie-manager/SKILL.md) | 应用账户、认证接口、登录能力与隔离验证 | — |
+| [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md) | 代码改动 / 测试；隔离、实例保护、清理按分支阅读 | test-cleanup、isolated-testing、running-instance-guard |
+| [layering-contract](src/skills/layering-contract/SKILL.md) | 新增 / 重构 / 跨层；数据、平台、桌面→WebUI 同步按分支阅读 | data-lifecycle、platform-adapter-policy、webui-sync |
+| [security-baseline](src/skills/security-baseline/SKILL.md) | 非 Cookie 密钥、日志、文件、ZIP、subprocess、网络、依赖、打包 | — |
+| [ui-visual-spec](src/skills/ui-visual-spec/SKILL.md) | UI 视觉、交互 / 文案、程序导出图按分支阅读，使用现有共享组件与令牌 | ui-interaction-spec、image-output-spec |
+| [fengming-livestream-summary](src/skills/fengming-livestream-summary/SKILL.md) | 封茗囧菌转录 / 文件总结；纠错、分类、数据库与纯文本模板 | summarize-article |
+| [summarize-update](src/skills/summarize-update/SKILL.md) | 明确推送 / 发布动作；标准 / FULL 打包按分支阅读 | release-editions |
+| [software-feature-guide](src/skills/software-feature-guide/SKILL.md) | 页面功能、入口、路径与限制，按页面读 references | — |
+| [tcdoc-sync-scope](src/skills/tcdoc-sync-scope/SKILL.md) | 腾讯文档同步 / 写回 / 表格修改 / 导出覆盖前必读 | — |
+| [recording-toolbox-core](src/skills/recording-toolbox-core/SKILL.md) | 更新前核对八模块直接 / 间接影响与具体授权 | — |
+| [quick-commands](src/skills/quick-commands/SKILL.md) | /短语、要点或技能路由查询，仅读原文生成摘要 | — |
 
-分类只是索引；实际强制阅读以对应 skill 的触发条件为准。业务领域 skill 不因本表新增而改变原有授权范围。
+当前为 13 个主入口、12 个旧名兼容入口，原有 25 个 SKILL.md 路径保留。旧名只转交，不再维护同一份规则；单独导出旧目录需同时携带对应主目录和依赖。本文不修改技能导出程序。
 
-快捷指令见 [src/skills/quick-commands/SKILL.md](src/skills/quick-commands/SKILL.md)：`/约定`、`/Cookie保护`、`/登录`、`/核心模块`、`/分层`、`/平台适配`、`/安全`、`/数据`、`/出图`、`/视觉`、`/交互`、`/腾讯文档`、`/总结文章`、`/直播总结`、`/更新发布`、`/双版本`、`/并行`、`/测试`、`/测试清理`、`/隔离测试`、`/功能说明`、`/WebUI同步`、`/网络`、`/shaman`。它只输出目标 skill 的核心要点，**不替代**强制阅读；实际执行任务前仍须完整阅读对应 skill，冲突时以原文为准。
+## 开工与收尾
 
-软件内不再提供「功能介绍 / 使用说明 / 使用教程」按钮或浮层，页面顶端也不再显示页面标题与说明文字（页面身份由顶栏和侧栏提供）；页面功能说明统一维护在 [software-feature-guide](src/skills/software-feature-guide/SKILL.md)，新增或调整页面功能时同步更新该 skill，不重新添加页面内帮助控件或标题头部。
+仓库更新前完整读 [Git / Markdown / 日报细则](src/skills/convention-skill/references/git-workflow.md)：status、备份本任务稳定 WIP、核对 origin、按直连→代理→其它逐档成功 fetch、祖先关系及左右独有提交比较。远端领先只快进，本地领先保留，分叉展示差异后询问，不强推。非 main / worktree 先确认基线与目标映射。
 
-## Cookie 数据绝对保护 skill（强制中的强制，所有操作前必读）
+并行工作读 [协作细则](src/skills/convention-skill/references/coordination.md)：一个文件一个 writer，共享文件串行更新；不要擅自提交、覆盖、清理他人正在变化的 WIP，可使用独立干净 worktree。完成后先合并北京时间唯一日报 Progress/YYYY-MM-DD_当日总结.md，再按明确路径本地提交并报告哈希；不自动推送。
 
-完整内容见 [src/skills/cookie-data-protection/SKILL.md](src/skills/cookie-data-protection/SKILL.md)。**所有 Agent 与自动任务绝对不允许改动 Cookie 管理器已保存的真实 Cookie。此条是项目内最高优先级的数据保护禁令，不设置临时授权、确认后覆盖、测试、修复或迁移例外。** 禁止直接/间接写入、覆盖、删除、清空、刷新、迁移、重新加密或修改其保存状态；既有登录、自动同步、备份、清理及核心模块授权均不能放宽本禁令。
+项目技能只允许 Markdown（SKILL.md + 可选 .md 子文档）；用户对当次脚本 / 结构化配置的明确要求才构成例外，不沉淀为默认。普通文档校验不启动应用，不清理其它代码任务的测试或缓存。
 
-## 运行中实例保护 skill（强制阅读）
+## 必须守住的范围
 
-完整内容见 [src/skills/running-instance-guard/SKILL.md](src/skills/running-instance-guard/SKILL.md)。**只要本软件还在运行（窗口、托盘图标、端口占用、正在录制 / 采集 / 同步），Agent 不得关闭窗口、结束或重启进程，也不得覆盖、替换、删除运行中的 exe 与目录。** 需要验证改动时只能新建实例（新进程、新端口、独立临时目录）；重启由用户自己操作，或用户对本次操作明确授权且已提示录制 / 采集中断风险。
+- **真实 Cookie**：保存值、归属 / 时间、加密表示、真实存储、快照 / 旧副本均禁止 Agent 修改、删除、迁移、刷新或复制到测试环境，无测试 / 修复 / 确认后覆盖例外。整文件仅改总开关也禁止；意外变化停止，不自行回写或回滚。
+- **用户运行中实例**：默认不得关闭、结束或重启，不覆盖运行中的 exe / 目录。本次具体授权且已提示录制 / 采集中断风险才可按实例保护执行。Agent 自建且确认完全隔离的进程可正常收尾，不误杀共享进程。
+- **测试与真实数据**：默认程序副本 + 独立 config/download/logs/端口 + 虚构数据，本项目无 --work-dir。真实目录默认只读，接入指定非凭据数据或真实实例须本次列范围、快照与 SHA-256、整文件还原方案并获同意；失败或还原不完整停止写入报告。真实 Cookie 永无例外。烟测、harness、临时数据与过程图只放 _smoking/；最终证据才放 Progress/ui/<日期>/。测试后先按质量门禁验证再清理本任务拥有的测试，tests 不入库，不清他人活动文件。
+- **核心八模块**：自动整理、视频操作、命名投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移，含入口 / 路由 / 页面 / 引擎与共享代码的间接影响，须有本次具体模块及范围授权。全局优化、重构、清理、登录统一不构成授权；规则维护只改文档。
+- **腾讯文档**：唯一常设写入上限为《封茗囧菌数据汇总库》doc_key DRnd3bkhkQUR1aEJr 的 官方动态 ss_h2uh2s / 直播记录 ss_1xgstm；动作、记录与门禁仍按本次授权核对。完整歌曲、线下活动、歌曲片段、周边、图集数据库及其它表 / 文档均禁写。旧追加授权、正确字段、已有按钮、只新增 / 追加不能扩大范围；越界后停止报告，不自动再次写入或回滚。
+- **统一管理入口**：应用账户统一总管理器，业务页无凭据控件 / Cookie 字样 / 登录引导；计划只在任务页经 task_center，依赖安装只在全局设置。配置 / 资产备份恢复只在全局设置，网盘增量上传仍在网络库。宿主开发工具可只读使用既有原生认证，不复制或迁移应用凭据。
+- **UI 与跨端**：主题使用 theme.py 唯一色板；视觉 / 交互 / 表格 / 图片各按主入口对应 reference，新增功能说明同步 guide。页面不恢复帮助按钮 / 浮层或顶部标题说明。桌面可用能力变化按 layering 的 Web 同步 reference 判定四层接入或现有例外，三层验收如实报告；技能整并不授权改核心模块。
+- **总结与发布**：实际“总结文章”须可读取文件，纠错 / 分类 / 模板完整读取，数据库按索引取用；维护关键词不触发总结。普通总结不 push / 打包 / 改版本 / tag / Release。明确推送仅同步指定代码，明确完整发布才按发布流程，不扩张动作。
 
-## 隔离测试与数据还原 skill（测试 / 验证时强制阅读）
+## 快捷指令
 
-完整内容见 [src/skills/isolated-testing/SKILL.md](src/skills/isolated-testing/SKILL.md)。**测试与验证默认必须运行隔离版本的程序：独立程序副本、独立 `config/` / `download/` / `logs/` 与独立端口，不连接用户正在使用的实例，不读写真实配置、数据库与下载目录。** 确需接入用户当前实例或真实数据时，必须先说明范围、数据清单、快照与还原方案并取得当次明确同意；测试前必须对受影响数据做快照与哈希清单，测试后必须按快照整文件还原并校验（尤其 `config/live_record.json` 的主播列表、备注与录制设置），禁止用「删掉测试项」代替还原。还原失败、被运行中实例覆盖或未完成时，停止写入并如实报告。真实 Cookie 不因接入授权而放宽，仍按约定 7 执行。
-
-## 统一登录 skill（涉及账户与认证时强制阅读）
-
-完整内容见 [src/skills/cookie-manager/SKILL.md](src/skills/cookie-manager/SKILL.md)。所有需要登录的账户统一在「Cookie 管理」中管理，需要登录的功能统一通过管理层接口获取当前登录态；Cookie、Token、浏览器登录快照等按各平台认证方式接入同一管理入口。
-
-## 录播工具箱核心保护 skill（强制阅读）
-
-完整内容见 [src/skills/recording-toolbox-core/SKILL.md](src/skills/recording-toolbox-core/SKILL.md)。截图指定的八个模块是核心逻辑处理中心：自动整理、视频操作、命名投稿、音频提取、字幕转换、继续操作、日历浏览、文件迁移。任何更新前都必须阅读并核对影响范围；未经用户对本次具体模块及改动范围明确授权，不得修改其入口、页面、底层处理逻辑或经共享代码间接改变行为。
-
-## 总结文章 skill（关键词 + 文件触发）
-
-完整内容见 [src/skills/summarize-article/SKILL.md](src/skills/summarize-article/SKILL.md)。用户实际请求「总结文章」时必须携带待总结文件；先完整阅读 `src/skills/fengming-livestream-summary/SKILL.md` 及其纠错、分类和输出模板等指令，再依据文件内容生成总结。新增或讨论这个关键词的指令不算总结任务。总结类工作默认不 push，只有用户另行明确要求推送或发布才进入相应流程。
-
-## 范围约束 skill（强制阅读）
-
-腾讯文档同步的编辑范围约束见 [src/skills/tcdoc-sync-scope/SKILL.md](src/skills/tcdoc-sync-scope/SKILL.md)。
-
-- 仅允许编辑《封茗囧菌数据汇总库》的「官方动态」（`ss_h2uh2s`）与「直播记录」（`ss_1xgstm`）两张表。
-- 「线下活动」「完整歌曲」「歌曲片段」以及奖讯热榜、周边图鉴、更新日志、官方动态「图集数据库」、囧菌百科等其余全部页面与其他文档，一律禁止编辑。
-- 任何 Agent 在涉及腾讯文档同步、写回、表格增删改、导出覆盖之前，必须先完整阅读该 skill 并按其白名单逐项核对目标 `doc_key` 与 `tab_id`；核对不通过立即停止并向用户确认。
-
-## 界面视觉与主题规范 skill（涉及任何 UI 改动时强制阅读）
-
-完整内容见 [src/skills/ui-visual-spec/SKILL.md](src/skills/ui-visual-spec/SKILL.md)。浅色/深色两套主题、颜色语义、字号阶梯、背景层级、间距圆角与组件样式，以及页面四边留白、一至四级页签层级、边框宽度、工具栏与按钮排布、按钮溢出处理、下拉框总模式、图标名清单，均以该 skill 为唯一依据；`theme.py` 是唯一色板来源，页面不得自带第二套配色。凡新增或修改页面、对话框、浮层、自绘控件、富文本、图表、图标，或改动背景色、文字色、字号、布局边距、页签层级、工具栏、内联 QSS、`theme.py`，必须先阅读并逐项核对其中的禁令、铁律与验证路径。该 skill 只管屏幕 UI 视觉与布局；导出图、报表图、封面图等生成图片另见 `image-output-spec`。它不构成对核心八模块的改动授权。
-
-## 界面交互与反馈规范 skill（涉及弹窗、表格、状态、表单、文案时强制阅读）
-
-完整内容见 [src/skills/ui-interaction-spec/SKILL.md](src/skills/ui-interaction-spec/SKILL.md)。弹窗与二级窗口的形态选择、尺寸、按钮区顺序、二次确认，表格列宽/分页/空态/双击右键，加载/空/错误/禁用四态，长任务进度与取消，反馈通道（toast / 状态栏 / 行内 / 弹窗 / 日志）的选用，表单结构与校验时机，以及按钮动词与状态词表，均以该 skill 为唯一依据。凡新增或修改页面、对话框、二级窗口、表格、表单、提示与按钮文案，必须先阅读并逐项核对。该 skill 不改变业务逻辑，也不构成核心八模块的改动授权。
-
-## 分层约束 skill（新增/重构/跨层调用时强制阅读）
-
-完整内容见 [src/skills/layering-contract/SKILL.md](src/skills/layering-contract/SKILL.md)。项目按「入口/任务编排 → UI 表现 → 应用服务/用例 → 平台适配/领域引擎 → 基础设施/数据」五层 + 横切层组织；只允许上层依赖下层，禁止 UI 直接承载业务、引擎反向依赖 UI、数据层双写与第二套凭据/定时入口。该 skill 不改变既有功能，也不构成录播八模块、Cookie 或腾讯文档写入的改动授权。
-
-## 桌面端 → WebUI 同步 skill（桌面功能变化后强制阅读）
-
-完整内容见 [src/skills/webui-sync/SKILL.md](src/skills/webui-sync/SKILL.md)。桌面端新增或改动任何用户可用能力（页面、按钮、用例、配置键、写操作、导出/下载、行为修复）后，必须同一批同步到 WebUI，不允许只做桌面。同步固定四层：`src/toolbox/webui_*.py`（L3，Qt-free）→ `src/toolbox/webui/services/*.py` → `src/toolbox/webui/app.py` 路由 → `src/toolbox/webui/static/app.js` 与 `index.html`（名称、分组、顺序照 `page_index.py`）。业务规则复用共享模块，配置与数据与桌面同源，四层同一 commit，提交后 `git show --stat` 核对不漏层。仅「自绘画布 / 本机原生窗口或进程启停 / 桌面进程内状态」可列为桌面专属，须在 `software-feature-guide` 与当日报告写明理由并保留 `renderDesktopOnly` 说明页。验收按「页面接入 / 功能可执行 / 布局对齐」三层分开报告，未验证项如实标注。
-
-## 横向工程 skill（按任务触发）
-- **安全基线** [security-baseline](src/skills/security-baseline/SKILL.md)：涉及 Cookie 之外的密钥、日志脱敏、文件导入导出、ZIP、subprocess、网络请求、依赖或打包时必读。
-- **测试与质量门禁** [testing-quality-gates](src/skills/testing-quality-gates/SKILL.md)：任何代码修改、重构、Bug 修复、数据迁移或 UI 改动时必读。
-- **测试文件清理** [test-cleanup](src/skills/test-cleanup/SKILL.md)：任何代码任务验证完成后执行——删除 `tests/` 全部测试文件与测试缓存（`__pycache__`、`.pytest_cache`、`*.pyc`、覆盖率产物），以及用户明确确认的根目录临时产物（`.tmp/`、`_tmp_*`、`_smoke/`、`_probe_*`、调试 HTML、编辑器/Agent 暂存目录等）；`tests/` 已被 `.gitignore` 忽略、删除不备份；被 Git 跟踪的本地数据文件只 `git rm --cached` 移出版本跟踪、不删本地文件；备份/快照类目录经用户确认后移入回收站；不得借清理删源码、用户数据或凭据，也不得跳过测试。**所有烟测脚本、harness、临时数据与过程截图统一放根目录 `_smoking/`（已忽略，不提交、不推送），不要散落到根目录、`tests/` 或 `Progress/`；只有最终报告证据截图才放 `Progress/ui/<日期>/`。**
-- **并行协作** [agent-coordination](src/skills/agent-coordination/SKILL.md)：多 Agent/并行进程/用户同时编辑、共享文件或长任务时必读。
-- **数据生命周期** [data-lifecycle](src/skills/data-lifecycle/SKILL.md)：新增/修改数据库、存储、去重、迁移、备份、保留清理时必读。
-- **平台适配** [platform-adapter-policy](src/skills/platform-adapter-policy/SKILL.md)：新增/修改平台接口、登录、下载、回退策略时必读。
-- **双版本发布** [release-editions](src/skills/release-editions/SKILL.md)：标准版 / FULL 内置版的双形态打包与发布——FULL 版内置 FFmpeg、Playwright 内核、转写程序与模型、图识别模型、node 等依赖，做到装完即用；改 `build.py`、内置清单、依赖查找顺序或排查「装了仍提示缺依赖」时必读。
-
-## 生成图片规范 skill（涉及导出图/报表图/封面图时强制阅读）
-
-完整内容见 [src/skills/image-output-spec/SKILL.md](src/skills/image-output-spec/SKILL.md)。账号对比 PNG、组图、资产预览图、报表图、封面默认模板等程序生成图片，统一使用共享渲染模块与设计令牌：1080 px 基准宽度、固定页头页脚、统一字体/颜色/数字格式/文件命名；用户自定义封面、裁切图、截图、下载图例外。该 skill 不改变数据与统计口径，也不构成核心八模块的改动授权。
-
-## 约定 1：更新前获取远端状态，遵循版本领先原则
-
-- 前置顺序：完整阅读约定 → `git status` → 按约定 2 本地提交备份已有改动 → 确认 `origin` 为 `https://github.com/FmjjTool/FMJJRecordedBroadcast.git` → `git fetch origin` → 比较 `HEAD` 与 `origin/main`。状态检查、备份和同步是本次编辑前的准备动作。
-- 用 `git rev-list --left-right --count HEAD...origin/main` 与提交祖先关系判断领先；文件时间、提交日期、版本号和单纯提交总数不能代替判断。
-- 本地领先：保留并优先更新本地较新代码，云端旧代码不得覆盖本地；不会因此自动推送。
-- 云端领先：用 `git merge --ff-only origin/main` 快进本地，成功后再更新。两端一致时可直接开始本次编辑。
-- 两端各有独有提交（分叉，即使改了不同文件也算）：先列出共同基线、双方独有提交、逐文件差异（新增/删除行及冲突内容）和建议合并取舍，再向用户提问「覆盖云端 / 覆盖本地 / 合并两者最优」。收到明确选择前，暂停本次编辑及合并、覆盖、推送操作；不得自动决定。
-- 获取远端、比较或同步失败时立即停止，说明原因并向用户提问；禁止把失败当作已是最新、绕过同步或使用 `git push --force` 等破坏远端历史的操作。用户选择覆盖某端时，也必须保留备份与历史，按确认的文件范围处理。
-
-## 约定 2：改动前先备份，完成后必须本地提交
-
-- 执行任何更改操作前，先执行 `git status` 检查当前代码是否有备份（已保存为本地 commit）。
-- 存在已修改/未跟踪文件（未备份）时，先本地 `git commit` 完成备份，再开始操作；提交前清理临时文件与测试产物。
-- 无法提交（非 git 仓库、合并冲突、钩子失败等）时立即停止，向用户提问，禁止直接改动。
-- 每次任务或编辑部分完成后，必须本地 `git commit` 一次，并按需向用户汇报提交哈希。
-- 本地提交不等于推送；是否推送按用户指示或相关 skill（如 `summarize-update`）执行。
-
-## 约定 3：技能只写 Markdown 文档
-
-- 本项目所有「skill / 技能」一律只用 Markdown（`SKILL.md` + 可选的 `.md` 子文档）表达，放在 `src/skills/<skill-name>/` 下。
-- 禁止为 skill 附带可执行脚本（`.py`、`.js`、`.ps1` 等）、机器可读配置（`.json`、`.yaml`、`.toml` 等）或任何需要运行才能生效的校验程序；约束写在正文里，由 Agent 阅读后逐项人工核对。
-- 例外：用户明确告知需要脚本或结构化配置时才可添加，且只对当次需求生效，不沉淀为默认做法。
-- 已存在的非 md 附属文件，在下次改动该 skill 时一并移除。
-
-## 约定 4：完成后必须写当日报告，同一天只保留一份
-
-- 本项目每次任务或编辑部分完成后，必须写一份当天的报告；日期按北京时间（`Asia/Shanghai`）的完成日期确定。
-- 报告统一放在项目根目录 `Progress/YYYY-MM-DD_当日总结.md`。同一天的多个任务、多次编辑和后续验证都合并到这一份报告，不按任务或编辑次数另建报告。
-- 更新前先读取已有当日总结，保留其他任务的内容，追加或更新本次记录。当天已有其他主题报告时，完整合并并核对无遗漏后，再移除当天重复的报告文件。
-- 报告应包含需求、处理方案、改动文件、验证结果、待处理问题及 Git 提交信息；未完成或未验证的事项如实标注。
-- 先更新当日报告，再连同本次改动一起本地提交，最后向用户汇报实际提交哈希。报告自身的提交用提交说明记录，不为补写自身哈希反复提交。
-
-## 约定 5：账户登录统一由 Cookie 管理提供接口
-
-- 本约定的管理能力与接口设计必须服从约定 7；它不授权 Agent 在真实账户上执行登录保存、重新登录、换号、清除或迁移。业务只读使用现有有效凭据，写入能力验证仅使用独立隔离的虚构数据。
-- 所有需要登录的账户，包括新增平台与 GitHub 等 Token 账户，都必须接入「Cookie 管理」统一入口；登录、重新登录、切换与清除由管理层统一负责。
-- 业务功能统一调用管理层接口获取当前有效登录态，禁止各页面独立保存凭据、直接读取登录文件或硬编码 Cookie/Token；新平台缺少接口时，先补管理层和平台适配，再接业务调用。
-- 总开关、失效、清除与账号变化必须对所有调用方一致生效；登录快照与旧格式只作受管理层控制的适配/迁移，不能绕过关闭或清除状态恢复旧登录。
-- 详细接口、迁移流程及验收见上述 `cookie-manager` skill；skill 文档不等于既有代码已完成统一迁移。
-
-## 约定 6：录播工具箱八个核心模块默认禁止改动
-
-- 上述八个模块的菜单名称、顺序、路由、页面控件与交互、处理流程、参数、文件读写及关联处理引擎均纳入保护；旧入口、别名、嵌入页签和投稿子窗口也不能绕过保护。
-- 全局美化、重构、性能优化、代码清理、登录统一或其他模块更新，不构成修改核心的授权；共享配置、工具函数、主题、页面生命周期等改动会影响核心时同样受限。
-- 可以只读检查、分析差异、编写保护文档及保存既有改动的本地备份；不能顺手修复、删减、替换或重写核心。需要变更时先列出具体影响与拟改范围，用户尚未明确授权则询问；已收到针对本次具体模块和改动的明确授权时按授权范围执行，无需重复确认。
-- 保护范围与代码映射见 `recording-toolbox-core` skill。新增规则不自动回滚已有代码，也不表示已安装运行时锁；每次任务由 Agent 阅读后逐项遵守。
-
-## 约定 7：已保存的真实 Cookie 绝对禁止改动（最高级别）
-
-- 所有操作前必须完整阅读上述 `cookie-data-protection` skill。Cookie 原值、平台/账号归属、保存时间、加密表示及真实存储文件均受保护；管理器持有的关联登录快照、旧格式 Cookie 和凭据副本不能作为绕行入口。
-- 禁止调用任何真实凭据写入/删除/迁移方法，禁止浏览器或接口响应自动回写，禁止修改密钥/加密规则导致已有 Cookie 失效；对包含 Cookie 的文件整份改写，即使只改开关或新增平台也禁止。
-- 所有验证使用新建独立临时目录和虚构凭据；不得复制真实 Cookie 到测试环境，不得为测试启动会自动登录、刷新或迁移真实凭据的流程。必要的业务请求只能通过已确认无写入副作用的接口只读使用现有凭据，不输出其内容。
-- 禁止将真实 Cookie 纳入 Git 备份/提交、日志、报告、导出、发行包，禁止通过清理配置、导入备份、卸载重装或更新产物间接触碰。其他规则与此冲突时以本禁令为准，不提供“确认后修改 Cookie”的默认放行路径。
-- 发现需求依赖修改已存 Cookie 时停止该部分并说明本禁令，继续可独立完成的工作；发现意外变化时立即停止相关操作，不自行再次写入或回滚真实凭据。
-- 本约定约束 Agent 行为；新增 skill 文档不等于现有应用已经安装运行时写入拦截器，不能为新增规则而自动改动真实 Cookie。
-
-## 约定 8：总结文章必须携带文件，总结工作排除自动推送
-
-- 「总结文章」是文件总结的触发关键词；实际发出该任务时必须附上待总结文件，或明确提供可访问的待总结文件路径。缺文件、文件不可读或目标不明时，先提示补充/明确文件，不猜测正文、不拿历史总结代替。
-- 文件总结前必须完整阅读上述 `summarize-article` 与 `fengming-livestream-summary` 主指令、纠错表、分类库及输出模板；数据库按索引按需读取，不整库通读。先完整提取/纠错全文，再按已有规范总结，不能只看文件名或开头。
-- 新增、编辑、解释或检查「总结文章」指令时不触发实际总结，也不要求用户为规则维护提供文章文件。普通工作总结不套用此文件门槛。
-- 总结文章、工作总结、直播总结、更新内容汇总（包括仅要求「总结此次更新」）默认不执行 push、打包、改版本、创建 tag/Release 或其他发布动作；提及或否定「push」不构成推送授权。用户另行明确要求推送或发布时按该具体范围处理。
-- 总结任务的项目执行报告与必要本地提交仍按约定 2、4 完成，不自动升级为推送；纯文本总结正文与项目执行报告分开保存，不污染文章输出格式。
-
-## 约定 9：页面不得自建 Cookie 管理器，也不得出现 Cookie 字样
-
-- 全项目只保留一个 Cookie 管理入口，即统一「Cookie 管理」总管理器。任何页面、对话框、浮层、子窗口与嵌入式页签都不得另行创建 Cookie 管理器、登录窗口、凭据输入/保存控件，也不得维护第二套凭据列表。
-- 页面不得放置「打开 Cookie 管理」「去登录」「Cookie 管理」等入口按钮、链接、提示或引导文案，也不得自行弹出或嵌入登录界面；需要登录的用户自行前往总管理器。
-- 页面展示给用户的文案（标题、说明、提示、tooltip、状态栏、报错、可见日志）不得出现「Cookie」「cookie」及同类凭据字样，不得展示凭据文件名或存储路径。
-- 业务页面只通过管理层接口只读获取登录态；未登录时走公开/游客流程或给出不含凭据名词的「需要登录」类提示，不代登录、不保存凭据。
-- 本条不解除约定 7，也不自动回滚既有页面；既有违规在涉及该页面改动时按本条清理，未获具体授权不批量修改。详见 `src/skills/convention-skill/SKILL.md`。
-
-## 约定 10：定时任务统一由「任务」页管理，功能页不得内嵌定时设置
-
-- 全项目只保留一个定时任务设置入口：`src/gui_qt/pages/tasks.py` 的「⏰ 定时任务」页；计划模式、时间、间隔与安装 / 删除统一在该页完成。
-- 功能页不得再放置「安装/更新定时」「删除定时」「定时采集时间 / 间隔」等控件或弹窗，只保留说明文案。
-- 新增定时任务必须注册到 `src/toolbox/task_center.py`（配置键、列表、计划读写、安装 / 卸载分发），任务页只通过该中心操作。
-- 软件内会话计时器（如「采集任务」运行期定时）不属于 Windows 计划任务，不强行迁移，但不得伪装成计划任务入口。
-- 本条只改设置入口，不改变既有任务名与配置键。完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 10。
-
-## 约定 11：依赖与外部程序的安装入口统一在「全局设置」
-
-- 全项目只保留一个依赖安装入口：`src/gui_qt/pages/settings.py` 的「检测依赖与其他强依赖」卡片；检测项、版本、缺失 / 可选状态与安装 / 下载 / 教程按钮都只在那里维护。
-- 功能页不得再放「安装依赖」「下载模型」「下载采集引擎」「一键下载」等安装按钮或安装弹窗，只允许一句不含操作控件的说明；需要安装时引导到全局设置，不新建第二个安装入口。
-- 新增依赖在 `_DEPENDENCIES` 登记六元组（键、显示名、检测函数、用途、下载地址、是否可选）；可选依赖（Git、Node.js 等）标「可选」，不计入缺失、不标红、不阻塞主流程。
-- 打包态（`sys.frozen`）不提供 pip 安装按钮，改为「未内置，请重装软件」提示，避免装到用户自己的 Python。
-- 应用自行下载的本地组件可在同一卡片卸载（采集引擎本地内核、本地转写程序/模型、图识别模型、代理内核）；系统依赖、自定义路径与 FULL 内置组件不提供卸载，卸载需二次确认且只删受控目录。完整规则见 `src/skills/convention-skill/SKILL.md` 约定 11。
-- 既有分散入口（Cookie 管理「下载采集引擎」、转写设置的本地程序 / 模型下载、图识别「一键下载模型」）按本条逐步迁移，迁移前在当日报告登记为待办。
-- 本条只约束安装/卸载入口位置，不改变依赖检测逻辑、下载源与许可证声明。完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 11。
-
-## 约定 12：管理入口分级与命名
-
-- 「管理器」只用于同时满足「跨页面」「单一事实来源」「独立生命周期」的入口；页面内面板只能叫「设置 / 列表 / 面板」。
-- 「中心」只用于聚合既有能力的入口页（如「Cookie 管理 → 账号配置」），必须复用既有服务与数据，不得持有第二套数据、备份逻辑或定时入口。
-- 新建入口前先判定能否并入 L0 侧栏常驻 / L1 跨页中心 / L2 页面内面板，不能默认新建页面。
-- 新增入口或数据实体必须在 `software-feature-guide` 登记，并在当日报告写明判定依据与不并入现有层的理由；新增 skill 类型还要同步本文件与 `quick-commands`。
-- 命名不得与约定 9 / 10 / 11 冲突：登录只在「Cookie 管理」，定时只在「任务」页，依赖安装只在全局设置。
-- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 12。
-
-## 约定 13：腾讯文档真实数据与 skill 同步
-
-- 拉取 / 同步腾讯文档真实数据后，若字段名称、取值范围或枚举口径与 skill 不一致，必须在本轮适时更新对应 skill（`software-feature-guide`、`tcdoc-sync-scope`、直播总结数据库索引等），不能只改代码。
-- 代码枚举、判断逻辑、skill 三处保持一致；取值范围以真实数据为准（例：「可用伴奏形式」为 `无伴奏 / 纯伴奏 / 和声伴奏`，`纯伴奏` 即普通伴奏）。
-- 只读使用本地快照与已授权接口；本条不扩大腾讯文档写入白名单，`tcdoc-sync-scope` 仍是最高约束。
-- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 13。
-
-## 约定 14：所有表格必须支持表头点击排序
-
-- 任何以表格展示多条记录的界面，表头必须可点击排序：升序 → 降序 → 默认顺序；勾选列、图片列、按钮列不参与排序。
-- 统一用 `src/gui_qt/table_sort.py`：`install(table)`（行号与记录列表无绑定）、`install(table, rows=列表)`（页面用 `row()` / `currentRow()` 反查列表，排序同步重排列表）、`install_callback(table, fn)`（服务端分页表，排序下推到 SQL `ORDER BY` 并回到第 1 页）。
-- 排序键统一解析：数字（千分位、万/亿/k/w）< 日期时间 < 文本，空值（空串、`-`、`—`）恒排最后；时长等特殊格式用 `item.setData(SORT_KEY_ROLE, 数值)`。
-- 排序只改展示顺序：不改数据、不改勾选集合，勾选与选中随行走；各页不自写第二套比较逻辑。
-- 所有表格还必须支持列宽自适应/重置：统一由 `src/gui_qt/table_columns.py` 提供表头右键（列宽自适应 / 重置列宽），以及排在表格自己所在卡片底部操作行右端的「自适应 / 重置」两个小按钮（容器没有操作行时才贴在表格右下角；不进主窗口状态栏）；页面不自写列宽菜单，默认不出现横向滚动。
-- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 14。
-
-## 约定 15：GitHub 访问网络顺序（直连 → 代理 → 其他）
-
-- 任何访问 GitHub 的动作（`fetch` / `push` / `clone`、`api.github.com`、`uploads.github.com`、资产上传下载）一律先**直连**，并显式清空代理：`git -c http.proxy= -c https.proxy= push origin main`。
-- 直连失败（DNS、超时、连接重置、TLS、443 不通）才回退**代理**，顺序为：用户当次指定或 `HTTPS_PROXY`/`ALL_PROXY` → 本机常见端口 `7890` / `10809` / `12450` → `git config http.proxy` 的值；切档前先探测端口是否可连，不通就跳过。
-- 前两档都失败才用**其他方式**（交回宿主执行、SSH over 443、只读镜像），且先告知用户；镜像只用于只读 GET，不用于 push。
-- 逐档推进并记录真实错误；不并发混用、不静默换档、不把代理长期写进 `.git/config`（`socks5h://127.0.0.1:12450` 已多次导致推送失败）。
-- 三档都失败即按约定 1 停止并报告，不跳过 fetch/比较，不使用 `git push --force`。
-- 完整规则见 `src/skills/convention-skill/SKILL.md` 的约定 15。
-
-## 约定 16：测试默认使用隔离实例，接入真实环境须申请并还原
-
-- 测试、验证、冒烟、演示、截图默认运行隔离版本程序：项目副本 + 独立 `config/`、`download/`、`logs/`、独立端口；本项目没有 `--work-dir`，数据根跟随程序根，隔离靠副本实现（见 `isolated-testing`）。
-- 真实 `config/` 与 `download/` 一律只读：严禁新增、删除、修改其中任何内容；禁止在主工作区运行会创建或改写配置的命令/脚本（包括为「查看配置」而启动的读取，尽量在副本进行）。测试夹具、截图、导出与临时文件只能写副本或 `_smoking/`。
-- 需要接入用户正在使用的实例或真实数据（驱动界面、读写真实配置 / 数据库、触发真实平台写入、安装计划任务）时，必须先提出申请，写清范围、数据清单、快照与还原方案、风险与时长，取得当次明确同意后才可操作；只读查看进程 / 端口 / 日志尾部不算接入。
-- 真实环境写入前必须快照并生成 SHA-256 清单，快照放 `_smoking/real-snapshots/`（已忽略、不提交）；测试结束后必须按快照整文件还原并校验一致，直播录制需逐项核对 `config/live_record.json` 的主播数量、房间号、备注、顺序与录制设置。
-- 禁止把「删掉测试主播」「清理测试项」当作还原；还原失败或被运行中的实例覆盖时停止写入并如实报告，不得隐瞒。接入授权不放宽真实 Cookie 禁令（约定 7）与运行中实例保护（`running-instance-guard`）。
-- 完整规则见 `src/skills/isolated-testing/SKILL.md`。
-
-## 约定 17：配置与资产备份恢复统一由「全局设置」管理
-
-- 配置与资产的备份、恢复及整库导入导出统一在 `全局设置 → 备份与恢复`；资产库及其他业务页不再放置这类按钮、菜单、弹窗入口或跳到备份中心的快捷按钮。桌面端与 WebUI 的对应能力同步遵守。
-- 「网盘备份」是本地目录增量上传业务，不在上述统一范围内，保留在 `网络库 → 网盘备份`，与「网盘下载」两个页签并存；不得因统一配置 / 资产备份而迁移或移除它。
-- 配置与资产备份复用 `toolbox/backup.py`；网盘上传仍复用 `toolbox/quark/backup.py`，不新建第二套存储、备份引擎或同步记录。兼容路由 `backup_center` 指向全局设置，`quark_backup` / `quark_download` 指向网络库。
-- 备份计划的时间、间隔与安装 / 删除仍只在「任务」页维护（约定 10）；内部覆盖前安全副本、数据库迁移保护与日志轮转不是主动备份入口，保留原有行为。
-- 本条只统一入口，不授权操作真实数据、不放宽真实 Cookie 绝对保护（约定 7），也不授权改动录播八模块；验证只用隔离副本和虚构数据。
+完整映射只维护在 [quick-commands](src/skills/quick-commands/SKILL.md)。保留 /约定、/网络、/管理入口、/Cookie保护、/登录、/核心模块、/分层、/平台适配、/安全、/运行中、/数据、/出图、/视觉、/交互、/腾讯文档、/总结文章、/直播总结、/更新发布、/双版本、/并行、/测试、/测试清理、/隔离测试、/功能说明、/WebUI同步、/shaman、/快捷指令。摘要不代替实际任务必读规范，也不触发任何外部操作。
