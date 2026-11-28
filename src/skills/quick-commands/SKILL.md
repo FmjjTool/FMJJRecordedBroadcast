@@ -12,7 +12,7 @@ description: "项目 /短语与 skill 要点查询。只按现行原文生成简
 1. 先读目标主入口与本次选中的 reference，直接从当前原文提炼，最多 5 条要点；本文件不保存规则摘要副本或固定条数 / 旧版本状态。
 2. 首行标明“/短语 → 实际文档路径”，后附最多五条核心限制；末尾提醒“要点不替代执行任务前的完整阅读”。用户要全文时给实际目标文档全文，不凭旧摘要补写。
 3. 只要列表时输出下表；多个短语按出现顺序处理。未登记则说明，并提供最接近的已登记项，不擅自新增同义词。
-4. 快捷查询不触发 push、打包、改版本、tag / Release、任务安装、登录、数据写入或修改技能；携带具体行动请求时，其授权范围与保护规则仍逐项判断。
+4. 快捷查询不触发联网检查、push、打包、改版本、tag / Release、任务安装、登录、数据写入或修改技能；携带具体行动请求时，其授权范围与保护规则仍逐项判断。
 5. 优先级按真实 Cookie 保护 → 总约定 → 任务主规则处理，实际用户授权不能由历史记录或摘要推定；冲突需要报告，不用快捷词绕开。
 
 ## 唯一路由表
@@ -21,8 +21,8 @@ description: "项目 /短语与 skill 要点查询。只按现行原文生成简
 
 | 快捷短语 | 当前维护位置（src/skills/ 下） | 定位 |
 | --- | --- | --- |
-| `/约定` | [convention-skill/SKILL.md](../convention-skill/SKILL.md) | 现行 17 条约定与任务路由 |
-| `/网络` | [convention-skill/references/git-workflow.md](../convention-skill/references/git-workflow.md) | 约定 15；逐档网络与远端保护 |
+| `/约定` | [convention-skill/SKILL.md](../convention-skill/SKILL.md) | 现行 17 条约定与任务路由，含本地云端一键检查入口 |
+| `/网络` | [convention-skill/references/git-workflow.md](../convention-skill/references/git-workflow.md) | 约定 1 的一键检查器用法与约定 15 的逐档网络、远端保护 |
 | `/管理入口` | [convention-skill/references/product-boundaries.md](../convention-skill/references/product-boundaries.md) | 约定 9—12、17；账户 / 任务 / 安装 / 备份入口 |
 | `/Cookie保护` | [cookie-data-protection/SKILL.md](../cookie-data-protection/SKILL.md) | 真实 Cookie 绝对保护 |
 | `/登录` | [cookie-manager/SKILL.md](../cookie-manager/SKILL.md) | 统一认证接口与已有实现边界 |

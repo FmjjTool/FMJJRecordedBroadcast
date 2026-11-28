@@ -26,7 +26,7 @@
 
 ## 开工与收尾
 
-仓库更新前完整读 [Git / Markdown / 日报细则](src/skills/convention-skill/references/git-workflow.md)：status、备份本任务稳定 WIP、核对 origin、按直连→代理→其它逐档成功 fetch、祖先关系及左右独有提交比较。远端领先只快进，本地领先保留，分叉展示差异后询问，不强推。非 main / worktree 先确认基线与目标映射。
+仓库更新前完整读 [Git / Markdown / 日报细则](src/skills/convention-skill/references/git-workflow.md)：status、备份本任务稳定 WIP、核对 origin、按直连→代理→其它逐档成功 fetch、祖先关系及左右独有提交比较。完成前置状态、备份与分支映射核对后，优先用根目录 check_git_sync.py 一次获取检查事实；用法与失败回退集中在该细则。远端领先只快进，本地领先保留，分叉展示差异后询问，不强推。非 main / worktree 先确认基线与目标映射。
 
 并行工作读 [协作细则](src/skills/convention-skill/references/coordination.md)：一个文件一个 writer，共享文件串行更新；不要擅自提交、覆盖、清理他人正在变化的 WIP，可使用独立干净 worktree。完成后先合并北京时间唯一日报 Progress/YYYY-MM-DD_当日总结.md，再按明确路径本地提交并报告哈希；不自动推送。
 
