@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import common
+from gui_qt.emoji_icons import strip_inline_emoji
 from gui_qt.common import _fmt, post_to_main, run_bg
 from toolbox import download_ops
 from gui_qt.pages.base import BasePage
@@ -45,6 +46,7 @@ TAG_COLORS_DARK = {"[视频]": "#64b5f6", "[动态]": "#ffb74d", "[图文]": "#8
 
 def colorize_tag_html(text: str, selected: bool = False, dark: bool = False) -> str:
     """把行文本里的 [视频]/[动态]/[图文] 标签替换为彩色加粗 span，其余文本原样转义（换行转 <br>）。"""
+    text = strip_inline_emoji(text)
     esc = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
            .replace("\n", "<br>"))
     for tag, (normal, sel) in TAG_COLORS.items():

@@ -2558,7 +2558,7 @@ class DouyinDanmakuPage(BasePage):
                 alt = html.escape(p.get("text") or "表情")
                 src = resolve(p["url"])
                 if src:
-                    parts.append(f'<img src="{html.escape(src)}" height="{eh}" alt="[{alt}]">')
+                    parts.append(f'<img class="emoji" src="{html.escape(src)}" height="{eh}" alt="[{alt}]">')
                 else:
                     parts.append(f'<span style="color:{theme_color("muted")}">[{alt}]</span>')
             elif p.get("text"):

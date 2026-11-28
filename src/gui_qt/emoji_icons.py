@@ -20,11 +20,13 @@ import html as html_lib
 import re
 import weakref
 from html.parser import HTMLParser
+from urllib.parse import unquote, urlsplit
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QPalette
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QCheckBox, QComboBox, QGroupBox, QLabel,
+    QAbstractButton, QApplication, QCheckBox, QComboBox, QErrorMessage, QGroupBox, QLabel,
+    QInputDialog,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton,
     QProgressDialog, QRadioButton, QMessageBox, QStatusBar, QSystemTrayIcon,
     QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QTextEdit,
@@ -117,20 +119,71 @@ _VARIATION = dict.fromkeys(map(ord, "\ufe0f\ufe0e\u200d\u20e3"), None)
 _EMOJI_ICONS = {key.translate(_VARIATION): value for key, value in _EMOJI_ICONS.items()}
 
 _TOKEN_RE = re.compile(r"^(?P<token>[^\w\s\u4e00-\u9fff]+)(?P<rest>.*)$", re.S)
-# 句中 emoji 直接删除（不含箭头等普通符号），避免界面文案里混入彩色表情。
+# Unicode 17.0 Emoji_Presentation code points. Keeping exact ranges avoids
+# deleting neighboring keyboard, technical, and layout symbols.
+_EMOJI_PRESENTATION_RANGES = (
+    "231A-231B 23E9-23EC 23F0 23F3 25FD-25FE 2614-2615 2648-2653 267F"
+    " 2693 26A1 26AA-26AB 26BD-26BE 26C4-26C5 26CE 26D4 26EA 26F2-26F3"
+    " 26F5 26FA 26FD 2705 270A-270B 2728 274C 274E 2753-2755 2757"
+    " 2795-2797 27B0 27BF 2B1B-2B1C 2B50 2B55 1F004 1F0CF 1F18E"
+    " 1F191-1F19A 1F1E6-1F1FF 1F201 1F21A 1F22F 1F232-1F236 1F238-1F23A"
+    " 1F250-1F251 1F300-1F320 1F32D-1F335 1F337-1F37C 1F37E-1F393"
+    " 1F3A0-1F3CA 1F3CF-1F3D3 1F3E0-1F3F0 1F3F4 1F3F8-1F43E 1F440"
+    " 1F442-1F4FC 1F4FF-1F53D 1F54B-1F54E 1F550-1F567 1F57A 1F595-1F596"
+    " 1F5A4 1F5FB-1F64F 1F680-1F6C5 1F6CC 1F6D0-1F6D2 1F6D5-1F6D8"
+    " 1F6DC-1F6DF 1F6EB-1F6EC 1F6F4-1F6FC 1F7E0-1F7EB 1F7F0"
+    " 1F90C-1F93A 1F93C-1F945 1F947-1F9FF 1FA70-1FA7C 1FA80-1FA8A"
+    " 1FA8E-1FAC6 1FAC8 1FACD-1FADC 1FADF-1FAEA 1FAEF-1FAF8"
+).split()
+# Emoji=Yes but Emoji_Presentation=No: remove these only with VS16, so plain
+# text such as ©, arrows, and keyboard glyphs remains readable.
+_TEXT_PRESENTATION_EMOJI_RANGES = (
+    "A9 AE 203C 2049 2122 2139 2194-2199 21A9-21AA 2328 23CF 23ED-23EF"
+    " 23F1-23F2 23F8-23FA 24C2 25AA-25AB 25B6 25C0 25FB-25FC 2600-2604"
+    " 260E 2611 2618 261D 2620 2622-2623 2626 262A 262E-262F 2638-263A"
+    " 2640 2642 265F-2660 2663 2665-2666 2668 267B 267E 2692 2694-2697"
+    " 2699 269B-269C 26A0 26A7 26B0-26B1 26C8 26CF 26D1 26D3 26E9"
+    " 26F0-26F1 26F4 26F7-26F9 2702 2708-2709 270C-270D 270F 2712"
+    " 2714 2716 271D 2721 2733-2734 2744 2747 2763-2764 27A1 2934-2935"
+    " 2B05-2B07 3030 303D 3297 3299 1F170-1F171 1F17E-1F17F 1F202"
+    " 1F237 1F321 1F324-1F32C 1F336 1F37D 1F396-1F397 1F399-1F39B"
+    " 1F39E-1F39F 1F3CB-1F3CE 1F3D4-1F3DF 1F3F3 1F3F5 1F3F7 1F43F"
+    " 1F441 1F4FD 1F549-1F54A 1F56F-1F570 1F573-1F579 1F587"
+    " 1F58A-1F58D 1F590 1F5A5 1F5A8 1F5B1-1F5B2 1F5BC 1F5C2-1F5C4"
+    " 1F5D1-1F5D3 1F5DC-1F5DE 1F5E1 1F5E3 1F5E8 1F5EF 1F5F3 1F5FA"
+    " 1F6CB 1F6CD-1F6CF 1F6E0-1F6E5 1F6E9 1F6F0 1F6F3"
+).split()
+
+
+def _unicode_class(ranges):
+    parts = []
+    for value in ranges:
+        bounds = value.split("-")
+        start = chr(int(bounds[0], 16))
+        end = chr(int(bounds[-1], 16))
+        parts.append(start if start == end else start + "-" + end)
+    return "[" + "".join(parts) + "]"
+
+
+_EMOJI_BASE = _unicode_class(_EMOJI_PRESENTATION_RANGES)
+_TEXT_EMOJI_BASE = _unicode_class(_TEXT_PRESENTATION_EMOJI_RANGES)
+_EMOJI_MODIFIER = "[\U0001F3FB-\U0001F3FF]"
+_EMOJI_UNIT = (
+    rf"(?:{_EMOJI_BASE}[\ufe0e\ufe0f]?|{_TEXT_EMOJI_BASE}\ufe0f|"
+    rf"{_EMOJI_MODIFIER}){_EMOJI_MODIFIER}?"
+)
+# Remove complete emoji sequences only; never globally discard VS, ZWJ, or tag
+# characters from unrelated text. Regional indicators are handled as flags.
 _INLINE_EMOJI_RE = re.compile(
-    "(?:[#*0-9]\ufe0f?\u20e3)|"
-    "[\U0001F000-\U0001FAFF\U0001F1E6-\U0001F1FF"
-    "\u2600-\u27BF\u2300-\u23FF\u2B05-\u2B07\u2B50\u2B55]"
-    "[\ufe0f\ufe0e\u200d\U0001F3FB-\U0001F3FF"
-    "\U000E0020-\U000E007F]*|"
-    "[©®‼⁉™ℹ〰〽㊗㊙]\ufe0f")
-_EMOJI_TAGS = dict.fromkeys(range(0xE0020, 0xE0080), None)
+    rf"(?:[#*0-9]\ufe0f?\u20e3|[\U0001F1E6-\U0001F1FF]{{1,2}}|"
+    rf"{_EMOJI_UNIT}(?:\u200d{_EMOJI_UNIT})*"
+    rf"(?:[\U000E0020-\U000E007E]+\U000E007F)?)")
+_EMOJI_CHARREF_RE = re.compile(r"&#(?:[xX]([0-9a-fA-F]{1,8})|([0-9]{1,10}));")
 _RICH_TEXT_RE = re.compile(
     r"</?[A-Za-z][^>]*>|&(?:#(?:x[0-9a-f]+|[0-9]+)|[A-Za-z][A-Za-z0-9]+);",
     re.I,
 )
-_EMOJI_IMAGE_RE = re.compile(r"(?:emoji|emote|emoticon|sticker)", re.I)
+_EMOJI_IMAGE_MARKERS = frozenset(("emoji", "emote", "emoticon", "sticker", "stickers"))
 
 _installed = False
 _orig_abstract_set_text = None
@@ -153,7 +206,7 @@ def strip_inline_emoji(text: str) -> str:
     """删除句中的 emoji（保留“→”“×”等普通排版符号），并收拢残留空白。"""
     if not text:
         return text
-    cleaned = _INLINE_EMOJI_RE.sub("", text).translate(_VARIATION).translate(_EMOJI_TAGS)
+    cleaned = _INLINE_EMOJI_RE.sub("", text)
     if cleaned == text:
         return text
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
@@ -167,19 +220,28 @@ def strip_emoji(text: str) -> str:
     """只删除 emoji，不改空白与缩进（供日志等保留排版的场景使用）。"""
     if not text:
         return text
-    return _INLINE_EMOJI_RE.sub("", str(text)).translate(_VARIATION).translate(_EMOJI_TAGS)
+    return _INLINE_EMOJI_RE.sub("", str(text))
 
 
 def _is_emoji_image(attrs) -> bool:
     values = {name.lower(): value or "" for name, value in attrs}
-    marker = " ".join(str(values.get(key, "")) for key in
-                       ("class", "id", "data-type", "role"))
-    if _EMOJI_IMAGE_RE.search(marker):
-        return True
-    if _EMOJI_IMAGE_RE.search(str(values.get("src", ""))):
-        return True
-    return any(strip_emoji(str(values.get(key, ""))) != str(values.get(key, ""))
-               for key in ("alt", "title", "aria-label"))
+    for name in ("class", "id", "data-type", "data-kind", "data-emoji",
+                 "data-emote", "data-sticker"):
+        value = str(values.get(name, "")).lower()
+        tokens = re.findall(r"[a-z]+", value)
+        if any(token in _EMOJI_IMAGE_MARKERS for token in tokens):
+            return True
+    src = str(values.get("src", ""))
+    try:
+        path = unquote(urlsplit(src).path)
+    except ValueError:
+        path = src
+    for segment in path.replace("\\", "/").split("/"):
+        stem = segment.rsplit(".", 1)[0].lower()
+        tokens = re.findall(r"[a-z]+", stem)
+        if any(token in _EMOJI_IMAGE_MARKERS for token in tokens):
+            return True
+    return False
 
 
 class _EmojiHTMLParser(HTMLParser):
@@ -190,6 +252,7 @@ class _EmojiHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=False)
         self.parts = []
+        self._raw_text_depth = 0
 
     def _start_tag(self, tag, attrs, self_closing=False):
         if tag.lower() == "img" and _is_emoji_image(attrs):
@@ -204,6 +267,8 @@ class _EmojiHTMLParser(HTMLParser):
             clean_attrs.append((name, value))
         if not changed:
             self.parts.append(self.get_starttag_text())
+            if tag.lower() == "script":
+                self._raw_text_depth += 1
             return
         suffix = " /" if self_closing else ""
         rendered = "".join(
@@ -212,6 +277,8 @@ class _EmojiHTMLParser(HTMLParser):
             for name, value in clean_attrs
         )
         self.parts.append(f"<{tag}{rendered}{suffix}>")
+        if tag.lower() == "script":
+            self._raw_text_depth += 1
 
     def handle_starttag(self, tag, attrs):
         self._start_tag(tag, attrs)
@@ -221,9 +288,11 @@ class _EmojiHTMLParser(HTMLParser):
 
     def handle_endtag(self, tag):
         self.parts.append(f"</{tag}>")
+        if tag.lower() == "script" and self._raw_text_depth:
+            self._raw_text_depth -= 1
 
     def handle_data(self, data):
-        self.parts.append(strip_inline_emoji(data))
+        self.parts.append(data if self._raw_text_depth else strip_inline_emoji(data))
 
     def handle_entityref(self, name):
         raw = f"&{name};"
@@ -260,7 +329,17 @@ def strip_html_emoji(text: str) -> str:
         parser.feed(str(text))
         parser.close()
     except Exception:  # noqa: BLE001 - malformed rich text should still render
-        return strip_inline_emoji(str(text))
+        source = str(text)
+
+        def remove_emoji_ref(match):
+            try:
+                value = chr(int(match.group(1), 16) if match.group(1) else int(match.group(2)))
+            except (ValueError, OverflowError):
+                return match.group(0)
+            return "" if strip_emoji(value) != value else match.group(0)
+
+        source = _EMOJI_CHARREF_RE.sub(remove_emoji_ref, source)
+        return strip_inline_emoji(source)
     return "".join(parser.parts)
 
 
@@ -999,6 +1078,14 @@ def refresh_all():
 def _patch_misc_text():
     orig_tip = QWidget.setToolTip
     orig_placeholder = QLineEdit.setPlaceholderText
+    orig_progress_label = QProgressDialog.setLabelText
+    orig_progress_cancel = QProgressDialog.setCancelButtonText
+    orig_tray_message = QSystemTrayIcon.showMessage
+    orig_tray_tooltip = QSystemTrayIcon.setToolTip
+    orig_tooltip_show = QToolTip.showText
+    orig_message_text = QMessageBox.setText
+    orig_message_info = QMessageBox.setInformativeText
+    orig_message_detail = QMessageBox.setDetailedText
 
     def set_tooltip(self, text):
         return orig_tip(self, strip_inline_emoji(text))
@@ -1006,8 +1093,71 @@ def _patch_misc_text():
     def set_placeholder(self, text):
         return orig_placeholder(self, strip_inline_emoji(text))
 
+    def set_progress_label(self, text):
+        return orig_progress_label(self, strip_inline_emoji(text))
+
+    def set_progress_cancel(self, text):
+        return orig_progress_cancel(self, strip_inline_emoji(text))
+
+    def show_tray_message(self, title, message, *args, **kwargs):
+        return orig_tray_message(
+            self, strip_inline_emoji(title), strip_inline_emoji(message), *args, **kwargs)
+
+    def set_tray_tooltip(self, text):
+        return orig_tray_tooltip(self, strip_inline_emoji(text))
+
+    def show_tooltip(*args, **kwargs):
+        values = list(args)
+        if len(values) > 1:
+            values[1] = strip_inline_emoji(values[1])
+        elif "text" in kwargs:
+            kwargs["text"] = strip_inline_emoji(kwargs["text"])
+        return orig_tooltip_show(*values, **kwargs)
+
+    def set_message_text(self, text):
+        return orig_message_text(self, strip_inline_emoji(text))
+
+    def set_message_info(self, text):
+        return orig_message_info(self, strip_inline_emoji(text))
+
+    def set_message_detail(self, text):
+        return orig_message_detail(self, strip_inline_emoji(text))
+
     QWidget.setToolTip = set_tooltip
     QLineEdit.setPlaceholderText = set_placeholder
+    QProgressDialog.setLabelText = set_progress_label
+    QProgressDialog.setCancelButtonText = set_progress_cancel
+    QSystemTrayIcon.showMessage = show_tray_message
+    QSystemTrayIcon.setToolTip = set_tray_tooltip
+    QToolTip.showText = staticmethod(show_tooltip)
+    QMessageBox.setText = set_message_text
+    QMessageBox.setInformativeText = set_message_info
+    QMessageBox.setDetailedText = set_message_detail
+    for method_name in ("information", "question", "warning", "critical"):
+        original = getattr(QMessageBox, method_name)
+
+        def show_message(parent, title, text, *args, _original=original, **kwargs):
+            return _original(parent, strip_inline_emoji(title),
+                             strip_inline_emoji(text), *args, **kwargs)
+
+        setattr(QMessageBox, method_name, staticmethod(show_message))
+
+    for method_name in ("getText", "getMultiLineText", "getInt", "getDouble",
+                        "getItem"):
+        original = getattr(QInputDialog, method_name)
+
+        def show_input(parent, title, label, *args, _original=original, **kwargs):
+            return _original(parent, strip_inline_emoji(title),
+                             strip_inline_emoji(label), *args, **kwargs)
+
+        setattr(QInputDialog, method_name, staticmethod(show_input))
+
+    orig_error_message = QErrorMessage.showMessage
+
+    def show_error_message(self, message, *args, **kwargs):
+        return orig_error_message(self, strip_inline_emoji(message), *args, **kwargs)
+
+    QErrorMessage.showMessage = show_error_message
 
 
 def _log_color(text: str) -> str:
@@ -1034,19 +1184,28 @@ def _colored_log(text) -> str:
 def _patch_text_edit():
     orig_append = QTextEdit.append
     orig_set = QTextEdit.setPlainText
+    orig_set_html = QTextEdit.setHtml
 
     def append_text(self, text):
-        if self.isReadOnly() and not isinstance(self, QTextBrowser):
+        if isinstance(self, QTextBrowser):
+            text = _clean_display_text(text)
+        elif self.isReadOnly():
             text = _colored_log(text)
         return orig_append(self, text)
 
     def set_text(self, text):
-        if self.isReadOnly() and not isinstance(self, QTextBrowser):
-            text = strip_emoji(text)
+        if isinstance(self, QTextBrowser) or self.isReadOnly():
+            text = strip_inline_emoji(text)
         return orig_set(self, text)
+
+    def set_html(self, text):
+        if isinstance(self, QTextBrowser) or self.isReadOnly():
+            text = strip_html_emoji(text)
+        return orig_set_html(self, text)
 
     QTextEdit.append = append_text
     QTextEdit.setPlainText = set_text
+    QTextEdit.setHtml = set_html
 
 
 def _patch_plain_text():

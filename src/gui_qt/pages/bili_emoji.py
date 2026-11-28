@@ -186,6 +186,12 @@ class BiliEmojiPage(BasePage):
         gen = self._thumb_gen.get(table, 0) + 1
         self._thumb_gen[table] = gen
         cache = self._thumb_cache
+        if not urls:
+            for row in range(table.rowCount()):
+                item = table.item(row, col)
+                if item is not None:
+                    item.setIcon(QIcon())
+            return
 
         def job():
             hits, todo, seen = [], [], set()
@@ -339,7 +345,8 @@ class BiliEmojiPage(BasePage):
             btn.clicked.connect(lambda _, idx=d["id"]: self._view_normal(idx))
             self.all_table.setCellWidget(i, 3, btn)
         # 封面缩略图（缓存命中即时回填，新图后台下载）
-        self._preview(self.all_table, [d.get("url", "") for d in self._all_filtered[:self._all_shown]], col=1)
+        # 表情包封面属于表情图片资源：保留元数据与下载操作，但不在 GUI 中预览。
+        self._preview(self.all_table, [], col=1)
         self._all_sorter.reapply()
 
     def _all_scroll(self, val):
@@ -492,7 +499,8 @@ class BiliEmojiPage(BasePage):
                 return
             self._id_current = result
             render_files(self.id_table, self.id_info, result)
-            self._preview(self.id_table, [f["url"] for f in result["files"]])
+            # 该表只列出表情图片；资源仍可下载，但不显示缩略图。
+            self._preview(self.id_table, [])
             self._id_sorter.reapply()
             if result["hints"]:
                 self.id_info.setText(self.id_info.text() + "  |  " + "；".join(result["hints"]))
@@ -591,10 +599,12 @@ class BiliEmojiPage(BasePage):
                     notes.append("房间信息获取失败")
             base = api.sanitize(f"{name}直播间" if name else f"直播间{rid}")
             seen = set()
+            image_preview_urls = []
             for label, u in images.items():
                 if u and u not in seen:
                     seen.add(u)
                     files.append({"path": f"{base}/{label}", "url": u})
+                    image_preview_urls.append(u)
             # 表情目录：{主播名}直播间/{包名}/{表情名}
             # 专属包（UP主大表情等）排前，通用表情置底——一眼看到直播间专属大表情
             ordered = sorted(pkgs, key=lambda p: (p.get("pkg_name") == "通用表情",))
@@ -609,7 +619,8 @@ class BiliEmojiPage(BasePage):
             if pkgs:
                 parts = [f"{p.get('pkg_name', '?')}({len(p.get('emoticons') or [])})" for p in ordered]
                 notes.append("表情包：" + "、".join(parts) + "（专属在前，通用在后）")
-            return {"title": f"直播间{rid}", "files": files, "notes": notes}
+            return {"title": f"直播间{rid}", "files": files, "notes": notes,
+                    "preview_urls": image_preview_urls}
 
         def done(result, err):
             if err:
@@ -617,7 +628,8 @@ class BiliEmojiPage(BasePage):
                 return
             self._room_current = result
             render_files(self.room_table, self.room_info, result)
-            self._preview(self.room_table, [f["url"] for f in result["files"]])
+            # 文件列表先放头像/封面等普通图片，再放表情图片；仅恢复普通图片缩略图。
+            self._preview(self.room_table, result.get("preview_urls", []))
             self._room_sorter.reapply()
             if result["notes"]:
                 self.room_info.setText(self.room_info.text() + "  |  " + "；".join(result["notes"]))

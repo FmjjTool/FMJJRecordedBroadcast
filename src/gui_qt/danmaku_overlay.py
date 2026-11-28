@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QWidget, QDialog, QFormLayout, QSpinBox, QSlider,
     QPlainTextEdit, QDialogButtonBox, QLabel, QMenu, QMessageBox)
 from toolbox.config_manager import get_config_dir
 from toolbox.durable_io import atomic_write_json
+from gui_qt.emoji_icons import strip_inline_emoji
 
 BEIJING = timezone(timedelta(hours=8))
 OPTIONS = dict(font_size=16, rows=8, background_alpha=235, footer="使用信息请标明来源")
@@ -94,10 +95,12 @@ class ChatCanvas(QWidget):
         bottom = self.height() - 8 * self.scale
         for nick, body, gift in reversed(list(self.messages)[-self.rows:]):
             color = self.COLORS[sum(map(ord, nick)) % len(self.COLORS)]
+            display_nick = strip_inline_emoji(nick)
+            display_body = strip_inline_emoji(body)
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(f'<div style="font-family:Microsoft YaHei;font-size:{self.font_size * self.scale}px;'
-                f'color:{"#facc15" if gift else "#ffffff"}"><b style="color:{color}">{html.escape(nick)}：</b>{html.escape(body)}</div>')
+                f'color:{"#facc15" if gift else "#ffffff"}"><b style="color:{color}">{html.escape(display_nick)}：</b>{html.escape(display_body)}</div>')
             doc.setTextWidth(max(30, self.width() - 24 * self.scale))
             bottom -= doc.size().height()
             if bottom < 0:
