@@ -19,6 +19,30 @@ class CoverService:
     def preview(self, payload: dict) -> dict:
         return webui_cover.preview(payload)
 
+    def backfill_status(self) -> dict:
+        return webui_cover.backfill_status()
+
+    def backfill_preview(self, payload: dict) -> dict:
+        return webui_cover.preview_backfill(payload)
+
+    def start_backfill(self, payload: dict) -> dict:
+        if self._jobs is None:
+            raise ValueError("任务服务不可用，请刷新后重试")
+        if not isinstance(payload, dict) or payload.get("confirmed") is not True:
+            raise ValueError("请先确认要回填的腾讯文档记录")
+        with self._lock:
+            if self._running:
+                raise ValueError("已有补封面任务进行中，请等待结束后再开始")
+            self._running = True
+        try:
+            job = self._jobs.submit("cover_backfill",
+                                    lambda task: self._backfill(task, dict(payload)))
+        except Exception:
+            with self._lock:
+                self._running = False
+            raise
+        return {"job": job.id}
+
     def start_generate(self, payload: dict) -> dict:
         if self._jobs is None:
             raise ValueError("任务服务不可用，请刷新后重试")
@@ -44,6 +68,16 @@ class CoverService:
             return webui_cover.generate(
                 plan, on_progress=progress,
                 is_cancelled=lambda: bool(job.cancel_requested))
+        finally:
+            with self._lock:
+                self._running = False
+
+    def _backfill(self, job, payload: dict) -> dict:
+        job.update("正在读取腾讯文档官方动态记录…", 0.1)
+        try:
+            result = webui_cover.apply_backfill(payload)
+            job.update(result.get("summary", "腾讯文档回填完成"), 1.0)
+            return result
         finally:
             with self._lock:
                 self._running = False

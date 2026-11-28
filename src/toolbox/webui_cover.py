@@ -11,6 +11,7 @@ from pathlib import Path
 
 from toolbox import cover_automation
 from toolbox.config_manager import get_config_dir, load_convert_config
+from toolbox.tcdoc import cover_backfill
 
 MAX_ROWS = 2000
 FIELDS = {
@@ -151,3 +152,33 @@ def generate(plan: tuple[Path, list[dict], dict], *, on_progress, is_cancelled) 
         f"{'已取消' if result.get('cancelled') else '已完成'}：生成 {result.get('generated', 0)} 张，"
         f"跳过 {result.get('skipped', 0)} 条，失败 {result.get('failed', 0)} 条；封面位于视频同目录。")
     return result
+
+
+def backfill_status() -> dict:
+    """返回腾讯文档官方动态封面回填的门禁与目标信息。"""
+    return cover_backfill.status()
+
+
+def _backfill_rows(payload: dict | None) -> tuple[Path, list[dict]]:
+    if not isinstance(payload, dict):
+        raise ValueError("封面回填参数格式不正确，请重新生成封面")
+    path = payload.get("path", "")
+    if not isinstance(path, str) or len(path) > 1000:
+        raise ValueError("回填目录格式不正确，请重新扫描")
+    root = _scan_root(path.strip())
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows or len(rows) > cover_backfill.MAX_ITEMS:
+        raise ValueError(f"请选择 1 至 {cover_backfill.MAX_ITEMS} 条已生成封面后再回填")
+    return root, rows
+
+
+def preview_backfill(payload: dict | None = None) -> dict:
+    root, rows = _backfill_rows(payload)
+    return cover_backfill.preview(root, rows)
+
+
+def apply_backfill(payload: dict | None = None) -> dict:
+    if not isinstance(payload, dict) or payload.get("confirmed") is not True:
+        raise ValueError("请先确认要回填的腾讯文档记录")
+    root, rows = _backfill_rows(payload)
+    return cover_backfill.apply(root, rows, confirmed=True)

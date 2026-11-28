@@ -2,7 +2,8 @@
   'use strict';
 
   var state = { rows: [], page: 1, order: '', asc: true, busy: false, job: '',
-    options: { path: '', recursive: true, template: '' } };
+    options: { path: '', recursive: true, template: '' },
+    backfill: { rows: [], preview: null, job: '' } };
 
   function h(tag, props) {
     var node = document.createElement(tag);
@@ -84,6 +85,8 @@
       [selectAll, selectNone, previous, pageLabel, next, fit, reset, start].forEach(function (node) { footer.appendChild(node); });
       card.appendChild(summary); card.appendChild(tableHost); card.appendChild(footer); host.appendChild(card);
       var jobHost = h('div'); host.appendChild(jobHost);
+      var backfillHost = h('div'); host.appendChild(backfillHost);
+      var backfillJobHost = h('div');
 
       function selectable(row) { return row.status === 'ready' || row.status === 'invalid'; }
       function selected() { return state.rows.filter(function (row) { return selectable(row) && row._selected; }); }

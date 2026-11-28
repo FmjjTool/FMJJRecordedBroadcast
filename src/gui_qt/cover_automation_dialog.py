@@ -400,7 +400,7 @@ class CoverAutomationDialog(QDialog):
                                      and bool(self._template.get("bg")))
         self.start_button.setToolTip("按当前样式补生成勾选视频的同名 JPG 封面"
                                      if self._template.get("bg") else "请先在封面制作页选择底图，再重新打开此窗口")
-        self.cancel_button.setVisible(busy)
+        self.cancel_button.setVisible(self._busy in {"scan", "generate"})
         self.cancel_button.setEnabled(not self._cancel.is_set())
         self.close_button.setToolTip("关闭窗口后任务继续在后台执行" if busy else "关闭窗口")
 
@@ -445,8 +445,8 @@ class CoverAutomationDialog(QDialog):
         self.status_label.setText(f"生成中 · {done} / {total} 条 · {message}")
 
     def _generation_done(self, result, error):
-        self._busy = ""
         if error:
+            self._busy = ""
             self.status_label.setText(self._error_message("生成失败", error))
             self._refresh_controls()
             return
@@ -463,8 +463,103 @@ class CoverAutomationDialog(QDialog):
         self.status_label.setText(
             f"{label} · 生成 {result.get('generated', 0)} 张 · "
             f"跳过 {result.get('skipped', 0)} 条 · 失败 {result.get('failed', 0)} 条；"
-            "封面已保存到各视频旁，可重新扫描复核")
+            "封面已保存到各视频旁")
         self._render_page()
+        generated = [{"video": row["video"], "title": row.get("title", ""),
+                      "date": row.get("date", ""), "cover": row.get("cover", "")}
+                     for row in self._rows if row.get("status") == "generated"]
+        if generated and not result.get("cancelled"):
+            self._start_backfill_preview(generated)
+        else:
+            self._busy = ""
+            self._refresh_controls()
+
+    def _start_backfill_preview(self, rows):
+        from toolbox.tcdoc import cover_backfill
+
+        if self._root is None:
+            self._busy = ""
+            return
+        self._busy = "backfill_preview"
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.status_label.setText("封面已生成，正在匹配腾讯文档「官方动态」…")
+        self._refresh_controls()
+        root = self._root
+        run_bg(lambda: cover_backfill.preview(root, rows), self._backfill_preview_done,
+               owner=self.parentWidget())
+
+    def _backfill_preview_done(self, result, error):
+        if error:
+            self._busy = ""
+            self.progress.hide()
+            self.status_label.setText(
+                "封面已生成；腾讯文档匹配失败：" + self._error_message("", error).lstrip("："))
+            self._refresh_controls()
+            return
+        self.progress.hide()
+        data = result or {}
+        counts = data.get("counts") or {}
+        ready = int(data.get("ready") or 0)
+        if ready <= 0:
+            self._busy = ""
+            self.status_label.setText(
+                "封面已生成；没有找到可唯一回填的腾讯文档记录，"
+                f"未匹配 {counts.get('unmatched', 0)} 条，多条匹配 {counts.get('ambiguous', 0)} 条，"
+                f"阻止 {counts.get('blocked', 0)} 条")
+            self._refresh_controls()
+            return
+        confirm = QMessageBox(self)
+        confirm.setWindowTitle("回填腾讯文档")
+        confirm.setIcon(QMessageBox.Icon.Question)
+        confirm.setText(f"已生成 {len(data.get('items') or [])} 张封面，其中 {ready} 条可唯一匹配腾讯文档。")
+        confirm.setInformativeText(
+            f"将追加到《封茗囧菌数据汇总库》→「官方动态」→「封面图」，保留已有图片；"
+            f"未匹配 {counts.get('unmatched', 0)} 条、多条匹配 {counts.get('ambiguous', 0)} 条将跳过。"
+            "写入前仍需通过同步前刷新门禁。")
+        cancel = confirm.addButton("仅保留本地封面", QMessageBox.ButtonRole.RejectRole)
+        go = confirm.addButton("回填腾讯文档", QMessageBox.ButtonRole.AcceptRole)
+        confirm.setDefaultButton(cancel)
+        confirm.setEscapeButton(cancel)
+        confirm.exec()
+        if confirm.clickedButton() is not go or self._root is None:
+            self._busy = ""
+            self.status_label.setText("封面已生成，未回填腾讯文档")
+            self._refresh_controls()
+            return
+        self._start_backfill_apply(data.get("items") or [])
+
+    def _start_backfill_apply(self, rows):
+        from toolbox.tcdoc import cover_backfill
+
+        if self._root is None:
+            self._busy = ""
+            return
+        self._busy = "backfill_apply"
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.status_label.setText("正在回填腾讯文档封面图，写入后逐条读回核对…")
+        self._refresh_controls()
+        root = self._root
+        selected = [{"video": row.get("video"), "title": row.get("title"),
+                     "date": row.get("date"), "cover": row.get("cover")}
+                    for row in rows if row.get("status") == "matched" and not row.get("duplicate")]
+        run_bg(lambda: cover_backfill.apply(root, selected, confirmed=True),
+               self._backfill_apply_done, owner=self.parentWidget())
+
+    def _backfill_apply_done(self, result, error):
+        self._busy = ""
+        self.progress.hide()
+        if error:
+            self.status_label.setText(
+                "封面已生成；腾讯文档回填失败：" + self._error_message("", error).lstrip("："))
+            self._refresh_controls()
+            return
+        data = result or {}
+        self.status_label.setText(
+            f"封面已生成；腾讯文档已回填 {data.get('updated', 0)} 条，"
+            f"跳过 {data.get('skipped', 0)} 条，失败 {data.get('failed', 0)} 条；已有图片已保留")
+        self._refresh_controls()
 
     def _request_cancel(self):
         self._cancel.set()

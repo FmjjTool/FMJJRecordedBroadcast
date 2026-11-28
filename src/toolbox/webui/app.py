@@ -84,6 +84,11 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
     server.get("/api/cover/overview", lambda req: cover.overview())
     server.post("/api/cover/preview", lambda req: cover.preview(req.json))
     server.post("/api/cover/generate", lambda req: cover.start_generate(req.json))
+    server.get("/api/cover/backfill/status", lambda req: cover.backfill_status())
+    server.post("/api/cover/backfill/preview",
+                lambda req: cover.backfill_preview(req.json))
+    server.post("/api/cover/backfill/apply",
+                lambda req: cover.start_backfill(req.json))
 
     server.get("/api/certificates/history", lambda req: certificates.overview())
     server.post("/api/certificates/evidence/prepare", lambda req: certificates.prepare())
