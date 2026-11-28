@@ -34,6 +34,26 @@ class LivestreamSummaryService:
                 raise JobCancelled(str(exc)) from exc
         return {"job": self.jobs.submit("local_model_test", work).id}
 
+    def fetch_models(self, payload: dict) -> dict:
+        if self.jobs is None:
+            raise ValueError("任务服务不可用")
+        payload = dict(payload or {})
+        limits = {"base_url": 2048, "api_format": 80, "api_key": 8192}
+        for name, limit in limits.items():
+            value = payload.get(name, "")
+            if not isinstance(value, str) or len(value) > limit:
+                raise ValueError("模型接口参数无效")
+
+        def work(task):
+            try:
+                return webui_livestream_summary.fetch_models(
+                    payload,
+                    is_cancelled=lambda: bool(task.cancel_requested))
+            except CancelledError as exc:
+                raise JobCancelled(str(exc)) from exc
+
+        return {"job": self.jobs.submit("livestream_model_list", work).id}
+
     def start_summary(self, payload: dict) -> dict:
         if self.jobs is None:
             raise ValueError("任务服务不可用")

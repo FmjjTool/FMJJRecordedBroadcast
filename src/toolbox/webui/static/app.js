@@ -2978,9 +2978,10 @@ function renderLivestreamSummary(root) {
       var jobHost = h('div');
       var resultHost = h('div');
       var running = false;
+      var fetchingModels = false;
 
       startBtn.addEventListener('click', function () {
-        if (running) return;
+        if (running || fetchingModels) return;
         if (!fileSelect.value) {
           toast('请先选择转录文件', 'warning');
           return;
@@ -3071,10 +3072,52 @@ function renderLivestreamSummary(root) {
         class: 'input', type: 'text', value: settings.base_url || '',
         placeholder: 'https://api.openai.com/v1'
       });
-      var modelInput = h('input', {
-        class: 'input', type: 'text', value: settings.model || '',
-        placeholder: '模型名称'
+      var apiFormatSelect = h('select', { class: 'select' });
+      (settings.api_formats || []).forEach(function (format) {
+        apiFormatSelect.appendChild(h('option', { value: format.value }, format.label));
       });
+      apiFormatSelect.value = settings.api_format || 'chat_completions';
+      var previousApiFormat = apiFormatSelect.value;
+      function syncApiFormat(updateDefault) {
+        var defaults = settings.default_base_urls || {};
+        var previousDefault = String(defaults[previousApiFormat] || '').replace(/\/+$/, '');
+        var nextDefault = defaults[apiFormatSelect.value] || settings.default_base_url || '';
+        var currentBase = baseInput.value.trim().replace(/\/+$/, '');
+        var currentRoot = currentBase.toLowerCase();
+        ['/chat/completions', '/responses', '/v1/messages', '/messages']
+          .some(function (suffix) {
+            if (!currentRoot.endsWith(suffix)) return false;
+            currentRoot = currentRoot.slice(0, -suffix.length).replace(/\/+$/, '');
+            return true;
+          });
+        if (updateDefault && (currentBase === previousDefault
+            || currentRoot === previousDefault.toLowerCase())) {
+          baseInput.value = nextDefault;
+        }
+        if (nextDefault) baseInput.placeholder = nextDefault;
+        previousApiFormat = apiFormatSelect.value;
+      }
+      syncApiFormat(false);
+      apiFormatSelect.addEventListener('change', function () { syncApiFormat(true); });
+      var modelInput = h('input', {
+        class: 'input grow', type: 'text', value: settings.model || '',
+        autocomplete: 'off', placeholder: '未显示在列表中时，可手动输入模型名称'
+      });
+      var modelSelect = h('select', { class: 'select grow',
+        'aria-label': '选择服务商模型' });
+      modelSelect.appendChild(h('option', { value: '', selected: true },
+        '点击“获取模型”读取列表'));
+      var modelIds = new Set();
+      var modelStatus = h('div', { class: 'muted small', role: 'status',
+        'aria-live': 'polite', style: 'margin-top:6px' },
+        '获取后可展开列表查看并选择；在名称框输入关键词可筛选，也可手动填写。');
+      var modelJobHost = h('div');
+      var fetchModelsBtn = h('button', { class: 'btn', type: 'button' }, '获取模型');
+      var modelField = h('label', null,
+        h('span', { class: 'muted small' }, '模型名称'),
+        h('div', { class: 'toolbar', style: 'margin-bottom:0' },
+          modelSelect, fetchModelsBtn),
+        modelInput);
       var chunkInput = h('input', {
         class: 'input', type: 'number', value: String(settings.chunk_chars || 6000),
         min: '2000', max: '20000', step: '500'
@@ -3096,13 +3139,68 @@ function renderLivestreamSummary(root) {
         h('div', { class: 'muted small', style: 'margin-top:8px' },
           '模块和模型请在全局设置中按需准备；CPU 线程数填 0 表示自动，GPU 层数只在 GPU 模式生效。'));
       var cloudFields = h('div', { class: 'form-grid' },
+        h('label', null, h('span', { class: 'muted small' }, '接口格式'), apiFormatSelect),
         h('label', null, h('span', { class: 'muted small' }, '接口地址'), baseInput),
-        h('label', null, h('span', { class: 'muted small' }, '模型名称'), modelInput),
+        modelField,
         h('label', null, h('span', { class: 'muted small' }, 'API Key'), keyInput));
+      var cloudConfig = h('div', null, cloudFields, modelStatus, modelJobHost);
+
+      function clearModelOptions(message) {
+        modelIds = new Set();
+        modelSelect.replaceChildren(h('option', { value: '', selected: true },
+          '点击“获取模型”读取列表'));
+        modelStatus.textContent = message;
+      }
+      function syncModelOptions(models) {
+        var selected = modelInput.value.trim();
+        var ids = Array.isArray(models) ? models : [];
+        var seen = new Set();
+        modelSelect.replaceChildren(h('option', { value: '' }, '请选择模型'));
+        ids.forEach(function (id) {
+          id = String(id || '').trim();
+          if (!id || seen.has(id)) return;
+          seen.add(id);
+          modelSelect.appendChild(h('option', { value: id }, id));
+        });
+        if (selected && !seen.has(selected)) {
+          modelSelect.insertBefore(h('option', { value: selected },
+            selected + '（当前设置）'), modelSelect.firstChild.nextSibling);
+        }
+        modelIds = seen;
+        modelSelect.value = selected || '';
+      }
+      function filterModelOptions(query) {
+        var needle = String(query || '').trim().toLowerCase();
+        var selected = modelSelect.value;
+        var matches = Array.from(modelIds).filter(function (id) {
+          return !needle || id.toLowerCase().includes(needle);
+        });
+        modelSelect.replaceChildren(h('option', { value: '' },
+          matches.length ? '请选择模型' : '没有匹配模型'));
+        matches.forEach(function (id) {
+          modelSelect.appendChild(h('option', { value: id }, id));
+        });
+        modelSelect.value = matches.indexOf(selected) >= 0 ? selected : '';
+      }
+      modelSelect.addEventListener('change', function () {
+        if (modelSelect.value) modelInput.value = modelSelect.value;
+      });
+      modelInput.addEventListener('input', function () {
+        modelSelect.value = modelIds.has(modelInput.value.trim())
+          ? modelInput.value.trim() : '';
+        filterModelOptions(modelInput.value);
+      });
+      baseInput.addEventListener('input', function () {
+        clearModelOptions('接口地址已更改，请重新获取模型列表。');
+      });
+      apiFormatSelect.addEventListener('change', function () {
+        clearModelOptions('接口格式已更改，请重新获取模型列表。');
+      });
 
       function persistSettings() {
         return post('/api/tools/livestream-summary/settings', {
-          base_url: baseInput.value, model: modelInput.value,
+          base_url: baseInput.value, api_format: apiFormatSelect.value,
+          model: modelInput.value,
           chunk_chars: Number(chunkInput.value) || 6000,
           mode: modeSel.value, api_key: modeSel.value === 'ai' ? keyInput.value : '',
           local: localForm.read()
@@ -3113,18 +3211,61 @@ function renderLivestreamSummary(root) {
         });
       }
       function syncMode() {
-        cloudFields.hidden = modeSel.value !== 'ai';
-        cloudFields.classList.toggle('hidden', modeSel.value !== 'ai');
-        [baseInput, modelInput, keyInput].forEach(function (input) {
-          input.disabled = modeSel.value !== 'ai' || running;
+        cloudConfig.hidden = modeSel.value !== 'ai';
+        cloudConfig.classList.toggle('hidden', modeSel.value !== 'ai');
+        [apiFormatSelect, baseInput, modelSelect, modelInput, keyInput].forEach(function (input) {
+          input.disabled = modeSel.value !== 'ai' || running || fetchingModels;
         });
+        fetchModelsBtn.disabled = modeSel.value !== 'ai' || running || fetchingModels;
         localBox.hidden = modeSel.value !== 'local';
         localBox.classList.toggle('hidden', modeSel.value !== 'local');
         localForm.setDisabled(modeSel.value !== 'local' || running);
         chunkInput.disabled = modeSel.value === 'rule' || running;
-        testBtn.disabled = modeSel.value === 'rule' || running;
+        testBtn.disabled = modeSel.value === 'rule' || running || fetchingModels;
+        saveBtn.disabled = running || fetchingModels;
+        modeSel.disabled = running || fetchingModels;
+        startBtn.disabled = running || fetchingModels;
       }
       modeSel.addEventListener('change', syncMode);
+
+      fetchModelsBtn.addEventListener('click', function () {
+        if (running || fetchingModels) return;
+        fetchingModels = true;
+        fetchModelsBtn.textContent = '获取中…';
+        modelStatus.textContent = '正在获取模型列表…';
+        syncMode();
+        post('/api/tools/livestream-summary/models', {
+          base_url: baseInput.value,
+          api_format: apiFormatSelect.value,
+          api_key: keyInput.value
+        }).then(function (result) {
+          watchJob(modelJobHost, result.job, function (job) {
+            var outcome = job.result || {};
+            var models = outcome.models || [];
+            syncModelOptions(models);
+            modelStatus.textContent = models.length
+              ? '已获取 ' + models.length + ' 个模型，可在输入框中筛选并选择。'
+                + (outcome.truncated ? ' 当前列表可能不完整。' : '')
+              : '接口未返回模型 ID；仍可手动输入模型名称。';
+          }, { cancelable: true, indeterminate: true,
+            onSettled: function (job) {
+              fetchingModels = false;
+              fetchModelsBtn.textContent = '获取模型';
+              if (job.status === 'error') {
+                modelStatus.textContent = '获取失败：' + (job.error || '请检查接口设置。');
+              } else if (job.status === 'cancelled') {
+                modelStatus.textContent = '已取消获取模型列表。';
+              }
+              syncMode();
+            }
+          });
+        }).catch(function () {
+          fetchingModels = false;
+          fetchModelsBtn.textContent = '获取模型';
+          modelStatus.textContent = '获取模型列表失败，请检查接口地址与设置。';
+          syncMode();
+        });
+      });
 
       saveBtn.addEventListener('click', function () {
         saveBtn.disabled = true;
@@ -3136,7 +3277,7 @@ function renderLivestreamSummary(root) {
       });
 
       testBtn.addEventListener('click', function () {
-        if (running) return;
+        if (running || fetchingModels) return;
         running = true;
         startBtn.disabled = true;
         modeSel.disabled = true;
@@ -3197,7 +3338,7 @@ function renderLivestreamSummary(root) {
       grid.appendChild(h('div', { class: 'card' },
         h('div', { class: 'row-title', style: 'margin-bottom:8px' },
           '模型设置'),
-        cloudFields,
+        cloudConfig,
         h('div', { class: 'form-grid', style: 'margin-top:8px' },
           h('label', null, h('span', { class: 'muted small' }, '每块字数'),
             chunkInput)),

@@ -15,7 +15,9 @@ from toolbox.config_manager import get_export_subdir, load_convert_config
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import pipeline
 from toolbox.livestream_summary.local_options import FIELD_SPECS, defaults, normalize_options
-from toolbox.livestream_summary.session import client_session
+from toolbox.livestream_summary.session import (
+    client_session, fetch_models as fetch_available_models,
+)
 
 _MAX_TEXT = 512 * 1024
 
@@ -72,20 +74,28 @@ def overview() -> dict:
         settings = ls_config.load_settings()
         mode = settings.mode
         base_url = settings.base_url
+        api_format = settings.api_format
         model = settings.model
         chunk_chars = settings.chunk_chars
         has_key = bool(ls_config.has_api_key())
         local = settings.local
     except Exception:
         mode, base_url, model, chunk_chars, has_key = "ai", "", "", 6000, False
+        api_format = ls_config.API_FORMAT_CHAT_COMPLETIONS
         local = defaults()
     from toolbox.livestream_summary import optional_runtime
     return {
         "work_dir": work,
         "transcripts": transcripts,
         "saved": saved,
-        "settings": {"mode": mode, "base_url": base_url, "model": model,
-                     "chunk_chars": chunk_chars, "has_key": has_key, "local": local},
+        "settings": {"mode": mode, "base_url": base_url,
+                     "api_format": api_format,
+                     "api_formats": [
+                         {"value": value, "label": label}
+                         for value, label in ls_config.API_FORMATS.items()],
+                     "default_base_urls": ls_config.DEFAULT_BASE_URLS,
+                     "model": model, "chunk_chars": chunk_chars,
+                     "has_key": has_key, "local": local},
         "local_fields": FIELD_SPECS,
         "local_runtime": optional_runtime.status(),
         "output_dir": str(out_dir),
@@ -119,6 +129,11 @@ def settings_snapshot() -> dict:
     return {
         "mode": settings.mode,
         "base_url": settings.base_url,
+        "api_format": settings.api_format,
+        "api_formats": [
+            {"value": value, "label": label}
+            for value, label in ls_config.API_FORMATS.items()],
+        "default_base_urls": ls_config.DEFAULT_BASE_URLS,
         "model": settings.model,
         "chunk_chars": settings.chunk_chars,
         "local": settings.local,
@@ -135,19 +150,24 @@ def save_settings(payload: dict) -> dict:
     base_url = str(payload.get("base_url") or current.base_url).strip()
     model = str(payload.get("model", current.model) or "").strip()
     mode = str(payload.get("mode") or current.mode)
+    api_format = str(payload.get("api_format") or current.api_format).strip()
     if mode != "ai":
         base_url, model = current.base_url, current.model
+        api_format = current.api_format
     try:
         chunk_chars = int(payload.get("chunk_chars") or current.chunk_chars)
     except (TypeError, ValueError):
         raise ValueError("每块字数必须是数字") from None
     if mode not in ls_config.MODES:
         raise ValueError("未知的总结模式")
+    if api_format not in ls_config.API_FORMATS:
+        raise ValueError("未知的接口格式")
     if mode == "ai" and not model:
         raise ValueError("请填写模型名称")
     local = normalize_options(payload.get("local", current.local))
     ls_config.save_settings(ls_config.Settings(
         base_url=base_url or ls_config.DEFAULT_BASE_URL,
+        api_format=api_format,
         model=model,
         chunk_chars=max(2000, min(20000, chunk_chars)),
         output_dir=current.output_dir,
@@ -175,6 +195,22 @@ def test_connection(on_log=None, is_cancelled=None, on_progress=None) -> dict:
     return {"message": str(message or "连接正常"),
             "summary": "本地模型连接正常" if settings.mode == "local"
             else f"连接正常 · {settings.model}"}
+
+
+def fetch_models(payload: dict, is_cancelled=None) -> dict:
+    """Return model IDs for the explicitly selected interface; never save the key."""
+    current = ls_config.load_settings()
+    base_url = str(payload.get("base_url", current.base_url) or "").strip()
+    api_format = str(payload.get("api_format", current.api_format) or "").strip()
+    api_key = str(payload.get("api_key") or "").strip()
+    if len(base_url) > 2048:
+        raise ValueError("接口地址过长")
+    if len(api_key) > 8192:
+        raise ValueError("API Key 长度无效")
+    result = fetch_available_models(
+        base_url, api_format, api_key,
+        cancel=_CancelFlag(is_cancelled or (lambda: False)))
+    return result
 
 
 def _transcript_path(rel: str) -> Path:

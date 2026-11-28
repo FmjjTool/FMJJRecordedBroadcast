@@ -32,14 +32,16 @@ from toolbox import livestream_summary_rule as rule
 from toolbox.config_manager import get_export_subdir
 from toolbox.livestream_summary import config as ls_config
 from toolbox.livestream_summary import pipeline
-from toolbox.livestream_summary.client import is_local_base_url
-from toolbox.livestream_summary.session import client_session
+from toolbox.livestream_summary.client import CancelledError, is_local_base_url
+from toolbox.livestream_summary.session import client_session, fetch_models
 
 
 class LivestreamSummaryPage(BasePage):
     def __init__(self, app):
         super().__init__(app)
         self._running = False
+        self._fetching_models = False
+        self._models_cancel: threading.Event | None = None
         self._cancel: threading.Event | None = None
         self._local_refreshing = False
         self._source: Path | None = None
@@ -202,7 +204,7 @@ class LivestreamSummaryPage(BasePage):
             "总结方式", "选择模型接口、本地模型或本地规则保底；推理组件完全可选。", icon="compass")
         self._register_icon(card, "compass", "title")
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("大模型总结（OpenAI 兼容接口）", "ai")
+        self.mode_combo.addItem("大模型总结（兼容接口）", "ai")
         self.mode_combo.addItem("本地规则保底（不联网、不用 Key）", "rule")
         self.mode_combo.addItem("本地模型（CPU / GPU）", "local")
         self.mode_combo.setMinimumContentsLength(8)
@@ -223,8 +225,24 @@ class LivestreamSummaryPage(BasePage):
         base_url_field.addWidget(QLabel("接口地址"))
         self.base_url_edit = QLineEdit()
         self.base_url_edit.setPlaceholderText(ls_config.DEFAULT_BASE_URL)
+        self.base_url_edit.textEdited.connect(self._clear_model_choices)
         base_url_field.addWidget(self.base_url_edit)
         fields.addLayout(base_url_field, 2)
+
+        format_field = QVBoxLayout()
+        format_field.setSpacing(4)
+        format_field.addWidget(QLabel("接口格式"))
+        self.api_format_combo = QComboBox()
+        for value, label in ls_config.API_FORMATS.items():
+            self.api_format_combo.addItem(label, value)
+        self.api_format_combo.setMinimumContentsLength(8)
+        self.api_format_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.api_format_combo.setMinimumWidth(160)
+        self.api_format_combo.setFocusPolicy(Qt.StrongFocus)
+        self.api_format_combo.currentIndexChanged.connect(self._sync_api_format)
+        format_field.addWidget(self.api_format_combo)
+        box.addLayout(format_field)
 
         key_field = QVBoxLayout()
         key_field.setSpacing(4)
@@ -234,24 +252,45 @@ class LivestreamSummaryPage(BasePage):
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
         key_row.addWidget(self.api_key_edit, 1)
-        clear_btn = QPushButton("清除")
-        clear_btn.setProperty("variant", "ghost")
-        clear_btn.setToolTip("删除本机保存的 API Key")
-        clear_btn.clicked.connect(self._clear_api_key)
-        key_row.addWidget(clear_btn)
+        self.clear_key_btn = QPushButton("清除")
+        self.clear_key_btn.setProperty("variant", "ghost")
+        self.clear_key_btn.setToolTip("删除本机保存的 API Key")
+        self.clear_key_btn.clicked.connect(self._clear_api_key)
+        key_row.addWidget(self.clear_key_btn)
         key_field.addLayout(key_row)
         fields.addLayout(key_field, 1)
 
         model_field = QVBoxLayout()
         model_field.setSpacing(4)
         model_field.addWidget(QLabel("模型名称"))
-        self.model_edit = QLineEdit()
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.model_combo.setMaxVisibleItems(15)
+        self.model_combo.setMinimumContentsLength(12)
+        self.model_combo.setToolTip("获取后可下拉选择；也可输入关键词筛选或手动填写")
+        completer = self.model_combo.completer()
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.model_edit = self.model_combo.lineEdit()
         self.model_edit.setPlaceholderText("服务商或已运行的本地服务提供的模型名称")
-        model_field.addWidget(self.model_edit)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(6)
+        model_row.addWidget(self.model_combo, 1)
+        self.fetch_models_btn = QPushButton("获取模型")
+        self.fetch_models_btn.setProperty("variant", "secondary")
+        self.fetch_models_btn.setToolTip("读取当前接口提供的模型列表")
+        self.fetch_models_btn.clicked.connect(self._fetch_model_list)
+        model_row.addWidget(self.fetch_models_btn)
+        model_field.addLayout(model_row)
+        self.model_list_status = QLabel("点击“获取模型”查看可用模型，也可手动输入。")
+        self.model_list_status.setProperty("role", "caption")
+        self.model_list_status.setWordWrap(True)
+        model_field.addWidget(self.model_list_status)
         fields.addLayout(model_field, 1)
         box.addLayout(fields)
 
-        local_hint = QLabel("也可连接已运行的 Ollama / LM Studio 等兼容接口；本机地址可以不填 Key。")
+        local_hint = QLabel("也可连接 OpenAI 兼容接口或本地 Ollama / LM Studio；本机地址可以不填 Key。")
         local_hint.setProperty("role", "caption")
         local_hint.setWordWrap(True)
         self.key_status = QLabel("")
@@ -373,6 +412,12 @@ class LivestreamSummaryPage(BasePage):
     def _load_settings(self):
         settings = ls_config.load_settings()
         self.base_url_edit.setText(settings.base_url)
+        self._api_format = settings.api_format
+        format_index = self.api_format_combo.findData(settings.api_format)
+        self.api_format_combo.blockSignals(True)
+        self.api_format_combo.setCurrentIndex(max(0, format_index))
+        self.api_format_combo.blockSignals(False)
+        self._sync_api_format(update_default=False)
         self.model_edit.setText(settings.model)
         self.chunk_spin.setValue(settings.chunk_chars)
         self.local_options.set_values(settings.local)
@@ -381,20 +426,139 @@ class LivestreamSummaryPage(BasePage):
         self._refresh_key_status()
         self._sync_mode()
 
-    def _sync_mode(self):
+    def _sync_api_format(self, *_args, update_default: bool = True):
+        api_format = self.api_format_combo.currentData() or \
+            ls_config.API_FORMAT_CHAT_COMPLETIONS
+        previous_default = ls_config.DEFAULT_BASE_URLS.get(
+            getattr(self, "_api_format", api_format), ls_config.DEFAULT_BASE_URL)
+        next_default = ls_config.DEFAULT_BASE_URLS.get(
+            api_format, ls_config.DEFAULT_BASE_URL)
+        current_base = self.base_url_edit.text().strip().rstrip("/")
+        current_base_root = current_base.lower()
+        if current_base_root.endswith("/chat/completions"):
+            current_base_root = current_base_root[:-len("/chat/completions")]
+        elif current_base_root.endswith("/responses"):
+            current_base_root = current_base_root[:-len("/responses")]
+        elif current_base_root.endswith("/v1/messages"):
+            current_base_root = current_base_root[:-len("/v1/messages")]
+        elif current_base_root.endswith("/messages"):
+            current_base_root = current_base_root[:-len("/messages")]
+        default_roots = {
+            default.rstrip("/").lower(): default
+            for default in ls_config.DEFAULT_BASE_URLS.values()}
+        is_default_endpoint = (
+            current_base_root in default_roots and
+            current_base_root == previous_default.rstrip("/").lower())
+        if update_default and (
+                current_base == previous_default.rstrip("/") or is_default_endpoint):
+            self.base_url_edit.setText(next_default)
+        self.base_url_edit.setPlaceholderText(next_default)
+        self.api_format_combo.setToolTip(
+            ls_config.API_FORMATS.get(api_format, "模型接口格式"))
+        self._api_format = api_format
+        if update_default:
+            self._clear_model_choices()
+
+    def _clear_model_choices(self, *_args):
+        if not hasattr(self, "model_combo"):
+            return
+        current = self.model_edit.text()
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_edit.setText(current)
+        self.model_combo.blockSignals(False)
+        self.model_list_status.setText("接口地址或格式已更改，请重新获取模型列表。")
+
+    def _fetch_model_list(self):
+        if self._fetching_models:
+            self._cancel_model_fetch()
+            return
+        if self._running:
+            return
+        settings = self._collect_settings()
+        if settings.mode != "ai":
+            return
+        typed_key = self.api_key_edit.text().strip()
+        if (not typed_key and not ls_config.has_api_key()
+                and not is_local_base_url(settings.base_url)):
+            self.app.toast("请先填写或保存模型接口的 API Key", "warning")
+            return
+        self._fetching_models = True
+        cancel_event = threading.Event()
+        self._models_cancel = cancel_event
+        self.model_list_status.setText("正在获取模型列表…")
+        self._sync_mode(refresh_key=False)
+
+        def work():
+            return fetch_models(
+                settings.base_url, settings.api_format, typed_key,
+                cancel=cancel_event)
+
+        def done(result, err):
+            self._fetching_models = False
+            self._models_cancel = None
+            self._sync_mode(refresh_key=False)
+            if cancel_event.is_set() or isinstance(err, CancelledError):
+                self.model_list_status.setText("已取消获取模型列表。")
+                return
+            if err:
+                self.model_list_status.setText(f"获取失败：{str(err)[:180]}")
+                return
+            current = self.model_edit.text()
+            models = list(result.get("models") or [])
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            for model in models:
+                self.model_combo.addItem(model, model)
+            self.model_edit.setText(current)
+            self.model_combo.blockSignals(False)
+            if not models:
+                self.model_list_status.setText(
+                    "接口未返回模型 ID；仍可手动输入模型名称。")
+            else:
+                suffix = "（当前列表可能不完整）" if result.get("truncated") else ""
+                self.model_list_status.setText(
+                    f"已获取 {len(models)} 个模型，可下拉选择或输入关键词筛选。{suffix}")
+
+        run_bg(work, done, owner=self)
+
+    def _cancel_model_fetch(self):
+        cancel_event = self._models_cancel
+        if cancel_event is None or cancel_event.is_set():
+            return
+        cancel_event.set()
+        self.fetch_models_btn.setText("正在取消…")
+        self.fetch_models_btn.setEnabled(False)
+        self.model_list_status.setText("正在取消模型列表获取…")
+
+    def _sync_mode(self, *_args, refresh_key: bool = True):
         mode = self.mode_combo.currentData()
         ai = mode == "ai"
         self.model_box.setVisible(ai)
         self.model_box.setEnabled(ai and not self._running)
-        if ai:
+        model_inputs_enabled = ai and not self._running and not self._fetching_models
+        for widget in (
+                self.base_url_edit, self.api_format_combo, self.api_key_edit,
+                self.clear_key_btn, self.model_combo):
+            widget.setEnabled(model_inputs_enabled)
+        canceling_models = bool(
+            self._models_cancel is not None and self._models_cancel.is_set())
+        self.fetch_models_btn.setText(
+            "正在取消…" if canceling_models else
+            "取消获取" if self._fetching_models else "获取模型")
+        self.fetch_models_btn.setEnabled(ai and not self._running and not canceling_models)
+        if ai and refresh_key:
             self._refresh_key_status()
         if hasattr(self, "local_card"):
             self.local_card.setVisible(mode == "local")
             self.local_options.setEnabled(mode == "local" and not self._running)
-        self.mode_combo.setEnabled(not self._running)
+        self.mode_combo.setEnabled(not self._running and not self._fetching_models)
         self.chunk_spin.setEnabled(mode != "rule" and not self._running)
-        self.save_btn.setEnabled(not self._running)
-        self.test_btn.setEnabled(mode != "rule" and not self._running)
+        self.save_btn.setEnabled(not self._running and not self._fetching_models)
+        self.test_btn.setEnabled(
+            mode != "rule" and not self._running and not self._fetching_models)
+        self.start_btn.setEnabled(
+            self._source is not None and not self._running and not self._fetching_models)
         if hasattr(self, "local_detect_btn"):
             self.local_detect_btn.setEnabled(not self._running and not self._local_refreshing)
 
@@ -423,6 +587,8 @@ class LivestreamSummaryPage(BasePage):
         return ls_config.Settings(
             base_url=(self.base_url_edit.text().strip() or ls_config.DEFAULT_BASE_URL)
             if mode == "ai" else current.base_url,
+            api_format=self.api_format_combo.currentData() if mode == "ai"
+            else current.api_format,
             model=self.model_edit.text().strip() if mode == "ai" else current.model,
             chunk_chars=int(self.chunk_spin.value()), output_dir="", mode=mode,
             local=self.local_options.values() if mode == "local" else current.local,
@@ -547,6 +713,8 @@ class LivestreamSummaryPage(BasePage):
         return True
 
     def _start(self):
+        if self._fetching_models:
+            return
         if self._running:
             self.app.toast("总结正在进行中", "info")
             return

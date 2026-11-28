@@ -491,6 +491,10 @@ def build_app(token: str, host: str = "127.0.0.1", port: int = 0) -> WebUIServer
         return livestream_summary.save_settings(dict(req.json or {}))
     server.post("/api/tools/livestream-summary/settings", save_livestream_settings)
 
+    def fetch_livestream_models(req):
+        return livestream_summary.fetch_models(dict(req.json or {}))
+    server.post("/api/tools/livestream-summary/models", fetch_livestream_models)
+
     def test_livestream_connection(req):
         return livestream_summary.test_connection()
     server.post("/api/tools/livestream-summary/test", test_livestream_connection)

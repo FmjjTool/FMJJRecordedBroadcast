@@ -21,13 +21,27 @@ from toolbox.config_manager import (
 from .local_options import defaults as local_defaults, normalize_options
 
 CFG_BASE_URL = "livestream_summary_base_url"
+CFG_API_FORMAT = "livestream_summary_api_format"
 CFG_MODEL = "livestream_summary_model"
 CFG_CHUNK_CHARS = "livestream_summary_chunk_chars"
 CFG_OUTPUT_DIR = "livestream_summary_output_dir"
 CFG_MODE = "livestream_summary_mode"
 CFG_LOCAL = "livestream_summary_local"
 
+API_FORMAT_CHAT_COMPLETIONS = "chat_completions"
+API_FORMAT_RESPONSES = "responses"
+API_FORMAT_ANTHROPIC_MESSAGES = "anthropic_messages"
+API_FORMATS = {
+    API_FORMAT_CHAT_COMPLETIONS: "OpenAI Chat Completions",
+    API_FORMAT_RESPONSES: "OpenAI Responses API",
+    API_FORMAT_ANTHROPIC_MESSAGES: "Anthropic Messages API",
+}
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_BASE_URLS = {
+    API_FORMAT_CHAT_COMPLETIONS: DEFAULT_BASE_URL,
+    API_FORMAT_RESPONSES: DEFAULT_BASE_URL,
+    API_FORMAT_ANTHROPIC_MESSAGES: "https://api.anthropic.com",
+}
 DEFAULT_CHUNK_CHARS = 6000
 MODES = {"ai": "模型接口", "local": "本地模型（CPU / GPU）", "rule": "本地规则保底"}
 
@@ -35,6 +49,7 @@ MODES = {"ai": "模型接口", "local": "本地模型（CPU / GPU）", "rule": "
 @dataclass
 class Settings:
     base_url: str = DEFAULT_BASE_URL
+    api_format: str = API_FORMAT_CHAT_COMPLETIONS
     model: str = ""
     chunk_chars: int = DEFAULT_CHUNK_CHARS
     output_dir: str = ""
@@ -44,13 +59,21 @@ class Settings:
 
 def load_settings() -> Settings:
     cfg = load_convert_config()
+    base_url = str(cfg.get(CFG_BASE_URL) or DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
+    api_format = str(cfg.get(CFG_API_FORMAT) or "").strip()
+    if api_format not in API_FORMATS:
+        # Older settings relied on the endpoint suffix to select Responses.
+        api_format = (API_FORMAT_RESPONSES
+                      if base_url.lower().rstrip("/").endswith("/responses")
+                      else API_FORMAT_CHAT_COMPLETIONS)
     try:
         chunk_chars = int(cfg.get(CFG_CHUNK_CHARS) or DEFAULT_CHUNK_CHARS)
     except (TypeError, ValueError):
         chunk_chars = DEFAULT_CHUNK_CHARS
     mode = str(cfg.get(CFG_MODE) or "ai").strip()
     return Settings(
-        base_url=str(cfg.get(CFG_BASE_URL) or DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,
+        base_url=base_url,
+        api_format=api_format,
         model=str(cfg.get(CFG_MODEL) or "").strip(),
         chunk_chars=max(2000, min(20000, chunk_chars)),
         output_dir=str(cfg.get(CFG_OUTPUT_DIR) or "").strip(),
@@ -63,6 +86,9 @@ def save_settings(settings: Settings) -> None:
     local = normalize_options(settings.local)
     cfg = load_convert_config()
     cfg[CFG_BASE_URL] = settings.base_url.strip() or DEFAULT_BASE_URL
+    cfg[CFG_API_FORMAT] = (settings.api_format
+                           if settings.api_format in API_FORMATS
+                           else API_FORMAT_CHAT_COMPLETIONS)
     cfg[CFG_MODEL] = settings.model.strip()
     cfg[CFG_CHUNK_CHARS] = max(2000, min(20000, int(settings.chunk_chars)))
     cfg[CFG_OUTPUT_DIR] = settings.output_dir.strip()
