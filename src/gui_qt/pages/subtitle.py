@@ -97,7 +97,7 @@ class SubtitlePage(BasePage):
         files_card.content_layout.addWidget(self.file_list)
         layout.addWidget(files_card)
 
-        # 选项 + 转换
+        # 转换选项、操作与日志放在同一张卡片中
         opt_row = QHBoxLayout()
         self.same_dir = QCheckBox("转换后放到原地址")
         self.same_dir.setChecked(use_same_dir)
@@ -108,22 +108,23 @@ class SubtitlePage(BasePage):
         self.date_folder.toggled.connect(lambda _c: self._save_sub_setting())
         opt_row.addWidget(self.date_folder)
         opt_row.addStretch(1)
+
+        action_row = QHBoxLayout()
         self.convert_btn = QPushButton("开始转换")
         self.convert_btn.setProperty("variant", "primary")
         self.convert_btn.clicked.connect(self._convert)
-        opt_row.addWidget(self.convert_btn)
+        action_row.addWidget(self.convert_btn)
         self.result_label = QLabel("")
-        opt_row.addWidget(self.result_label)
-        run_card = self._section("转换选项", "play")
-        run_card.content_layout.addLayout(opt_row)
-        layout.addWidget(run_card)
+        action_row.addWidget(self.result_label)
+        action_row.addStretch(1)
 
-        # 日志
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        log_card = self._section("运行日志", "clipboard")
-        log_card.content_layout.addWidget(self.log_text)
-        layout.addWidget(log_card, 1)
+        run_card = self._section("转换与日志", "play")
+        run_card.content_layout.addLayout(opt_row)
+        run_card.content_layout.addLayout(action_row)
+        run_card.content_layout.addWidget(self.log_text, 1)
+        layout.addWidget(run_card, 1)
 
         # 外层页签：字幕转换（原有界面）+ 歌词转换（原独立页并入）
         root = QVBoxLayout(self)

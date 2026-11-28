@@ -64,14 +64,16 @@ class AudioPage(BasePage):
         self.scan_btn = QPushButton("扫描视频/音频")
         self.scan_btn.clicked.connect(self._scan)
         ctrl_row.addWidget(self.scan_btn)
-        self.count_label = QLabel("")
-        ctrl_row.addWidget(self.count_label)
-        ctrl_row.addStretch(1)
 
-        # 进度条
+        # 进度条与扫描入口并排，减少顶部控制区占用的垂直空间。
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
+        ctrl_row.addWidget(self.progress, 1)
+
+        self.count_label = QLabel("")
+        ctrl_row.addWidget(self.count_label)
+        ctrl_row.addStretch(1)
 
         # 操作按钮
         btn_row = QHBoxLayout()
@@ -159,7 +161,6 @@ class AudioPage(BasePage):
 
         run_card = self._section("提取与字幕", "music")
         run_card.content_layout.addLayout(ctrl_row)
-        run_card.content_layout.addWidget(self.progress)
         run_card.content_layout.addLayout(btn_row)
         run_card.content_layout.addLayout(asr_options)
         layout.addWidget(run_card)
