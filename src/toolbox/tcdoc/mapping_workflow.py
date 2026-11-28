@@ -439,3 +439,103 @@ def execute_selected(client, file_id: str, sheet_id: str, headers: list[str],
             exc.receipt = _public_receipt(receipt)
         raise
     return receipt
+
+
+def execute_cloud_updates(client, file_id: str, sheet_id: str,
+                          preview_actions: list[dict],
+                          log: Callable[[str], None], is_cancelled=None) -> dict:
+    """逐 recordID 执行云端编辑计划，重读旧值并逐字段核验回写结果。"""
+    client.validate_write_target(file_id, sheet_id)
+    if sheet_id not in openapi.WRITABLE_TAB_IDS:
+        raise MappingError("该子表不允许云端编辑")
+    if (not isinstance(preview_actions, list) or not preview_actions
+            or len(preview_actions) > MAX_CLOUD_EDIT_RECORDS):
+        raise MappingError("编辑预览已失效，请重新选择记录")
+    ids = [str(item.get("record_id") or "") for item in preview_actions
+           if isinstance(item, dict)]
+    if (len(ids) != len(preview_actions) or any(not rid for rid in ids)
+            or len(set(ids)) != len(ids)):
+        raise MappingError("编辑预览包含无效或重复记录，请重新载入云端数据")
+    receipt = {"added": 0, "updated": 0, "verified": True,
+               "record_ids": [], "unknown_record_outcome": False,
+               "cancelled": False}
+    _check_cancelled(is_cancelled, receipt)
+    _ensure_gate()
+    try:
+        with _selected_write_lock(receipt):
+            _ensure_gate()
+            _check_cancelled(is_cancelled, receipt)
+            fields, records = _read_cloud_state(client, file_id, sheet_id, log)
+            for index, action in enumerate(preview_actions):
+                _check_cancelled(is_cancelled, receipt)
+                if index:
+                    # 只校验当前行的字段与旧值，避免覆盖预览后云端的并发修改。
+                    fields, records = _read_cloud_state(client, file_id, sheet_id, log)
+                current_fields = {str(item.get("fieldID") or ""): item
+                                  for item in fields if item.get("fieldID")}
+                expected_fields = action.get("_fields") or {}
+                if not expected_fields or _field_signature(
+                        {fid: fid for fid in expected_fields}, current_fields) != expected_fields:
+                    raise MappingError("云端字段定义已变化，未继续写入；请刷新后重新编辑")
+                rid = str(action["record_id"])
+                matches = [item for item in records
+                           if str(item.get("recordID") or "") == rid]
+                if len(matches) != 1:
+                    raise MappingError("所选记录已不存在或记录 ID 不唯一，未继续写入")
+                record = matches[0]
+                values = {}
+                fields_to_check = {}
+                for fid, old_key in (action.get("_snapshot") or {}).items():
+                    field = current_fields.get(str(fid))
+                    if field is None:
+                        raise MappingError("云端字段已变化，未继续写入")
+                    current = _record_field_value(record, field)
+                    if _value_key(field, current) != old_key:
+                        raise MappingError("该记录在预览后已被修改，未继续写入；请重新载入后核对")
+                    fields_to_check[str(fid)] = field
+                for change in action.get("changes") or []:
+                    fid = str(change.get("field_id") or "")
+                    field = fields_to_check.get(fid)
+                    title = str((field or {}).get("fieldTitle") or "")
+                    if not field or title != change.get("field"):
+                        raise MappingError("编辑预览已失效，请刷新字段后重新编辑")
+                    if title not in (action.get("values") or {}):
+                        raise MappingError("编辑预览缺少变更值，请重新编辑")
+                    values[title] = deepcopy(action["values"][title])
+                if not values or len(values) != len(action.get("changes") or []):
+                    raise MappingError("编辑预览没有可写字段，请重新编辑")
+                _check_cancelled(is_cancelled, receipt)
+                receipt["_attempted"] = True
+                try:
+                    client.update_records(file_id, sheet_id, [{
+                        "recordID": rid, "values": values}])
+                    receipt["updated"] += 1
+                    saved_fields, saved_records = _read_cloud_state(
+                        client, file_id, sheet_id, log)
+                    saved_by_id = {str(item.get("fieldID") or ""): item
+                                   for item in saved_fields if item.get("fieldID")}
+                    saved_matches = [item for item in saved_records
+                                     if str(item.get("recordID") or "") == rid]
+                    if len(saved_matches) != 1:
+                        raise MappingWriteUnknown("写后无法按记录 ID 唯一读回该记录")
+                    saved = saved_matches[0]
+                    for change in action.get("changes") or []:
+                        fid = str(change.get("field_id") or "")
+                        field = saved_by_id.get(fid)
+                        if field is None or _value_key(field, _record_field_value(
+                                saved, field)) != _value_key(field, values[field["fieldTitle"]]):
+                            raise MappingWriteUnknown("写后字段读回内容与预期不一致")
+                    receipt["record_ids"].append(rid)
+                except Exception as exc:
+                    receipt["verified"] = False
+                    receipt["unknown_record_outcome"] = True
+                    unknown = MappingWriteUnknown(
+                        "云端编辑结果未能确认，已停止且不会自动重试；请到表格核对后再操作")
+                    unknown.receipt = _public_receipt(receipt)
+                    raise unknown from exc
+                log(f"记录 {rid} 已更新并读回核对（{receipt['updated']}/{len(preview_actions)}）")
+    except MappingError as exc:
+        if not hasattr(exc, "receipt"):
+            exc.receipt = _public_receipt(receipt)
+        raise
+    return receipt
