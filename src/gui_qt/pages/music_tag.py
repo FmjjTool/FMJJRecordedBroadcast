@@ -11,7 +11,7 @@ import os
 import re
 
 from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtGui import QAction, QIcon, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
@@ -304,8 +304,9 @@ class MusicTagPage(BasePage):
         v.addWidget(self._build_toolbar())
         v.addWidget(self._build_body(), 1)
         v.addWidget(self._build_statusbar())
+        self._install_shortcuts()
 
-    # ==================== 菜单 / 工具栏（对齐官方 musictag） ====================
+    # ==================== 工具栏 ====================
     @staticmethod
     def _icon(name: str) -> QIcon:
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -326,6 +327,25 @@ class MusicTagPage(BasePage):
         action.triggered.connect(slot)
         return action
 
+    def _install_shortcuts(self):
+        bindings = (
+            ("Ctrl+O", self._add_files),
+            ("Ctrl+Shift+O", self._add_folder),
+            ("Ctrl+R", self._reload_selected),
+            ("Ctrl+S", self._save_selected),
+            ("Ctrl+Shift+S", self._save_all),
+            ("Ctrl+A", self._select_all_files),
+            ("Ctrl+Shift+C", self._copy_tags),
+            ("Ctrl+Shift+V", self._paste_tags),
+            ("Ctrl+F", self._find_replace),
+            ("F5", self._reload_selected),
+        )
+        self._shortcuts = []
+        for key, slot in bindings:
+            shortcut = QShortcut(key, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(slot)
+            self._shortcuts.append(shortcut)
     def _build_toolbar(self):
         tb = QToolBar()
         tb.setMovable(False)
