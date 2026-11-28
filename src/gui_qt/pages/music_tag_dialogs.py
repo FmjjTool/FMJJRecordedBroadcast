@@ -13,7 +13,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -23,8 +23,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from gui_qt import table_sort
+from gui_qt import table_sort, theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from music import tag_history, tag_search, tags_io
 from music.tag_match_rules import (
     NUMBER_FIELDS, TEXT_MATCH_FIELDS, build_query, build_update_plan,
@@ -36,8 +37,27 @@ PICTURE_TYPE_NAMES = tags_io.PICTURE_TYPE_NAMES
 
 # ==================== 通用小工具 ====================
 
-def _btn(text, style="", tip="", cb=None):
+class _ButtonIconFilter(QObject):
+    def __init__(self, button, name, role):
+        super().__init__(button)
+        self.name, self.role = name, role
+        button.installEventFilter(self)
+        self.refresh(button)
+
+    def refresh(self, button):
+        button.setIcon(line_icon(self.name, theme.color(self.role), 16))
+        button.setIconSize(QSize(16, 16))
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.PaletteChange:
+            self.refresh(obj)
+        return False
+
+
+def _btn(text, style="", tip="", cb=None, *, icon="", icon_role="text"):
     b = QPushButton(text)
+    if icon:
+        b._icon_filter = _ButtonIconFilter(b, icon, icon_role)
     if style:
         b.setStyleSheet(style)
     if tip:
@@ -51,12 +71,13 @@ def _blue(text, cb=None):
     return _btn(text, "background:#1976d2;color:white;padding:4px 14px;", "", cb)
 
 
-def _green(text, cb=None):
-    return _btn(text, "background:#2e7d32;color:white;padding:4px 14px;", "", cb)
+def _green(text, cb=None, *, icon=""):
+    return _btn(text, "background:#2e7d32;color:white;padding:4px 14px;", "", cb,
+                icon=icon, icon_role="on_accent")
 
 
-def _plain(text, cb=None):
-    return _btn(text, "padding:4px 12px;", "", cb)
+def _plain(text, cb=None, *, icon=""):
+    return _btn(text, "padding:4px 12px;", "", cb, icon=icon)
 
 
 def _table(headers: list[str]) -> QTableWidget:
@@ -206,7 +227,7 @@ class AutoMatchDialog(QDialog):
         self.info = QLabel("")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        self.start_btn = _green("▶ 开始匹配", self._start)
+        self.start_btn = _green("开始匹配", self._start, icon="play")
         self.cancel_btn = _plain("■ 停止", self._stop)
         self.cancel_btn.setEnabled(False)
         close = _plain("关闭", self.reject)
@@ -1236,7 +1257,7 @@ class PicturesDialog(QDialog):
         v.addWidget(self.preview, 2)
 
         row = QHBoxLayout()
-        row.addWidget(_plain("＋ 添加图片", self._add))
+        row.addWidget(_plain("添加图片", self._add, icon="plus"))
         row.addWidget(_plain("移除", self._remove))
         row.addWidget(_plain("设为前置封面", self._front))
         row.addWidget(_plain("导出", self._export))
@@ -1344,7 +1365,7 @@ class HistoryDialog(QDialog):
         self.info = QLabel(f"共 {len(self.records)} 条历史（最多保留 5 条）")
         self.info.setStyleSheet("color:#888;")
         bar.addWidget(self.info, 1)
-        bar.addWidget(_green("↩ 恢复选中快照", self._restore))
+        bar.addWidget(_green("恢复选中快照", self._restore, icon="arrow_left"))
         bar.addWidget(_plain("关闭", self.reject))
         v.addLayout(bar)
         self._reload()

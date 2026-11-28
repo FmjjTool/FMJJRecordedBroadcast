@@ -3,7 +3,8 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidgetItem,
     QPushButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
@@ -15,6 +16,8 @@ from toolbox.utils import format_size
 from toolbox.config_manager import load_convert_config, save_convert_config
 
 from gui_qt.pages.base import BasePage
+from gui_qt import theme
+from gui_qt.navigation import line_icon
 from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import ToolSectionCard
 
@@ -86,7 +89,9 @@ class SubtitlePage(BasePage):
         bar.addWidget(QLabel("已识别字幕文件:"))
         bar.addWidget(self._btn("全选", lambda: self._sel("all"), small=True))
         bar.addWidget(self._btn("反选", lambda: self._sel("invert"), small=True))
-        bar.addWidget(self._btn("□ 清除", lambda: self._sel("none"), small=True))
+        self.clear_selection_btn = self._btn("清除", lambda: self._sel("none"), small=True)
+        self.clear_selection_btn.setIconSize(QSize(16, 16))
+        bar.addWidget(self.clear_selection_btn)
         bar.addWidget(self._btn("删除选中", self._delete_selected, small=True, danger=True))
         bar.addStretch(1)
 
@@ -135,6 +140,12 @@ class SubtitlePage(BasePage):
         self.lyrics_page = LyricsToolPage(app)
         self.tabs.addTab(self.lyrics_page, "歌词转换")
         root.addWidget(self.tabs)
+        self.on_theme_changed()
+
+    def on_theme_changed(self):
+        self.clear_selection_btn.setIcon(line_icon(
+            "close", theme.current_palette().color(QPalette.ButtonText).name(), 16))
+        self.lyrics_page.on_theme_changed()
 
     def _section(self, title, icon):
         card = ToolSectionCard(title, icon=icon)

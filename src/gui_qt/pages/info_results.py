@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import common
-from gui_qt.emoji_icons import strip_inline_emoji
+from gui_qt.gui_text import strip_inline_emoji
 from gui_qt.common import _fmt, post_to_main, run_bg
 from toolbox import download_ops
 from gui_qt.pages.base import BasePage

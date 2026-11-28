@@ -545,6 +545,7 @@ class ImageSorterPage(LazyLoadMixin, BasePage):
             if widget is not None:
                 widget.setIcon(line_icon(name, self._icon_color(role), 16))
         self.folder_panel.refresh_if_theme_changed()
+        self.media_viewer.on_theme_changed()
 
     # ==================== 源文件夹管理 ====================
 

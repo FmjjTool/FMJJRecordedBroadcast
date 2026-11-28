@@ -19,8 +19,8 @@ from pathlib import Path
 import threading
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QPalette, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
@@ -42,6 +42,8 @@ from toolbox.utils import (
 )
 
 from gui_qt.common import FlowLayout, run_bg
+from gui_qt import theme
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from toolbox import bili_upload as BU
 
@@ -1159,17 +1161,22 @@ class RenamePage(BasePage):
             self.plat_cards_layout = box
         return w
 
-    def _mini_btn(self, text, slot, danger=False, tip=""):
+    def _mini_btn(self, text, slot, danger=False, tip="", icon=None):
         """小图标按钮：仅图标（无文字），带可选 tooltip（悬停提示）。
 
         箭头类按钮统一使用 ↑/↓ 文字符号（Unicode 单色，符合整套 UI 风格）；
-        删除按钮用 × (U+00D7)；尺寸 36×30 确保 × 图标清晰可辨（原 28×24
-        字号太小，× 几乎看不见）；tip 不为空时挂 setToolTip。
+        删除按钮显式使用线形图标；尺寸保持 36×30；
+        tip 不为空时挂 setToolTip。
         """
         b = QPushButton(text)
+        if icon:
+            b.setProperty("explicitLineIconName", icon)
+            b.setIcon(line_icon(
+                icon, theme.current_palette().color(QPalette.ButtonText).name(), 16))
+            b.setIconSize(QSize(16, 16))
         b.setFixedSize(36, 30)
         b.setCursor(Qt.PointingHandCursor)
-        # 字号 16 让 ×/↑/↓ 在 36×30 框内居中且清晰
+        # 保留上下移文字符号在 36×30 框内的字号与居中方式
         b.setStyleSheet(
             "QPushButton { font-size: 16px; padding: 0px;"
             " border: 1px solid palette(mid); border-radius: 4px;"
@@ -1221,8 +1228,8 @@ class RenamePage(BasePage):
                 "↓", lambda _=False, idx=i: self._move_item(card_type, idx, 1),
                 tip="下移"))
             h.addWidget(self._mini_btn(
-                "×", lambda _=False, nm=name: self._delete_card_item(card_type, nm),
-                danger=True, tip="删除"))
+                "", lambda _=False, nm=name: self._delete_card_item(card_type, nm),
+                danger=True, tip="删除", icon="close"))
             layout.addWidget(card)
         layout.addStretch(1)
 
@@ -1339,6 +1346,11 @@ class RenamePage(BasePage):
 
     def on_theme_changed(self):
         self._refresh_type_labels()
+        color = theme.current_palette().color(QPalette.ButtonText).name()
+        for button in self.findChildren(QPushButton):
+            name = button.property("explicitLineIconName")
+            if name:
+                button.setIcon(line_icon(name, color, 16))
 
     def shutdown(self):
         self._post_cancel.set()

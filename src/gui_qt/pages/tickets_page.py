@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout,
 )
 
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 from gui_qt.pages.base import BasePage
 from gui_qt.table_columns import configure_table_columns
 from gui_qt.table_sort import install as install_table_sort
@@ -95,7 +97,8 @@ class TicketsPage(BasePage):
         self.sel_all_btn.setToolTip("勾选全部演出")
         self.sel_all_btn.clicked.connect(lambda: self._set_all_checks(True))
         sel_row.addWidget(self.sel_all_btn)
-        self.sel_invert_btn = QPushButton("⇄ 反选")
+        self.sel_invert_btn = QPushButton("反选")
+        self.sel_invert_btn.setIcon(line_icon("swap", theme.color("text"), 16))
         self.sel_invert_btn.setToolTip("反转每行勾选状态")
         self.sel_invert_btn.clicked.connect(self._invert_checks)
         sel_row.addWidget(self.sel_invert_btn)
@@ -166,6 +169,9 @@ class TicketsPage(BasePage):
         layout.addWidget(self.status_label)
 
     # ==================== 解析列表 ====================
+
+    def on_theme_changed(self):
+        self.sel_invert_btn.setIcon(line_icon("swap", theme.color("text"), 16))
 
     def _selected_platforms(self):
         return tuple(key for key, check in self.platform_checks.items()

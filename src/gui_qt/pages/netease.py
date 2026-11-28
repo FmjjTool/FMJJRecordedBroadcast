@@ -398,8 +398,11 @@ class NeteasePage(BasePage):
         self.more_btn.setMenu(more_menu)
         self.selection_action_buttons = []
         for label, mode in (("全选", "all"), ("反选", "invert"),
-                            ("□ 全不选", "none")):
+                            ("全不选", "none")):
             action = more_menu.addAction(label)
+            if mode == "none":
+                action.setProperty("neteaseSelectionIcon", "close")
+                action.setIcon(line_icon("close", theme.color("text"), 16))
             action.triggered.connect(
                 lambda _checked=False, value=mode: self._sel(value))
             self.selection_action_buttons.append(action)
@@ -461,6 +464,12 @@ class NeteasePage(BasePage):
         self.platform_menu.blockSignals(False)
         self._apply_platform("netease")
         return w
+
+    def on_theme_changed(self):
+        for action in self.selection_action_buttons:
+            name = action.property("neteaseSelectionIcon")
+            if name:
+                action.setIcon(line_icon(name, theme.color("text"), 16))
 
     # ===================== 自动换源勾选持久化 =====================
     @staticmethod

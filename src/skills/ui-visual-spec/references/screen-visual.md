@@ -163,7 +163,7 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 1. 字重只用 `bold`（或 `600`）。`700`、`900`、`lighter` 不要用。
 2. 页面内不写 `font-family`，除非是等宽内容（路径、命令、日志、时间码）用 `Consolas, "Cascadia Mono", monospace`。中文界面字体只由全局 QSS 提供，页面重复声明会出现同一窗口两种中文字形。
-3. 整个软件 UI 文案（按钮、标签、日志、toast、状态栏、tooltip、占位符、帮助浮层）不得使用 emoji。结构性图标（导航、卡片标题、按钮、下拉项）一律用 `gui_qt.navigation.line_icon()` 线形图标（见 4.4），不得用 emoji 充当；既有页面在涉及改动时逐步替换，不做批量返工。只读日志与状态栏由 `emoji_icons` 运行期统一删除 emoji；用户生成正文（弹幕、文章正文、文件名等数据）保留原样。
+3. 整个软件原生 UI 文案（按钮、标签、日志、toast、状态栏、tooltip、占位符）不得使用 emoji。结构性图标（导航、卡片标题、按钮、下拉项）一律显式使用 `gui_qt.navigation.line_icon()` 线形图标（见 4.4），不从文字前缀推导或转换图标。`gui_text` 只负责原生控件文字和只读日志清理，不生成图标；可编辑内容、正文浏览器、获取的资源与下载文件按原有用途保留，不改存储数据。
 
 ## 四、间距、圆角、尺寸
 
@@ -258,30 +258,20 @@ toast（`src/gui_qt/toast.py`）刻意不随主题：深色底 + 白字，四种
 
 主题切换：图标会把颜色烘进像素，必须按第七节第 3 条重新生成。页面维护 `(widget, name, role)` 注册表，在 `on_theme_changed()` 里统一重设；参考实现 `src/gui_qt/pages/livestream_summary.py` 的 `_register_icon()` / `_refresh_icons()` / `_icon_color()`。
 
-### 4.5 历史 emoji 的自动转换（运行时）
+### 4.5 显式图标与 GUI 文字清理
 
-页面里既有的前导 emoji 由 `src/gui_qt/emoji_icons.py` 在运行期统一转换，不需要逐页改源码；`src/gui_qt/__init__.py` 导入包时自动安装。
+所有结构图标直接通过 `line_icon()` 设置，`ToolSectionCard` 显式传 `icon=`。按钮、页签与菜单不再用 emoji 充当图标，也不保留字符到图标的映射或运行期自动转换。图标颜色与主题刷新由所属页面或控件维护，按 4.4 与第七节执行。
 
-| 控件 | 行为 |
+`src/gui_qt/gui_text.py` 在导入 GUI 包时安装纯文字清理，职责限定如下：
+
+| 范围 | 行为 |
 | --- | --- |
-| `QPushButton` / `QToolButton` | 前导 emoji 转 `setIcon`，文案同步去 emoji；主按钮（`variant=primary`）用 `highlighted-text`，其余 `button-text` |
-| `QLabel` | 前导 emoji 转为文字左侧 14px 小图标（子 QLabel 绘制，不改文字颜色与字体）；`role` 为 caption/muted/subtitle 或 `objectName=navigationGroup` 时用 `placeholder-text` |
-| `QCheckBox` / `QRadioButton` | 只去前导 emoji（控件本身不支持图标） |
-| `QComboBox` / `QTabWidget` | 条目 / 页签 emoji 转对应图标（`link` 色）；动态 `setItemText` / `setTabText` 同样生效 |
-| `QListWidget` / `QTableWidget` / `QTreeWidget` 条目 | 首列前导 emoji 转条目图标，句中 emoji 删除 |
-| `QGroupBox` 标题 | 去掉 emoji（Qt 分组框没有图标位，不加图标） |
-| `QAction` / `QMenu` | 菜单项前导 emoji 转菜单图标；菜单标题与句中 emoji 删除 |
-| 窗口标题 | 去掉 emoji |
-| `QPlainTextEdit` / `QTextEdit`（只读日志）/ `QStatusBar` | 删除 emoji；只读 `QTextEdit` 日志按级别使用 success/warning/danger/link 字色；`QTextBrowser` 用户正文除外 |
-| `ToolSectionCard` | 标题 emoji 自动转 `icon=`，无需页面传参 |
+| 按钮、标签、分组、菜单、下拉、页签、列表、树、表格及表头 | 清理显示文字中的 emoji，保留显式图标、条目数据、回调和返回值；不补造图标 |
+| 窗口标题、提示框、tooltip、占位符、状态栏 | 清理原生界面文案；支持富文本的入口同时清理可见文字中的 HTML 表情实体 |
+| 只读 `QPlainTextEdit` / `QTextEdit` 日志 | 清理文字表情，保留缩进；富文本日志保留结构，提示级别继续使用 success / warning / danger / link 字色 |
+| 可编辑输入、`QTextBrowser` 正文、获取资源、下载文件 | 保留原有内容；不屏蔽表情 / 贴纸图片，不改资源存储、下载及导出数据 |
 
-约束与注意事项：
-
-1. 前导 emoji 转图标；其余位置的 emoji（按钮、标签、页签、条目、菜单文案、只读日志、状态栏、tooltip、占位符、帮助浮层）直接删除并收拢空白；只读 `QPlainTextEdit`/`QTextEdit` 的日志写入、`QStatusBar.showMessage`、`QWidget.setToolTip`、`QLineEdit.setPlaceholderText` 已统一过滤。只读 `QTextEdit` 日志按提示级别使用 success/warning/danger/link 字色代替 emoji。可编辑输入区与 `QTextBrowser` 用户生成正文不处理。
-2. 未登记的 emoji 保持原样。新增 emoji 必须在 `_EMOJI_ICONS` 里登记，且只能指向 `line_icon()` 已存在的图标名。
-3. 显式调用 `setIcon()` 会关闭该控件的自动图标（导航栏等自定义图标不会被运行时转换覆盖）。
-4. 颜色烘进图标，切主题后由 `theme.retheme_all()` 调用 `emoji_icons.refresh_all()` 统一重生成；新增主题切换入口必须走 `retheme_all()`。
-5. 新增功能仍按 4.4 显式写图标（`icon=` / `setIcon`），不要把新代码依赖在这层兼容转换上。
+普通箭头、数学与分页符号不是 emoji，不因文字清理被删除。富文本只改可见文字，链接、图片和属性保留；`gui_text` 不依赖图标绘制，不接管主题刷新。不得重新引入按文字前缀选择图标的兼容层。
 
 ### 4.6 文本右键菜单（统一接管）
 
@@ -493,7 +483,7 @@ Qt 内建的文本上下文菜单是英文（`&Copy` / `Select All`）且无图�
 - [ ] 自绘控件每次取 `current_palette()`，并实现了 `on_theme_changed()`
 - [ ] 预生成图标在切主题后重新生成
 - [ ] 结构性图标统一用 `line_icon` 线形图标，未用 emoji / 图片 / 图标字体充当
-- [ ] 依赖 4.5 自动转换时，前导 emoji 已在 `_EMOJI_ICONS` 登记且指向已存在图标
+- [ ] 结构图标已显式设置，不依赖文字前缀转换；主题切换会刷新显式图标，资源正文按 4.5 保留
 - [ ] 图标颜色取自主题角色（导航/标题 link、按钮 button-text、主按钮 highlighted-text），未传 hex
 - [ ] 页面内 `setStyleSheet` 选择器带 `objectName`
 - [ ] 仅图标按钮有 tooltip

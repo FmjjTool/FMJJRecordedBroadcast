@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
     QPushButton, QTextEdit, QVBoxLayout,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QPalette
 
 from toolbox.date_folders import scan_date_folders
 from toolbox.organize_engine import execute_migration, scan_files, scan_sources
@@ -32,6 +33,8 @@ from toolbox.utils import format_size, is_video_file
 from gui_qt.pages.base import BasePage
 from gui_qt.toolbox_common import ToolSectionCard
 from gui_qt.common import run_bg
+from gui_qt import theme
+from gui_qt.navigation import line_icon
 
 
 class MergeSidecarsDialog(QDialog):
@@ -293,7 +296,10 @@ class OrganizePage(BasePage):
         self.sources.addItems(settings.get("sources", []))
         sources_card.content_layout.addWidget(self.sources)
         source_row = QHBoxLayout()
-        add_source = QPushButton("＋ 添加来源文件夹")
+        add_source = QPushButton("添加来源文件夹")
+        self.add_source_btn = add_source
+        add_source.setIconSize(QSize(16, 16))
+        self.on_theme_changed()
         add_source.clicked.connect(self._add_source)
         source_row.addWidget(add_source)
         remove_source = QPushButton("移除所选来源")
@@ -352,6 +358,10 @@ class OrganizePage(BasePage):
         log_card.content_layout.addWidget(self.log_text)
         layout.addWidget(log_card)
         self.progress.connect(self._log)
+
+    def on_theme_changed(self):
+        self.add_source_btn.setIcon(line_icon(
+            "plus", theme.current_palette().color(QPalette.ButtonText).name(), 16))
 
     def _section(self, title, icon, description=""):
         card = ToolSectionCard(title, description, icon=icon)

@@ -909,8 +909,3 @@ def retheme_all(main_window=None):
     for w in QApplication.topLevelWidgets():
         if w.isVisible():
             adapt(w)
-    try:
-        from gui_qt import emoji_icons
-        emoji_icons.refresh_all()
-    except Exception:
-        pass

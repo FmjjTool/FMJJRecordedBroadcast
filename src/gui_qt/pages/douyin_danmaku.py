@@ -722,7 +722,8 @@ class DouyinDanmakuPage(BasePage):
         replay_controls.setSpacing(8)
         self.replay_row = QHBoxLayout()
         self.replay_row.setSpacing(8)
-        self.replay_btn = QPushButton("▶")
+        self.replay_btn = QPushButton("")
+        self._set_replay_icon(playing=False)
         self.replay_btn.setFixedWidth(40)
         self.replay_btn.setStyleSheet(icon_btn_style(True, "font-size: 14px;"))
         self.replay_btn.clicked.connect(self._toggle_replay_pause)
@@ -1103,7 +1104,7 @@ class DouyinDanmakuPage(BasePage):
             self.video_player.start(self._replay["video"], is_live=False,
                                     start_sec=self._video_base_sec(),
                                     speed=self._replay["speed"])
-        self.replay_btn.setText("▮▮")
+        self._set_replay_icon(playing=True)
         self._replay_timer = QTimer(self)
         self._replay_timer.timeout.connect(self._replay_tick)
         self._replay_timer.start(200)
@@ -1200,13 +1201,25 @@ class DouyinDanmakuPage(BasePage):
             self.video_player.start(r["video"], is_live=False,
                                     start_sec=self._video_base_sec() + target_ms / 1000.0,
                                     speed=r["speed"])
-        self.replay_btn.setText("▮▮")
+        self._set_replay_icon(playing=True)
         self.replay_slider.setValue(int(target_ms))
         self._update_replay_time(target_ms)
         if not self._replay_timer:
             self._replay_timer = QTimer(self)
             self._replay_timer.timeout.connect(self._replay_tick)
             self._replay_timer.start(200)
+
+    @staticmethod
+    def _set_control_icon(button, name, role="text"):
+        button.setProperty("danmakuControlIcon", name)
+        button.setProperty("danmakuControlIconRole", role)
+        button.setIcon(line_icon(name, theme_color(role), 16))
+
+    def _set_replay_icon(self, playing):
+        self._set_control_icon(self.replay_btn, "pause" if playing else "play")
+        label = "暂停回放" if playing else "播放回放"
+        self.replay_btn.setToolTip(label)
+        self.replay_btn.setAccessibleName(label)
 
     def _toggle_replay_pause(self):
         r = self._replay
@@ -1229,7 +1242,7 @@ class DouyinDanmakuPage(BasePage):
         if self.video_player:
             self.video_player.stop()
             self.video_player = None
-        self.replay_btn.setText("▶")
+        self._set_replay_icon(playing=False)
 
     def _resume_replay(self):
         r = self._replay
@@ -1281,7 +1294,7 @@ class DouyinDanmakuPage(BasePage):
         self._update_replay_time(r["paused_at"])
         if self._replay_timer:
             self._replay_timer.stop()
-        self.replay_btn.setText("▶")
+        self._set_replay_icon(playing=False)
         self.app.toast("回放完成", "success")
 
     def _stop_replay(self):
@@ -1297,7 +1310,7 @@ class DouyinDanmakuPage(BasePage):
             self._overlay.set_active(False)
         if r and r.get("zip_dir"):
             remove_tmp_dir(r["zip_dir"])
-        self.replay_btn.setText("▮▮")
+        self._set_replay_icon(playing=False)
         self.replay_slider.setRange(0, 0)
         self.replay_slider.setValue(0)
         self.replay_time_lbl.setText("00:00 / 00:00")
@@ -1334,8 +1347,10 @@ class DouyinDanmakuPage(BasePage):
         room_pick_btn.clicked.connect(self._open_room_picker)
         room_pick_btn.setFocusPolicy(Qt.NoFocus)
         row1.addWidget(room_pick_btn)
-        room_clear_btn = QPushButton("×")
+        room_clear_btn = QPushButton("")
+        self._set_control_icon(room_clear_btn, "close", "muted")
         room_clear_btn.setFixedSize(26, 26)
+        room_clear_btn.setAccessibleName("清空房间号")
         room_clear_btn.setToolTip("清空房间号，快速输入新房间")
         room_clear_btn.setFlat(True)
         room_clear_btn.setStyleSheet(
@@ -1488,7 +1503,8 @@ class DouyinDanmakuPage(BasePage):
             str(load_convert_config().get("remark_info") or ""))
         v.addWidget(remark_edit)
         remark_row = QHBoxLayout()
-        reset_remark_btn = QPushButton("↩ 恢复默认")
+        reset_remark_btn = QPushButton("恢复默认")
+        self._set_control_icon(reset_remark_btn, "arrow_left")
         reset_remark_btn.setToolTip("恢复为默认的来源备注四行")
 
         def reset_remark():
@@ -2806,6 +2822,11 @@ class DouyinDanmakuPage(BasePage):
         颜色不随样式表重映射，须按新主题重渲染。"""
         if self._chat_log:
             self._apply_chat_filter()
+        for button in self.findChildren(QPushButton):
+            name = button.property("danmakuControlIcon")
+            if name:
+                self._set_control_icon(
+                    button, name, button.property("danmakuControlIconRole") or "text")
 
     def on_hide(self):
         """切离本页：连接中弹幕抓取与统计保持后台运作（WS 握手后不占登录态），

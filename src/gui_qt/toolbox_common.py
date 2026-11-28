@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import theme
-from gui_qt.emoji_icons import split_leading_emoji
 from gui_qt.navigation import line_icon
 from toolbox.date_folders import (  # 兼容旧导入路径，单一来源在 toolbox.date_folders
     DATE_FOLDER_RE, count_date_subfolders, has_date_subfolders,
@@ -54,11 +53,6 @@ class ToolSectionCard(QFrame):
 
     def __init__(self, title: str, description: str = "", parent=None,
                  icon: str | None = None):
-        parsed_icon, parsed_title = split_leading_emoji(title)
-        if parsed_icon is not None:
-            title = parsed_title
-            if icon is None:
-                icon = parsed_icon
         super().__init__(parent)
         self.setObjectName("toolSectionCard")
         self.setProperty("variant", "card")

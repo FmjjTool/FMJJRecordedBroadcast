@@ -22,8 +22,8 @@ import subprocess
 import time
 from datetime import datetime
 
-from PySide6.QtCore import (QAbstractTableModel, QDateTime, QModelIndex, QObject,
-                            Qt, QTimer, Signal)
+from PySide6.QtCore import (QAbstractTableModel, QDateTime, QEvent, QModelIndex, QObject,
+                            QSize, Qt, QTimer, Signal)
 from PySide6.QtGui import QAction, QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from toolbox import live_record as LR
 from gui_qt import theme
+from gui_qt.navigation import line_icon
 from gui_qt.table_columns import configure_table_columns
 from gui_qt.table_sort import install_callback, sort_key, sort_records
 
@@ -426,13 +427,13 @@ class PlatformPane(QWidget):
         # 独立窗口沿用主分支的两行工具栏结构。
         bar = QHBoxLayout()
         bar.setSpacing(6)
-        self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
+        self._tbtn(bar, "添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）", icon="plus")
         self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
         self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
         self.btn_batch.clicked.connect(self._on_batch_menu)
         bar.addSpacing(10)
-        self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
-                                  "按间隔检测开播，开播即自动录制")
+        self.btn_mon = self._tbtn(bar, "开启监控录制", self.on_toggle_monitor,
+                                  "按间隔检测开播，开播即自动录制", icon="play")
         self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
         self._tbtn(bar, "⟳ 立即检测", self.on_check_now, "立刻检测所有监控中的主播")
         bar.addStretch(1)
@@ -465,14 +466,14 @@ class PlatformPane(QWidget):
         # 直接展示常用操作；分三行排布，避免横向溢出并保留完整按钮文字。
         bar = QHBoxLayout()
         bar.setSpacing(spacing)
-        self._tbtn(bar, "＋ 添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）")
+        self._tbtn(bar, "添加主播", self.on_add, "添加一个直播间（房间号 / 直播间链接）", icon="plus")
         self._tbtn(bar, "批量导入", self.on_batch, "每行一个房间号或直播间链接")
         self.btn_batch = self._tbtn(bar, "批量修改 ▾", None, "对勾选的主播批量设置")
         self.btn_batch.clicked.connect(self._on_batch_menu)
         self._tbtn(bar, "一键停止录制", self.on_stop_all, "停止本平台全部录制任务")
         bar.addStretch(1)
-        self.btn_mon = self._tbtn(bar, "▶ 开启监控录制", self.on_toggle_monitor,
-                                  "按间隔检测开播，开播即自动录制")
+        self.btn_mon = self._tbtn(bar, "开启监控录制", self.on_toggle_monitor,
+                                  "按间隔检测开播，开播即自动录制", icon="play")
         lay.addLayout(bar)
 
         bar2 = QHBoxLayout()
@@ -501,8 +502,10 @@ class PlatformPane(QWidget):
         lay.addLayout(bar3)
 
     # ---------- 小工具 ----------
-    def _tbtn(self, layout, text, slot, tip=""):
+    def _tbtn(self, layout, text, slot, tip="", *, icon=""):
         b = QPushButton(text)
+        if icon:
+            self._set_toolbar_icon(b, icon)
         b.setStyleSheet("padding:5px 10px;")
         if tip:
             b.setToolTip(tip)
@@ -510,6 +513,20 @@ class PlatformPane(QWidget):
             b.clicked.connect(slot)
         layout.addWidget(b)
         return b
+
+    @staticmethod
+    def _set_toolbar_icon(button, name):
+        button.setProperty("recordingToolbarIcon", name)
+        button.setIcon(line_icon(name, theme.color("text"), 16))
+        button.setIconSize(QSize(16, 16))
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:
+            for button in self.findChildren(QPushButton):
+                name = button.property("recordingToolbarIcon")
+                if name:
+                    self._set_toolbar_icon(button, name)
 
     def login_state(self):
         """当前平台的登录态文案（统一管理层只读判断，不展示凭据内容）。
@@ -543,6 +560,7 @@ class PlatformPane(QWidget):
         self._login_state = None  # 账号可能在统一管理里切换，下次刷新重新判定
         self.model.refresh_volatile()
         self.btn_mon.setText("停止监控录制" if self.manager.running else "开启监控录制")
+        self._set_toolbar_icon(self.btn_mon, "stop" if self.manager.running else "play")
         self.win.refresh_status()
         self.win.schedule_save()
 

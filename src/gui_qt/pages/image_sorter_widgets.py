@@ -35,6 +35,7 @@ from PySide6.QtCore import QStandardPaths
 
 from gui_qt.common import icon_btn_style
 from gui_qt import theme
+from gui_qt.navigation import line_icon
 
 from image_sorter import settings as cfg
 from image_sorter.constants import (
@@ -1351,9 +1352,6 @@ class MediaViewer(QWidget):
 
     MIN_ZOOM_LEVEL = 0.0025  # 0.25%
     MAX_ZOOM_LEVEL = 20.0    # 2000%
-    PLAY_ICON = "▶"
-    PAUSE_ICON = "▮▮"
-
     playback_failed = Signal(str)  # 视频播放失败（文件名，页面层 toast 提示外部打开）
     livp_play_requested = Signal(Path)  # LIVP 封面中央播放键（页面层负责解包播放）
 
@@ -1368,6 +1366,7 @@ class MediaViewer(QWidget):
         self._user_seeking = False
         self._pending_seek_value: Optional[int] = None
         self._suppress_slider_value_changed = False
+        self._play_pause_icon_name = "play"
 
         # 播放健康检查：play 后 900ms 未进入有效播放则判定失败
         self._qt_playback_probe_timer = QTimer(self)
@@ -1375,6 +1374,18 @@ class MediaViewer(QWidget):
         self._qt_playback_probe_timer.timeout.connect(self._verify_qt_playback_started)
 
         self._init_ui()
+        self.on_theme_changed()
+
+    def on_theme_changed(self):
+        """按当前主题重画深色预览覆盖层上的播放图标。"""
+        self.center_play_btn.setIcon(line_icon("play", theme.color("on_accent"), 16))
+        self.center_play_btn.setIconSize(QSize(16, 16))
+        self._set_play_pause_icon(self._play_pause_icon_name)
+
+    def _set_play_pause_icon(self, name):
+        self._play_pause_icon_name = name
+        self.play_pause_btn.setIcon(line_icon(name, theme.color("on_accent"), 16))
+        self.play_pause_btn.setIconSize(QSize(16, 16))
 
     def _init_ui(self):
         self.layout = QVBoxLayout(self)
@@ -1505,7 +1516,7 @@ class MediaViewer(QWidget):
         )
 
         # 视频封面中央播放按钮
-        self.center_play_btn = QPushButton(self.PLAY_ICON, self)
+        self.center_play_btn = QPushButton("", self)
         self.center_play_btn.setFixedSize(84, 84)
         self.center_play_btn.setToolTip("播放视频")
         self.center_play_btn.setStyleSheet(
@@ -1545,7 +1556,7 @@ class MediaViewer(QWidget):
         controls_layout = QHBoxLayout(self.video_controls)
         controls_layout.setContentsMargins(10, 5, 10, 5)
 
-        self.play_pause_btn = QPushButton(self.PLAY_ICON, self.video_controls)
+        self.play_pause_btn = QPushButton("", self.video_controls)
         self.play_pause_btn.setFixedSize(40, 30)
         self.play_pause_btn.setToolTip("播放/暂停")
         self.play_pause_btn.setStyleSheet(
@@ -1733,7 +1744,7 @@ class MediaViewer(QWidget):
                 self.media_player.setPosition(0)
 
             self.media_player.play()
-            self.play_pause_btn.setText(self.PAUSE_ICON)
+            self._set_play_pause_icon("pause")
             self._qt_playback_probe_timer.start(900)
             logger.log_operation("播放视频", video_path.name)
         except Exception as e:
@@ -1773,7 +1784,7 @@ class MediaViewer(QWidget):
         self._qt_playback_probe_timer.stop()
         if self.media_player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.media_player.stop()
-        self.play_pause_btn.setText(self.PLAY_ICON)
+        self._set_play_pause_icon("play")
         self._pending_seek_value = None
         self._user_seeking = False
         self._suppress_slider_value_changed = False
@@ -1789,9 +1800,9 @@ class MediaViewer(QWidget):
         """播放状态改变"""
         if state == QMediaPlayer.PlaybackState.PlayingState:
             self._qt_playback_probe_timer.stop()
-            self.play_pause_btn.setText(self.PAUSE_ICON)
+            self._set_play_pause_icon("pause")
         else:
-            self.play_pause_btn.setText(self.PLAY_ICON)
+            self._set_play_pause_icon("play")
 
     def _on_position_changed(self, position):
         """播放位置改变"""

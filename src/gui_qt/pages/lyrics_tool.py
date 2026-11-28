@@ -2,7 +2,8 @@
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QListWidgetItem, QMessageBox,
     QPlainTextEdit, QPushButton, QRadioButton, QTabWidget, QTextEdit,
@@ -12,6 +13,8 @@ from PySide6.QtWidgets import (
 from toolbox.lyrics_engine import LyricConverter
 
 from gui_qt.pages.base import BasePage
+from gui_qt import theme
+from gui_qt.navigation import line_icon
 from gui_qt.row_widgets import RowCheckList
 from gui_qt.toolbox_common import ToolSectionCard
 
@@ -47,6 +50,16 @@ class LyricsToolPage(BasePage):
         layout.addWidget(self.tabs)
         self.tabs.addTab(self._build_convert_tab(), "转换")
         self.tabs.addTab(self._build_krcd_tab(), "KRCD工具")
+        self.on_theme_changed()
+
+    def on_theme_changed(self):
+        palette = theme.current_palette()
+        for button, name, role in (
+                (self.clear_selection_btn, "close", QPalette.ButtonText),
+                (self.krcd_clear_selection_btn, "close", QPalette.ButtonText),
+                (self.krcd_run_btn, "play", QPalette.HighlightedText)):
+            button.setIcon(line_icon(name, palette.color(role).name(), 16))
+            button.setIconSize(QSize(16, 16))
 
     def _section(self, title, icon):
         card = ToolSectionCard(title, icon=icon)
@@ -124,7 +137,8 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QLabel("已识别歌词文件:"))
         bar.addWidget(QPushButton("全选", clicked=lambda: self._sel("all")))
         bar.addWidget(QPushButton("反选", clicked=lambda: self._sel("invert")))
-        bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._sel("none")))
+        self.clear_selection_btn = QPushButton("清除", clicked=lambda: self._sel("none"))
+        bar.addWidget(self.clear_selection_btn)
         bar.addStretch(1)
         self.lyr_list = RowCheckList()
         self.lyr_list.setMaximumHeight(140)
@@ -185,7 +199,8 @@ class LyricsToolPage(BasePage):
         bar.addWidget(QLabel("文件列表:"))
         bar.addWidget(QPushButton("全选", clicked=lambda: self._krcd_sel("all")))
         bar.addWidget(QPushButton("反选", clicked=lambda: self._krcd_sel("invert")))
-        bar.addWidget(QPushButton("□ 清除", clicked=lambda: self._krcd_sel("none")))
+        self.krcd_clear_selection_btn = QPushButton("清除", clicked=lambda: self._krcd_sel("none"))
+        bar.addWidget(self.krcd_clear_selection_btn)
         bar.addStretch(1)
         self.krcd_list = RowCheckList()
         self.krcd_list.setMaximumHeight(140)
@@ -195,7 +210,8 @@ class LyricsToolPage(BasePage):
         v.addWidget(list_card)
 
         run_row = QHBoxLayout()
-        run = QPushButton("▶ 执行")
+        run = QPushButton("执行")
+        self.krcd_run_btn = run
         run.setProperty("variant", "primary")
         run.clicked.connect(self._krcd_run)
         run_row.addWidget(run)

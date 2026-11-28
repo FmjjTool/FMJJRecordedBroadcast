@@ -351,13 +351,11 @@ def icon_btn_style(emoji: bool = True, extra: str = "") -> str:
     """仅图标小按钮的完整内联样式（返回值给 setStyleSheet）。
 
     全局 QSS 给 QPushButton 设了 padding: 6px 12px —— 小尺寸按钮会被内边距
-    吃掉图标绘制区（30px 宽只剩 6px，图标被挤成一团）；且全局字体微软雅黑
-    不含 emoji 字形。emoji=True 指定 Segoe UI Emoji（真 emoji 图标）；
-    False 只清内边距（↑↓■▶↻ 等文本符号雅黑自带）。
+    吃掉图标绘制区（30px 宽只剩 6px，图标被挤成一团）。
+    emoji 参数仅保留既有调用兼容，不再切换图标字体；字体继承全局主题。
     extra 追加 color/background/border/font-size 等声明。
     """
-    fam = 'font-family: "Segoe UI Emoji"; ' if emoji else ""
-    return f"QPushButton {{ padding: 0; {fam}{extra} }}"
+    return f"QPushButton {{ padding: 0; {extra} }}"
 
 
 def icon_button(text, tip="", size=(30, 26), emoji=True, extra="", on_click=None):

@@ -14,7 +14,7 @@ import subprocess
 import webbrowser
 
 from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QScrollArea, QSizePolicy,
@@ -127,7 +127,9 @@ class LauncherPage(BasePage):
         self.page_nav = QWidget()
         nav = QHBoxLayout(self.page_nav)
         nav.setContentsMargins(2, 0, 2, 0)
-        self.prev_btn = QPushButton("‹ 上一页")
+        self.prev_btn = QPushButton("上一页")
+        self.prev_btn.setIconSize(QSize(16, 16))
+        self.on_theme_changed()
         self.prev_btn.setFixedHeight(26)
         self.prev_btn.clicked.connect(lambda: self._goto_page(self._page - 1))
         nav.addWidget(self.prev_btn)
@@ -147,6 +149,10 @@ class LauncherPage(BasePage):
         self.panel_grid.setSpacing(8)
         v.addLayout(self.panel_grid, 1)
         return w
+
+    def on_theme_changed(self):
+        self.prev_btn.setIcon(line_icon(
+            "arrow_left", theme.current_palette().color(QPalette.ButtonText).name(), 16))
 
     def _page_count(self) -> int:
         return max(1, -(-len(self.items) // self.PAGE_SIZE))

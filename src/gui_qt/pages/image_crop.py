@@ -978,10 +978,12 @@ class ImageCropPage(BasePage):
         h.setContentsMargins(12, 10, 12, 10)
         h.setSpacing(8)
 
-        self.btn_undo = icon_button("↩", "撤销 (Ctrl+Z)", (30, 26), emoji=False,
+        self.btn_undo = icon_button("", "撤销 (Ctrl+Z)", (30, 26), emoji=False,
                                     on_click=self.undo)
-        self.btn_redo = icon_button("↪", "重做 (Ctrl+Y)", (30, 26), emoji=False,
+        self.btn_redo = icon_button("", "重做 (Ctrl+Y)", (30, 26), emoji=False,
                                     on_click=self.redo)
+        self._register_icon(self.btn_undo, "undo")
+        self._register_icon(self.btn_redo, "redo")
         h.addWidget(self.btn_undo)
         h.addWidget(self.btn_redo)
 

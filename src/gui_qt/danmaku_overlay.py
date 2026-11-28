@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QWidget, QDialog, QFormLayout, QSpinBox, QSlider,
     QPlainTextEdit, QDialogButtonBox, QLabel, QMenu, QMessageBox)
 from toolbox.config_manager import get_config_dir
 from toolbox.durable_io import atomic_write_json
-from gui_qt.emoji_icons import strip_inline_emoji
+from gui_qt.gui_text import strip_inline_emoji
 
 BEIJING = timezone(timedelta(hours=8))
 OPTIONS = dict(font_size=16, rows=8, background_alpha=235, footer="使用信息请标明来源")

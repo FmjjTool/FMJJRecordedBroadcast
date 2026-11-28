@@ -566,6 +566,9 @@ class AssetPage(BasePage):
                     item.setForeground(accent)
         for browser in self.findChildren(_ContentBrowser):
             browser.refresh_theme()
+        for button in self.findChildren(QPushButton):
+            if button.property("assetPreviewPlayIcon"):
+                button.setIcon(line_icon("play", theme.color("text"), 16))
 
     def _on_tab_changed(self, idx: int):
         name = self.tabs.tabText(idx) if 0 <= idx < self.tabs.count() else ""
@@ -1102,7 +1105,10 @@ class AssetPage(BasePage):
         tip.setStyleSheet("color: palette(placeholder-text); font-size: 11px;")
         bottom.addWidget(tip)
         bottom.addStretch(1)
-        open_btn = QPushButton("▶ 播放" if kind in ("video", "audio") else "打开")
+        open_btn = QPushButton("播放" if kind in ("video", "audio") else "打开")
+        if kind in ("video", "audio"):
+            open_btn.setProperty("assetPreviewPlayIcon", True)
+            open_btn.setIcon(line_icon("play", theme.color("text"), 16))
         open_btn.clicked.connect(lambda: self._open_media(item["path"]))
         bottom.addWidget(open_btn)
         reveal_btn = QPushButton("打开所在位置")

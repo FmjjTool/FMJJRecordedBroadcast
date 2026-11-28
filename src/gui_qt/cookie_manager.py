@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 import auth
+from gui_qt import theme
 from gui_qt.common import post_to_main, run_bg
+from gui_qt.navigation import line_icon
 
 # (key, 中文名, 支持扫码, 支持浏览器登录)
 # 扫码：网易云/B站 原生接口，QQ音乐 走微信扫码换 musickey，
@@ -942,7 +944,24 @@ class CookieManagerDialog(QDialog):
         got_btn.setStyleSheet("background: #2e7d32; color: white; border-radius: 4px; padding: 4px 14px;")
         got_btn.clicked.connect(lambda *args: save_now())
         bar.addWidget(got_btn)
-        pop_btn = QPushButton("⌨ 改独立窗口")
+        pop_btn = QPushButton("改独立窗口")
+
+        def _set_pop_mode(detached=False):
+            pop_btn.setText("贴回登录框" if detached else "改独立窗口")
+            pop_btn.setProperty("loginWindowIcon", "arrow_left" if detached else "keyboard")
+            pop_btn.setIcon(line_icon(pop_btn.property("loginWindowIcon"), theme.color("text"), 16))
+            pop_btn.setIconSize(QSize(16, 16))
+
+        class _PopIconFilter(QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.PaletteChange:
+                    pop_btn.setIcon(line_icon(
+                        pop_btn.property("loginWindowIcon"), theme.color("text"), 16))
+                return False
+
+        pop_btn._icon_filter = _PopIconFilter(pop_btn)
+        pop_btn.installEventFilter(pop_btn._icon_filter)
+        _set_pop_mode()
         pop_btn.setStyleSheet("color: #1565c0;")
         pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此弹出为独立窗口；"
                            "再点一次贴回登录框（Cookie 捕获不受影响）")
@@ -1300,7 +1319,7 @@ class CookieManagerDialog(QDialog):
             if not _apply_fit(hwnd):
                 pass  # 贴合失败时浏览器保持独立窗口，登录功能不受影响
             else:
-                pop_btn.setText("⌨ 改独立窗口")
+                _set_pop_mode()
                 pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此"
                                    "弹出为独立窗口；再点一次贴回登录框")
                 pop_btn.setEnabled(True)
@@ -1490,7 +1509,7 @@ class CookieManagerDialog(QDialog):
             if not hwnd:
                 return
             state["overlay"] = False
-            pop_btn.setText("↩ 贴回登录框")
+            _set_pop_mode(detached=True)
             pop_btn.setToolTip("浏览器已弹出为独立窗口；点此重新贴回登录框")
             pop_btn.setEnabled(True)
             _set_host_hint("浏览器已在独立窗口中打开（不遮挡主界面），"
@@ -1513,7 +1532,7 @@ class CookieManagerDialog(QDialog):
             if not hwnd:
                 return
             if _apply_fit(hwnd):
-                pop_btn.setText("⌨ 改独立窗口")
+                _set_pop_mode()
                 pop_btn.setToolTip("页面按钮/输入异常，或需要拖动缩放浏览器时点此"
                                    "弹出为独立窗口；再点一次贴回登录框")
                 pop_btn.setEnabled(True)

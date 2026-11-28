@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTabWidget,
@@ -217,13 +217,27 @@ class AccountCenterWidget(QWidget):
         v.addLayout(add_row)
         return card
 
-    def _small_button(self, text, tip, slot) -> QPushButton:
+    def _small_button(self, text, tip, slot, *, icon="") -> QPushButton:
         button = QPushButton(text)
+        if icon:
+            button.setProperty("accountCenterIcon", icon)
+            button.setIcon(line_icon(icon, theme.color("text"), 16))
+            button.setIconSize(QSize(16, 16))
+            if not text:
+                button.setAccessibleName(tip)
         button.setToolTip(tip)
         button.setFixedHeight(26)
         button.setStyleSheet("padding: 0 8px;")
         button.clicked.connect(lambda *_: slot())
         return button
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:
+            for button in self.findChildren(QPushButton):
+                name = button.property("accountCenterIcon")
+                if name:
+                    button.setIcon(line_icon(name, theme.color("text"), 16))
 
     # ==================== 数据 ====================
 
@@ -361,8 +375,8 @@ class AccountCenterWidget(QWidget):
             down_btn.setEnabled(pos < len(gids) - 1)
             down_btn.setFixedSize(28, 24)
             h.addWidget(down_btn)
-            del_btn = self._small_button("×", "删除该分组（各功能中绑定该组的账号会解绑）",
-                                         lambda g=gid: self._delete_group(g))
+            del_btn = self._small_button("", "删除该分组（各功能中绑定该组的账号会解绑）",
+                                         lambda g=gid: self._delete_group(g), icon="close")
             del_btn.setFixedSize(28, 24)
             del_btn.setProperty("variant", "danger")
             h.addWidget(del_btn)
@@ -445,8 +459,8 @@ class AccountCenterWidget(QWidget):
         down_btn.setEnabled(pos < group_size - 1)
         down_btn.setFixedSize(28, 24)
         head.addWidget(down_btn)
-        del_btn = self._small_button("×", "从所有功能中删除该账号",
-                                     lambda aid=account["id"]: self._delete_account(aid))
+        del_btn = self._small_button("", "从所有功能中删除该账号",
+                                     lambda aid=account["id"]: self._delete_account(aid), icon="close")
         del_btn.setFixedSize(28, 24)
         del_btn.setProperty("variant", "danger")
         head.addWidget(del_btn)

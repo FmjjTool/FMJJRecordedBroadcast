@@ -184,6 +184,11 @@ class InfoAccountsPage(BasePage):
         if changed:
             self._content.updateGeometry()
 
+    def on_theme_changed(self):
+        for button in self.findChildren(QPushButton):
+            if button.property("infoTimerStartIcon"):
+                button.setIcon(line_icon("play", theme.color("on_accent"), 16))
+
     def on_return_press(self):
         """主窗口回车统一入口 → 触发「获取最新」。"""
         self._fetch()
@@ -1239,7 +1244,9 @@ class InfoAccountsPage(BasePage):
             self._timer.timeout.connect(self._run_timer_fetch)
             self._timer.start(self._timer_interval * 1000)
 
-        start_btn = QPushButton("▶ 启动")
+        start_btn = QPushButton("启动")
+        start_btn.setProperty("infoTimerStartIcon", True)
+        start_btn.setIcon(line_icon("play", theme.color("on_accent"), 16))
         start_btn.setFixedSize(160, 32)
         start_btn.setProperty("variant", "primary")
         start_btn.clicked.connect(do_start)
