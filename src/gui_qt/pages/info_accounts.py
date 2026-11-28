@@ -20,7 +20,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QBoxLayout, QCalendarWidget, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLayout, QLineEdit, QListView, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
-    QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
+    QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from toolbox import download_ops
@@ -76,7 +76,7 @@ def _is_account_url(url: str) -> bool:
 
 
 class _AccountsContent(QWidget):
-    """保留卡片的自然高度，只把窄版最小宽度交给滚动容器。"""
+    """占满页面可用空间，并在宽度变化时重排采集参数。"""
 
     def __init__(self, page):
         super().__init__()
@@ -140,8 +140,7 @@ class InfoAccountsPage(BasePage):
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()
         if hasattr(self, "_settings_fields"):
-            hint.setWidth(self._minimum_content_width()
-                          + self._scroll.verticalScrollBar().sizeHint().width())
+            hint.setWidth(self._minimum_content_width())
         return hint
 
     def _minimum_content_width(self):
@@ -215,23 +214,18 @@ class InfoAccountsPage(BasePage):
     def _build_func(self, f):
         outer = QVBoxLayout(f)
         outer.setContentsMargins(0, 0, 0, 0)
-        self._scroll = QScrollArea(f)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._content = _AccountsContent(self)
         layout = QVBoxLayout(self._content)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        # 宽度由窄版 size hint 决定；高度由自然最小高度决定，不压缩固定高控件。
+        # 页面本身不滚动；日志卡片填满剩余高度，长内容在各自控件内滚动。
         layout.setSizeConstraint(QLayout.SetNoConstraint)
 
         layout.addWidget(self._build_batch_card())
         layout.addWidget(self._build_accounts_card())
         layout.addWidget(self._build_settings_card())
         layout.addWidget(self._build_log_card(), 1)
-        self._scroll.setWidget(self._content)
-        outer.addWidget(self._scroll)
+        outer.addWidget(self._content)
 
         # 没有显式语义的按钮统一次要样式（新建按钮在创建处已声明 variant）
         for button in f.findChildren(QPushButton):
@@ -289,7 +283,6 @@ class InfoAccountsPage(BasePage):
 
     def _build_batch_card(self) -> QFrame:
         card, head, body = self._new_card("批量添加 / 解析")
-        head.addWidget(self._caption("一行一个，支持整段分享文案"))
         head.addStretch(1)
         head.addWidget(self._caption("Ctrl+Enter 处理"))
 
@@ -299,7 +292,8 @@ class InfoAccountsPage(BasePage):
             "一行一个，直接粘贴（支持整段分享文案）：\n"
             "· 账号主页链接（B站空间/抖音/微博/快手/小红书）→ 添加为账号\n"
             "· 作品/视频链接、纯 BV 号 → 解析并存入「已获取」")
-        self.batch_text.setFixedHeight(88)
+        self.batch_text.setMinimumHeight(32)
+        self.batch_text.setMaximumHeight(88)
         batch_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.batch_text)
         batch_shortcut.activated.connect(self._process_batch)
         body.addWidget(self.batch_text)
@@ -330,8 +324,7 @@ class InfoAccountsPage(BasePage):
         import_btn = self._icon_action("folder", "从文本文件导入链接列表（每行一个）")
         import_btn.clicked.connect(self._import_file)
         row.addWidget(import_btn)
-        row.addStretch(1)
-        body.addLayout(row)
+        head.addLayout(row)
         return card
 
     def _build_accounts_card(self) -> QFrame:
@@ -349,11 +342,12 @@ class InfoAccountsPage(BasePage):
             b.clicked.connect(lambda _=False, m=mode: self._acc_select(m))
             head.addWidget(b)
 
-        # 账号列表（复选框，固定高度滚动；右键 打开/复制链接、修改、删除）
+        # 账号列表在窗口较矮时收缩，长列表始终只在列表内部滚动。
         self.acc_list = RowCheckList()
-        self.acc_list.setFixedHeight(170)
+        self.acc_list.setMinimumHeight(32)
+        self.acc_list.setMaximumHeight(170)
         self.acc_list.setMinimumWidth(0)
-        self.acc_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.acc_list.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.acc_list.setWordWrap(True)
         self.acc_list.setResizeMode(QListView.Adjust)
         self.acc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -365,8 +359,8 @@ class InfoAccountsPage(BasePage):
     def _build_settings_card(self) -> QFrame:
         card, head, body = self._new_card("采集设置")
         self._settings_card = card
-        body.setContentsMargins(12, 10, 12, 12)
-        body.setSpacing(8)
+        body.setContentsMargins(12, 8, 12, 8)
+        body.setSpacing(4)
         head.addWidget(self._caption("范围 / 条数 / 限流 / 日期"))
         head.addStretch(1)
 
@@ -428,7 +422,6 @@ class InfoAccountsPage(BasePage):
                        self.rate_count_entry, self.rate_interval_entry, self.date_btn):
             widget.setFixedHeight(30)
 
-        body.addWidget(self._separator())
         self._build_run_controls(body)
 
         self._load_date_range()
@@ -503,6 +496,7 @@ class InfoAccountsPage(BasePage):
         head.addStretch(1)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setMinimumHeight(40)
         self.log_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.log_text.setPlaceholderText("等待采集任务…")
         body.addWidget(self.log_text, 1)
@@ -546,13 +540,13 @@ class InfoAccountsPage(BasePage):
     def _fit_account_list_height(self, count: int):
         """账号少时列表跟着收缩，避免卡片里空出一大片。"""
         if count <= 0:
-            self.acc_list.setFixedHeight(96)
+            self.acc_list.setMaximumHeight(96)
             return
         row_h = self.acc_list.sizeHintForRow(0)
         if row_h <= 0:
             row_h = 28
         visible = min(count, 6)
-        self.acc_list.setFixedHeight(max(96, visible * row_h + 12))
+        self.acc_list.setMaximumHeight(max(96, visible * row_h + 12))
 
     def _acc_select(self, mode):
         for row in range(self.acc_list.count()):

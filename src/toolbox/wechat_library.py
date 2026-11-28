@@ -203,7 +203,8 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
                 _check(is_cancelled)
                 if not is_current(session):
                     raise WechatUserError('登录状态已变化，请重新开始本次同步')
-                _progress(on_progress, pages, int(max_pages), f'抓取第 {pages + 1} 页')
+                _progress(on_progress, pages, int(max_pages) if mode != 'all' else 0,
+                          f'抓取第 {pages + 1} 页')
                 page = fetch_history_page(biz, cursor, session)
                 _check(is_cancelled)
                 if not is_current(session):
