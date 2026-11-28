@@ -11059,7 +11059,10 @@ function renderLivestreamSummary(root) {
   function buildMusicSearch() {
     var modeSel = h('select', { class: 'select', 'aria-label': '音乐模式' },
       h('option', { value: 'search' }, '关键词搜索'),
-      h('option', { value: 'single' }, '单曲解析'));
+      h('option', { value: 'single' }, '单曲解析'),
+      h('option', { value: 'playlist' }, '歌单解析'),
+      h('option', { value: 'album' }, '专辑解析'),
+      h('option', { value: 'artist' }, '歌手解析'));
     var platformSel = h('select', { class: 'select', 'aria-label': '音乐平台' },
       h('option', { value: 'all' }, '五平台对比'),
       h('option', { value: 'netease' }, '网易云音乐'),
@@ -11128,7 +11131,16 @@ function renderLivestreamSummary(root) {
       h('span', { style: 'flex:1' }), downloadBtn);
 
     function isSingle() { return modeSel.value === 'single'; }
-    function queryLabel() { return isSingle() ? '解析' : '搜索'; }
+    function isEntityMode() { return ['playlist', 'album', 'artist'].indexOf(modeSel.value) >= 0; }
+    function isResolveMode() { return isSingle() || isEntityMode(); }
+    function queryLabel() { return isResolveMode() ? '解析' : '搜索'; }
+    function syncEntityPlatforms() {
+      var five = Array.prototype.find.call(platformSel.options, function (option) {
+        return option.value === '5sing';
+      });
+      if (five) five.disabled = modeSel.value === 'album';
+      if (five && five.disabled && platformSel.value === '5sing') platformSel.value = 'netease';
+    }
 
     function invalidateResult() {
       rows = [];
@@ -11141,11 +11153,14 @@ function renderLivestreamSummary(root) {
       modeDrafts[previousMode] = keyword.value;
       previousMode = modeSel.value;
       keyword.value = modeDrafts[previousMode];
-      platformSel.options[0].disabled = isSingle();
-      if (isSingle() && platformSel.value === 'all') platformSel.value = 'netease';
-      limitSel.hidden = isSingle();
-      keyword.placeholder = isSingle() ? '所选平台的完整歌曲链接或歌曲 ID' : '歌曲名 / 歌手 / 专辑关键词';
-      keyword.setAttribute('aria-label', isSingle() ? '歌曲链接或 ID' : '歌曲关键词');
+      platformSel.options[0].disabled = isResolveMode();
+      if (isResolveMode() && platformSel.value === 'all') platformSel.value = 'netease';
+      syncEntityPlatforms();
+      limitSel.hidden = isResolveMode();
+      keyword.placeholder = isSingle() ? '所选平台的完整歌曲链接或歌曲 ID' :
+        (isEntityMode() ? '官方链接、ID，或输入名称搜索候选' : '歌曲名 / 歌手 / 专辑关键词');
+      keyword.setAttribute('aria-label', isSingle() ? '歌曲链接或 ID' :
+        (isEntityMode() ? '链接、ID或名称' : '歌曲关键词'));
       searchBtn.textContent = queryLabel();
       refreshQualities();
       jobHost.replaceChildren();
@@ -11172,9 +11187,10 @@ function renderLivestreamSummary(root) {
     function renderRows() {
       downloadBtn.hidden = isSingle() && !rows.length;
       if (!isSingle()) downloadSettings.appendChild(downloadBtn);
-      if (!rows.length) {
+      if (!rows.length && !(isEntityMode() && detailResult)) {
         resultHost.replaceChildren(empty(isSingle()
           ? '选择平台并输入完整歌曲链接或 ID，点「解析」查看歌曲信息。'
+          : isEntityMode() ? '输入歌单、专辑或歌手链接 / ID，或输入名称搜索候选。'
           : '输入关键词后点「搜索」，勾选结果即可下载或导出信息。'));
         syncSelection();
         return;
@@ -11183,6 +11199,17 @@ function renderLivestreamSummary(root) {
         resultHost.replaceChildren(window.renderMusicSongDetail(h, detailResult),
           h('div', { class: 'toolbar music-search-actions' }, exportControl.button, downloadBtn),
           exportControl.notice);
+        syncSelection();
+        return;
+      }
+      if (!rows.length && isEntityMode()) {
+        resultHost.replaceChildren(window.renderMusicResolvedEntity(h, detailResult, function (kind, id) {
+          modeSel.value = kind;
+          keyword.value = id;
+          modeSel.dispatchEvent(new Event('change'));
+          keyword.value = id;
+          searchBtn.click();
+        }));
         syncSelection();
         return;
       }
@@ -11230,7 +11257,16 @@ function renderLivestreamSummary(root) {
       var footer = h('div', { class: 'toolbar music-search-actions' });
       window.installMusicSearchColumns(table, footer, h);
       footer.appendChild(exportControl.button);
+      var detailPanel = isEntityMode() && detailResult
+        ? window.renderMusicResolvedEntity(h, detailResult, function (kind, id) {
+          modeSel.value = kind;
+          keyword.value = id;
+          modeSel.dispatchEvent(new Event('change'));
+          keyword.value = id;
+          searchBtn.click();
+        }) : null;
       resultHost.replaceChildren(
+        detailPanel,
         h('div', { class: 'toolbar', style: 'margin:8px 0' },
           allBtn, noneBtn,
           h('span', { class: 'muted small' }, rows.length + ' 条结果')),
@@ -11251,8 +11287,9 @@ function renderLivestreamSummary(root) {
       busy = true;
       syncSelection();
       searchBtn.textContent = label + '中…';
-      post(single ? '/api/tools/music/resolve' : '/api/tools/music/search', single ? {
-        platform: platformSel.value, reference: keyword.value
+      post(isResolveMode() ? '/api/tools/music/resolve' : '/api/tools/music/search', isResolveMode() ? {
+        platform: platformSel.value, reference: keyword.value,
+        entity: modeSel.value === 'single' ? 'song' : modeSel.value
       } : {
         platform: platformSel.value, keyword: keyword.value,
         limit: limitSel.value
@@ -11264,9 +11301,9 @@ function renderLivestreamSummary(root) {
           toast(outcome.summary || label + '完成',
             outcome.failures && outcome.failures.length ? 'warning' : 'success');
           rows = (outcome.items || []).map(function (row) {
-            return Object.assign({}, row, { row: row, checked: single });
+            return Object.assign({}, row, { row: row, checked: single || isEntityMode() });
           });
-          detailResult = single ? outcome : null;
+          detailResult = isResolveMode() ? outcome : null;
           searchOrder = { order: '', asc: true };
           exportControl.setResult(outcome);
           renderRows();

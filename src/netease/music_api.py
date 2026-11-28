@@ -347,7 +347,7 @@ class NeteaseAPI:
         except (json.JSONDecodeError, KeyError) as e:
             raise APIException(f"解析专辑搜索响应失败: {e}")
 
-    def get_playlist_detail(self, playlist_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_playlist_detail(self, playlist_id: int, cookies: Dict[str, str], *, max_tracks: int | None = None) -> Dict[str, Any]:
         """获取歌单详情
 
         Args:
@@ -385,6 +385,8 @@ class NeteaseAPI:
             
             # 获取所有trackIds并分批获取详细信息
             track_ids = [str(t['id']) for t in playlist.get('trackIds', [])]
+            if max_tracks is not None:
+                track_ids = track_ids[:max(1, min(int(max_tracks), len(track_ids)))]
             for i in range(0, len(track_ids), 100):
                 batch_ids = track_ids[i:i+100]
                 song_data = {'c': json.dumps([{'id': int(sid), 'v': 0} for sid in batch_ids])}
@@ -411,7 +413,7 @@ class NeteaseAPI:
         except (json.JSONDecodeError, KeyError) as e:
             raise APIException(f"解析歌单详情响应失败: {e}")
     
-    def get_album_detail(self, album_id: int, cookies: Dict[str, str]) -> Dict[str, Any]:
+    def get_album_detail(self, album_id: int, cookies: Dict[str, str], *, max_songs: int | None = None) -> Dict[str, Any]:
         """获取专辑详情
         
         Args:
@@ -452,7 +454,10 @@ class NeteaseAPI:
                 'songs': []
             }
 
-            for song in result.get('songs') or []:
+            songs = result.get('songs') or []
+            if max_songs is not None:
+                songs = songs[:max(1, min(int(max_songs), len(songs)))]
+            for song in songs:
                 al = song.get('al') or {}
                 ar = song.get('ar') or []
                 info['songs'].append({
@@ -538,7 +543,7 @@ class NeteaseAPI:
         except json.JSONDecodeError as e:
             raise APIException(f"解析歌手详情响应失败: {e}")
 
-    def get_artist_songs(self, artist_id: int) -> List[Dict[str, Any]]:
+    def get_artist_songs(self, artist_id: int, *, limit: int | None = None) -> List[Dict[str, Any]]:
         """歌手热门歌曲（/api/artist/top/song）→ 页面行结构"""
         try:
             url = 'https://music.163.com/api/artist/top/song'
@@ -550,8 +555,11 @@ class NeteaseAPI:
                                     headers=headers, timeout=30)
             response.raise_for_status()
             result = response.json()
+            raw_songs = result.get('songs') or []
+            if limit is not None:
+                raw_songs = raw_songs[:max(1, min(int(limit), len(raw_songs)))]
             songs = []
-            for song in result.get('songs') or []:
+            for song in raw_songs:
                 al = song.get('al') or {}
                 songs.append({
                     'id': song.get('id'),

@@ -101,7 +101,7 @@ class FiveSingScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
-    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+    def get_playlist(self, playlist_id: str, *, max_songs: int | None = None) -> Optional[PlaylistInfo]:
         """5sing 歌单解析：HTML 页面解析（playlist_id 为完整 URL 或 uid/dj/hex 路径）"""
         url = self._normalize_playlist_url(playlist_id)
         if not url:
@@ -136,6 +136,8 @@ class FiveSingScraper(BaseScraper):
                 platform_name=self.platform_name,
                 url=f"https://5sing.kugou.com/{sid}.html",
             ))
+            if max_songs is not None and len(songs) >= max(1, int(max_songs)):
+                break
         if not name and not songs:
             return None
 
@@ -194,7 +196,7 @@ class FiveSingScraper(BaseScraper):
     # 专辑：5sing 音乐空间里的「专辑」页（/{user}/zj/{hex}.html）曲目需登录、
     # 没有公开接口；这里复用与 5sing 共享曲库的酷狗专辑接口，保证专辑解析、
     # 整张下载与其它平台一致（页面上标注「与酷狗同库」）。
-    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+    def get_album(self, album_id: str, *, max_songs: int | None = None) -> Optional[AlbumInfo]:
         if not album_id or album_id == "0":
             return None
         with get_client() as client:
@@ -216,20 +218,26 @@ class FiveSingScraper(BaseScraper):
             description=info.get("intro", ""),
             cover_url=(info.get("imgurl", "") or "").replace("{size}", "480"),
             song_count=info.get("songcount", 0),
-            songs=self._album_songs(album_id),
+            songs=self._album_songs(album_id, max_songs=max_songs),
             platform=self.platform, platform_name=self.platform_name,
             url=f"https://5sing.kugou.com/album/{album_id}.html",
         )
 
-    def _album_songs(self, album_id: str) -> list[SongInfo]:
+    def _album_songs(self, album_id: str, *, max_songs: int | None = None) -> list[SongInfo]:
         """专辑曲目走酷狗 album/song（只给 filename，拆歌手/歌名）"""
         params = {"albumid": album_id, "page": 1, "pagesize": 100}
         headers = make_headers(referer="http://m.kugou.com/")
         rows: list[dict] = []
         page = 1
+        if max_songs is not None:
+            max_songs = max(1, min(int(max_songs), 3000))
         with get_client() as client:
             while page <= 30:  # 防御性上限 3000 首
+                page_size = min(100, max_songs - len(rows)) if max_songs is not None else 100
+                if page_size <= 0:
+                    break
                 params["page"] = page
+                params["pagesize"] = page_size
                 resp = client.get(
                     "http://mobilecdn.kugou.com/api/v3/album/song",
                     params=params, headers=headers)
@@ -237,7 +245,9 @@ class FiveSingScraper(BaseScraper):
                 batch = ((data.get("data") or {}).get("info") or [])
                 if not batch:
                     break
-                rows.extend(batch)
+                rows.extend(batch[:page_size])
+                if max_songs is not None and len(rows) >= max_songs:
+                    break
                 if len(batch) < params["pagesize"]:
                     break
                 page += 1
@@ -314,7 +324,8 @@ class FiveSingScraper(BaseScraper):
                 break
         return artists
 
-    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+    def get_artist(self, artist_id: str, name: str = "", *, max_songs: int | None = None,
+                   fetch_durations: bool = True) -> Optional[dict]:
         slug = (artist_id or "").strip()
         if not slug:
             return None
@@ -330,7 +341,8 @@ class FiveSingScraper(BaseScraper):
         if not artist_name:
             return None
 
-        songs = self._space_songs(slug, artist_name, head) if is_space else []
+        songs = self._space_songs(slug, artist_name, head, max_songs=max_songs,
+                                  fetch_durations=fetch_durations) if is_space else []
         if not songs:
             # 空间页偶尔取不到（自定义域名/私密曲目/按名搜索），退回共享曲库按名搜索
             songs, seen = [], set()
@@ -343,6 +355,8 @@ class FiveSingScraper(BaseScraper):
                     continue
                 seen.add(key)
                 songs.append(song)
+                if max_songs is not None and len(songs) >= max(1, int(max_songs)):
+                    break
 
         # 5sing 空间的「专辑」页曲目需登录且无公开接口，歌手主页不摆专辑区块，
         # 避免拿共享库里的酷狗专辑冒充（专辑解析页签仍可单独用专辑链接/名称）
@@ -386,7 +400,8 @@ class FiveSingScraper(BaseScraper):
                 fans,
                 head_m.group(1) if head_m else "")
 
-    def _space_songs(self, slug: str, artist_name: str, cover: str = "") -> list[SongInfo]:
+    def _space_songs(self, slug: str, artist_name: str, cover: str = "", *,
+                     max_songs: int | None = None, fetch_durations: bool = True) -> list[SongInfo]:
         """音乐空间曲目：/{slug}/{yc|fc|bz}/{page}.html 的 SSR 列表。
 
         列表页只给歌名/上传时间/播放量，没有封面和时长：
@@ -404,6 +419,8 @@ class FiveSingScraper(BaseScraper):
 
         def add_entries(entries, cfg):
             for song_id, _num, title in entries:
+                if max_songs is not None and len(songs) >= max_songs:
+                    break
                 if song_id in seen:
                     continue
                 seen.add(song_id)
@@ -444,7 +461,11 @@ class FiveSingScraper(BaseScraper):
                 pages = min(50, max(1, math.ceil(int(total_m.group(1)) / 10)))
             elif len(entries) >= 10:
                 pages = 20
+            if max_songs is not None:
+                pages = min(pages, max(1, math.ceil(max_songs / 10)))
             for page in range(2, pages + 1):
+                if max_songs is not None and len(songs) >= max_songs:
+                    break
                 tasks.append((mode_key, cfg, page))
 
         if tasks:
@@ -463,11 +484,14 @@ class FiveSingScraper(BaseScraper):
                         return cfg, parse_entries(body)
 
                     for cfg, entries in ex.map(fetch, tasks):
+                        if max_songs is not None and len(songs) >= max_songs:
+                            break
                         add_entries(entries, cfg)
             except Exception:
                 pass
 
-        self._fill_durations(songs)
+        if fetch_durations:
+            self._fill_durations(songs)
         return songs
 
     def _fill_durations(self, songs: list[SongInfo], workers: int = 12) -> None:

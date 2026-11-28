@@ -184,7 +184,7 @@ class KugouScraper(BaseScraper):
         return ""
 
     # ------------------------------------------------------------------
-    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+    def get_album(self, album_id: str, *, max_songs: int | None = None) -> Optional[AlbumInfo]:
         if not album_id or album_id == "0":
             return None
         params = {"albumid": album_id, "format": "json"}
@@ -208,29 +208,37 @@ class KugouScraper(BaseScraper):
             language=_detect_lang(album_name),
             cover_url=(info.get("imgurl", "") or "").replace("{size}", "480"),
             song_count=info.get("songcount", 0),
-            songs=self._album_songs(album_id),
+            songs=self._album_songs(album_id, max_songs=max_songs),
             platform=self.platform,
             platform_name=self.platform_name,
             url=f"https://www.kugou.com/album/{album_id}.html",
             extra=_remainder(info, "albumname singername singerid publishtime intro imgurl songcount"),
         )
 
-    def _album_songs(self, album_id: str) -> list[SongInfo]:
+    def _album_songs(self, album_id: str, *, max_songs: int | None = None) -> list[SongInfo]:
         """酷狗专辑曲目（album/song 接口只给 filename，需要拆歌手/歌名）"""
         params = {"albumid": album_id, "page": 1, "pagesize": 100, "format": "json"}
         headers = make_headers(referer="http://m.kugou.com/")
         songs: list[SongInfo] = []
         page = 1
+        if max_songs is not None:
+            max_songs = max(1, min(int(max_songs), 3000))
         with get_client() as client:
             while page <= 30:  # 防御性上限 3000 首
+                page_size = min(100, max_songs - len(songs)) if max_songs is not None else 100
+                if page_size <= 0:
+                    break
                 params["page"] = page
+                params["pagesize"] = page_size
                 resp = client.get(self.ALBUM_SONG_URL, params=params, headers=headers)
                 data = safe_json(resp.text)
                 batch = ((data or {}).get("data") or {}).get("info") or []
                 if not batch:
                     break
-                songs.extend(self._parse_filename_song(item) for item in batch)
-                if len(batch) < params["pagesize"]:
+                songs.extend(self._parse_filename_song(item) for item in batch[:page_size])
+                if max_songs is not None and len(songs) >= max_songs:
+                    break
+                if len(batch) < page_size:
                     break
                 page += 1
         return songs
@@ -268,7 +276,7 @@ class KugouScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
-    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+    def get_playlist(self, playlist_id: str, *, max_songs: int | None = None) -> Optional[PlaylistInfo]:
         """酷狗歌单解析：special/info（信息）+ special/song（曲目，分页）"""
         headers = make_headers(referer="http://m.kugou.com/")
         with get_client() as client:
@@ -285,11 +293,16 @@ class KugouScraper(BaseScraper):
         # 分页取全部曲目
         songs: list[SongInfo] = []
         total = int(info.get("songcount", 0) or 0)
+        if max_songs is not None:
+            max_songs = max(1, min(int(max_songs), 5000))
         page = 1
         with get_client() as client:
             while True:
+                page_size = min(100, max_songs - len(songs)) if max_songs is not None else 100
+                if page_size <= 0:
+                    break
                 resp2 = client.get(self.SPECIAL_SONG_URL,
-                                   params={"specialid": playlist_id, "page": page, "pagesize": 100},
+                                   params={"specialid": playlist_id, "page": page, "pagesize": page_size},
                                    headers=headers)
                 d2 = safe_json(resp2.text)
                 if not d2 or d2.get("status") != 1:
@@ -297,7 +310,9 @@ class KugouScraper(BaseScraper):
                 batch = (d2.get("data") or {}).get("info") or []
                 if not batch:
                     break
-                songs.extend(self._parse_special_song(item) for item in batch)
+                songs.extend(self._parse_special_song(item) for item in batch[:page_size])
+                if max_songs is not None and len(songs) >= max_songs:
+                    break
                 if total and len(songs) >= total:
                     break
                 if len(batch) < 100:
@@ -416,7 +431,7 @@ class KugouScraper(BaseScraper):
                                 "song_count": 0, "album_count": 0, "desc": ""})
         return artists
 
-    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+    def get_artist(self, artist_id: str, name: str = "", *, max_songs: int | None = None) -> Optional[dict]:
         artist_id = self.resolve_singer_id(artist_id)
         if not artist_id:
             return None
@@ -432,13 +447,14 @@ class KugouScraper(BaseScraper):
         pic = (info.get("imgurl") or "").replace("{size}", "480")
 
         songs, seen = [], set()
+        song_limit = max(1, min(int(max_songs), 50)) if max_songs is not None else 50
         with get_client() as client:
             resp = client.get(self.SINGER_SONG_URL,
                               params={"singerid": artist_id, "page": 1,
-                                      "pagesize": 50, "format": "json"},
+                                      "pagesize": song_limit, "format": "json"},
                               headers=headers)
         song_data = safe_json(resp.text) or {}
-        for item in ((song_data.get("data") or {}).get("info") or []):
+        for item in ((song_data.get("data") or {}).get("info") or [])[:song_limit]:
             song = self._parse_filename_song(item)
             if song.song_id and song.song_id not in seen:
                 seen.add(song.song_id)

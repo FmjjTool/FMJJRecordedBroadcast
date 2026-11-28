@@ -36,12 +36,16 @@ class MusicDownloadService:
         return self._submit("music_search", payload, self.search_exports.search)
 
     def start_resolve(self, payload: dict) -> dict:
+        """Submit a song or music-entity resolution job using the normalized L3 payload."""
         from toolbox import webui_music_resolve
         from toolbox.webui.jobs import JobCancelled
 
         if self.jobs is None:
             raise ValueError("任务服务不可用")
         body = webui_music_resolve.validate_payload(payload)
+        # Legacy callers omit entity and remain single-song requests; the
+        # normalized payload makes playlist/album/artist selection explicit.
+        body["entity"] = body.get("entity", "song")
 
         def run(task):
             try:

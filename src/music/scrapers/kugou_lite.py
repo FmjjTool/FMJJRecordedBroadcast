@@ -405,9 +405,9 @@ class KuGouLiteScraper:
                             url=f"https://www.kugou.com/song/#hash={song_id}")
 
     # ---- 歌单（概念版无独立接口，复用主版同库数据） ----
-    def get_playlist(self, playlist_id: str):
+    def get_playlist(self, playlist_id: str, *, max_songs: int | None = None):
         from .kugou import KugouScraper
-        return self._as_lite(KugouScraper().get_playlist(playlist_id))
+        return self._as_lite(KugouScraper().get_playlist(playlist_id, max_songs=max_songs))
 
     # ---- 专辑（复用主版同库数据） ----
     def search_album(self, keyword: str, limit: int = 30) -> list:
@@ -415,9 +415,9 @@ class KuGouLiteScraper:
         albums = KugouScraper().search_album(keyword, limit)
         return [self._as_lite(a) for a in albums]
 
-    def get_album(self, album_id: str):
+    def get_album(self, album_id: str, *, max_songs: int | None = None):
         from .kugou import KugouScraper
-        return self._as_lite(KugouScraper().get_album(album_id))
+        return self._as_lite(KugouScraper().get_album(album_id, max_songs=max_songs))
 
     @staticmethod
     def extract_album_id(text: str) -> str:
@@ -429,9 +429,9 @@ class KuGouLiteScraper:
         from .kugou import KugouScraper
         return KugouScraper().search_artist(keyword, limit)
 
-    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+    def get_artist(self, artist_id: str, name: str = "", *, max_songs: int | None = None) -> Optional[dict]:
         from .kugou import KugouScraper
-        return self._as_lite(KugouScraper().get_artist(artist_id, name))
+        return self._as_lite(KugouScraper().get_artist(artist_id, name, max_songs=max_songs))
 
     @staticmethod
     def extract_artist_id(text: str) -> str:

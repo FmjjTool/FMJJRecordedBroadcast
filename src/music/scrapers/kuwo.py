@@ -156,13 +156,14 @@ class KuwoScraper(BaseScraper):
         )
 
     # ------------------------------------------------------------------
-    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+    def get_album(self, album_id: str, *, max_songs: int | None = None) -> Optional[AlbumInfo]:
         if not album_id or album_id == "0":
             return None
-        album = self._get_album_legacy(album_id)
+        album = self._get_album_legacy(album_id, max_songs=max_songs)
         if album is not None:
             return album
-        params = {"albumid": album_id, "pn": 1, "rn": 100, "httpsStatus": 1}
+        page_size = max(1, min(int(max_songs), 100)) if max_songs is not None else 100
+        params = {"albumid": album_id, "pn": 1, "rn": page_size, "httpsStatus": 1}
         headers = make_headers(referer="http://www.kuwo.cn/", extra={"csrf": "", "X-Requested-With": "XMLHttpRequest"})
         with get_client() as client:
             try:
@@ -188,7 +189,7 @@ class KuwoScraper(BaseScraper):
                 platform=self.platform, platform_name=self.platform_name,
                 url=f"http://www.kuwo.cn/play_detail/{item.get('rid', '')}",
                 extra=_remainder(item, "rid name artist duration"),
-            ) for item in songs_data
+            ) for item in songs_data[:page_size]
         ]
 
         return AlbumInfo(
@@ -214,14 +215,15 @@ class KuwoScraper(BaseScraper):
             resp = client.get("http://search.kuwo.cn/r.s", params=base, headers=headers)
         return safe_json(resp.text) or {}
 
-    def _get_album_legacy(self, album_id: str) -> Optional[AlbumInfo]:
+    def _get_album_legacy(self, album_id: str, *, max_songs: int | None = None) -> Optional[AlbumInfo]:
         """专辑详情走老接口 stype=albuminfo（www 接口有反爬）"""
-        data = self._rs({"stype": "albuminfo", "albumid": album_id, "pn": 0, "rn": 200})
+        page_size = max(1, min(int(max_songs), 200)) if max_songs is not None else 200
+        data = self._rs({"stype": "albuminfo", "albumid": album_id, "pn": 0, "rn": page_size})
         name = data.get("name") or data.get("album") or ""
         if not name:
             return None
         songs = []
-        for item in data.get("musiclist") or []:
+        for item in (data.get("musiclist") or [])[:page_size]:
             rid = str(item.get("rid") or item.get("id") or "").replace("MUSIC_", "")
             if not rid:
                 continue
@@ -317,7 +319,7 @@ class KuwoScraper(BaseScraper):
             })
         return artists
 
-    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+    def get_artist(self, artist_id: str, name: str = "", *, max_songs: int | None = None) -> Optional[dict]:
         info = {}
         if name:
             for cand in self.search_artist(name, 10):
@@ -342,7 +344,8 @@ class KuwoScraper(BaseScraper):
             return None
 
         songs, seen = [], set()
-        for song in self._do_search(artist_name, 1, 80):
+        song_limit = max(1, min(int(max_songs), 80)) if max_songs is not None else 80
+        for song in self._do_search(artist_name, 1, song_limit):
             if str(song.extra.get("ARTISTID") or "") != str(artist_id):
                 continue
             if song.song_id in seen:
@@ -384,22 +387,27 @@ class KuwoScraper(BaseScraper):
         return ""
 
     # ------------------------------------------------------------------
-    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+    def get_playlist(self, playlist_id: str, *, max_songs: int | None = None) -> Optional[PlaylistInfo]:
         """酷我歌单解析：nplserver pl.svc 老接口（游客可用，分页，偶发抽风重试一次）"""
-        result = self._get_playlist_once(playlist_id)
+        result = self._get_playlist_once(playlist_id, max_songs=max_songs)
         if result is None:
-            result = self._get_playlist_once(playlist_id)
+            result = self._get_playlist_once(playlist_id, max_songs=max_songs)
         return result
 
-    def _get_playlist_once(self, playlist_id: str) -> Optional[PlaylistInfo]:
+    def _get_playlist_once(self, playlist_id: str, *, max_songs: int | None = None) -> Optional[PlaylistInfo]:
         headers = make_headers(referer="http://www.kuwo.cn/")
         songs: list[SongInfo] = []
         total, title, creator, cover, desc, playnum = 0, "", "", "", "", 0
         pn = 0
+        if max_songs is not None:
+            max_songs = max(1, min(int(max_songs), 5000))
         with get_client() as client:
             while True:
+                page_size = min(100, max_songs - len(songs)) if max_songs is not None else 100
+                if page_size <= 0:
+                    break
                 resp = client.get(self.NPL_URL,
-                                  params={"op": "getlistinfo", "pid": playlist_id, "pn": pn, "rn": 100,
+                                  params={"op": "getlistinfo", "pid": playlist_id, "pn": pn, "rn": page_size,
                                           "encode": "utf8", "keyset": "pl2012", "identity": "kuwo",
                                           "pcmp4": 1, "vipver": "MUSIC_9.0.5.0_W1", "newver": 1},
                                   headers=headers)
@@ -416,7 +424,9 @@ class KuwoScraper(BaseScraper):
                 batch = data.get("musiclist") or []
                 if not batch:
                     break
-                songs.extend(self._parse_npl_song(item) for item in batch)
+                songs.extend(self._parse_npl_song(item) for item in batch[:page_size])
+                if max_songs is not None and len(songs) >= max_songs:
+                    break
                 if total and len(songs) >= total:
                     break
                 if len(batch) < 100:

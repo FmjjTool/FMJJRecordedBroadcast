@@ -181,7 +181,7 @@ class QQMusicScraper(BaseScraper):
         return data.get("lyric", "") or ""
 
     # ------------------------------------------------------------------
-    def get_album(self, album_id: str) -> Optional[AlbumInfo]:
+    def get_album(self, album_id: str, *, max_songs: int | None = None) -> Optional[AlbumInfo]:
         params = {"albummid": album_id, "format": "json"}
         headers = make_headers(referer="https://y.qq.com/")
         with get_client() as client:
@@ -196,7 +196,10 @@ class QQMusicScraper(BaseScraper):
         sinfo = dd.get("getSingerInfo", {}) or dd.get("singerInfo", [{}])[0] if dd.get("singerInfo") else {}
 
         album_songs = []
-        for item in dd.get("getSongInfo", dd.get("list", dd.get("songlist", []))):
+        raw_songs = dd.get("getSongInfo", dd.get("list", dd.get("songlist", [])))
+        if max_songs is not None:
+            raw_songs = raw_songs[:max(1, min(int(max_songs), len(raw_songs)))]
+        for item in raw_songs:
             album_songs.append(SongInfo(
                 song_id=item.get("songmid", ""),
                 song_name=item.get("songname", ""),
@@ -255,7 +258,7 @@ class QQMusicScraper(BaseScraper):
         return super().search_by_album(singer, album_name, limit)
 
     # ------------------------------------------------------------------
-    def get_playlist(self, playlist_id: str) -> Optional[PlaylistInfo]:
+    def get_playlist(self, playlist_id: str, *, max_songs: int | None = None) -> Optional[PlaylistInfo]:
         """QQ音乐歌单解析：qzone cdinfo 接口（disstid）"""
         params = {"type": 1, "json": 1, "utf8": 1, "onlysong": 0,
                   "disstid": playlist_id, "format": "json", "g_tk": 5381,
@@ -273,7 +276,10 @@ class QQMusicScraper(BaseScraper):
         if not cd or not cd.get("dissname") and not cd.get("songlist"):
             return None
 
-        songs = [self._parse_song_item(item) for item in (cd.get("songlist") or [])]
+        raw_songs = cd.get("songlist") or []
+        if max_songs is not None:
+            raw_songs = raw_songs[:max(1, min(int(max_songs), len(raw_songs)))]
+        songs = [self._parse_song_item(item) for item in raw_songs]
         creator = cd.get("nickname", "") or ""
         tags = cd.get("tags") or []
         tag_names = []
@@ -376,7 +382,7 @@ class QQMusicScraper(BaseScraper):
             })
         return artists
 
-    def get_artist(self, artist_id: str, name: str = "") -> Optional[dict]:
+    def get_artist(self, artist_id: str, name: str = "", *, max_songs: int | None = None) -> Optional[dict]:
         """歌手主页：名称/头像取歌手详情，歌曲与专辑用同名搜索结果按歌手过滤。"""
         info = {}
         with get_client() as client:
@@ -398,7 +404,8 @@ class QQMusicScraper(BaseScraper):
             pic = re.sub(r"T001R\d+x\d+M000", "T001R300x300M000", pic)
 
         songs, seen = [], set()
-        for song in self.search_song(artist_name, 1, 50):
+        song_limit = max(1, min(int(max_songs), 50)) if max_songs is not None else 50
+        for song in self.search_song(artist_name, 1, song_limit):
             if artist_name not in (song.singer or ""):
                 continue
             if song.song_id in seen:

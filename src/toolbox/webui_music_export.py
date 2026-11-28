@@ -195,7 +195,7 @@ class MusicSearchExports:
         from toolbox import webui_music_resolve
 
         captured = []
-        outcome = webui_music_resolve.resolve(
+        outcome = webui_music_resolve.resolve_entity(
             payload, on_log=on_log, is_cancelled=is_cancelled, on_songs=captured.extend)
         if is_cancelled and is_cancelled():
             raise InterruptedError("已取消单曲解析")
