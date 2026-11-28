@@ -25,6 +25,10 @@ _URL_LIMIT = 32768
 _CHUNK = 65536
 _RESOLVE_TIMEOUT = 3.0
 _FIELDS = frozenset(("__biz", "biz", "key", "uin", "pass_ticket", "appmsg_token"))
+_DIAGNOSTIC_STAGES = frozenset((
+    "proxy_connections", "connect_requests", "wechat_connects",
+    "upstream_tls", "client_tls", "http_requests",
+))
 _ARTICLE_PATH = re.compile(r"/s(?:/[A-Za-z0-9_-]+)?\Z")
 _READING_PATHS = frozenset((
     "/mp/getappmsgext", "/mp/profile_ext", "/mp/getappmsgad",
@@ -138,8 +142,9 @@ def extract_reading_request(target: str, headers: Mapping[str, str],
 class _RequestObserver:
     """Bounded HTTP/1 observer; malformed framing disables observation only."""
 
-    def __init__(self, callback: Callable[[str], None]):
+    def __init__(self, callback: Callable[[str], None], on_request=None):
         self._callback = callback
+        self._on_request = on_request
         self._buffer = bytearray()
         self._disabled = False
         self._remaining = 0
@@ -194,6 +199,11 @@ class _RequestObserver:
             self._form = selected.get("content-type", "").split(";", 1)[0].strip().lower() == "application/x-www-form-urlencoded"
             self._target = target if method in ("GET", "POST") and selected.get("host", "").lower() in (_HOST, _HOST + ":443") else ""
             self._headers = selected
+            if self._target and self._on_request is not None:
+                try:
+                    self._on_request()
+                except Exception:
+                    pass
             if self._form and self._remaining > _FORM_LIMIT:
                 self._target = ""
                 self._form = False
@@ -328,6 +338,7 @@ class _CaptureHandler(socketserver.BaseRequestHandler):
         client = self.request
         upstream = None
         owner._track(client)
+        owner._record_stage("proxy_connections")
         try:
             client.settimeout(5)
             raw = bytearray()
@@ -348,6 +359,9 @@ class _CaptureHandler(socketserver.BaseRequestHandler):
             if method != "CONNECT" or version not in ("HTTP/1.0", "HTTP/1.1") or host is None:
                 client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
                 return
+            owner._record_stage("connect_requests")
+            if host == _HOST:
+                owner._record_stage("wechat_connects")
             try:
                 addresses = owner._resolve_public(host)
                 for address in addresses[:4]:
@@ -365,6 +379,7 @@ class _CaptureHandler(socketserver.BaseRequestHandler):
                     original = upstream
                     upstream = owner._upstream_context.wrap_socket(upstream, server_hostname=_HOST)
                     owner._replace(original, upstream)
+                    owner._record_stage("upstream_tls")
                     if upstream.selected_alpn_protocol() not in (None, "http/1.1"):
                         return
             except Exception:
@@ -376,9 +391,11 @@ class _CaptureHandler(socketserver.BaseRequestHandler):
                 original = client
                 client = owner._server_context.wrap_socket(client, server_side=True)
                 owner._replace(original, client)
+                owner._record_stage("client_tls")
                 if client.selected_alpn_protocol() not in (None, "http/1.1"):
                     return
-                observer = _RequestObserver(owner._on_capture)
+                observer = _RequestObserver(
+                    owner._on_capture, lambda: owner._record_stage("http_requests"))
             self._relay(owner, client, upstream, observer)
         except Exception:
             pass
@@ -416,9 +433,10 @@ class WechatCaptureProxy:
 
     def __init__(self, server_context: ssl.SSLContext, on_capture: Callable[[str], None],
                  stop_event=None, resolver=None, socket_factory=None,
-                 upstream_context: ssl.SSLContext | None = None):
+                 upstream_context: ssl.SSLContext | None = None, on_diagnostic=None):
         self._server_context = server_context
         self._on_capture = on_capture
+        self._on_diagnostic = on_diagnostic
         self._stopping = stop_event if stop_event is not None else threading.Event()
         self._resolver = resolver or socket.getaddrinfo
         self._resolver_slots = threading.BoundedSemaphore(4)
@@ -471,6 +489,14 @@ class WechatCaptureProxy:
                 connection.close()
                 raise CaptureProxyError()
             self._sockets.add(connection)
+
+    def _record_stage(self, stage: str):
+        if stage not in _DIAGNOSTIC_STAGES or self._on_diagnostic is None:
+            return
+        try:
+            self._on_diagnostic(stage)
+        except Exception:
+            pass
 
     def _resolve_public(self, host: str) -> list[str]:
         """Bound OS DNS latency without joining potentially stuck OS calls.
