@@ -2135,6 +2135,43 @@ class _TcdocOpenApiDialog(QDialog):
         self._fill()
 
 
+_WECHAT_DIAGNOSTIC_FIELDS = (
+    "proxy_connections", "connect_requests", "wechat_connects",
+    "upstream_tls", "client_tls", "http_requests",
+    "valid_candidates",
+)
+
+
+def _wechat_detection_diagnostic_text(values):
+    proxy = values["proxy_connections"]
+    connects = values["connect_requests"]
+    wechat = values["wechat_connects"]
+    upstream_tls = values["upstream_tls"]
+    client_tls = values["client_tls"]
+    requests = values["http_requests"]
+    candidates = values["valid_candidates"]
+    counts = (
+        f"观察计数：本机连接 {proxy} · HTTPS 建连 {connects} · 公众号站点 {wechat} · "
+        f"站点/微信握手 {upstream_tls}/{client_tls} · 文章请求 {requests} · 可用请求 {candidates}"
+    )
+    if candidates:
+        hint = "已识别到可用请求，正在完成系统设置还原。"
+    elif proxy == 0:
+        hint = ("尚未观察到经过本机代理的连接；文章可能来自缓存，也可能微信未使用系统代理。"
+                "请关闭文章后在电脑版微信重新打开。")
+    elif wechat == 0:
+        hint = "已观察到代理连接，但尚未观察到公众号站点连接；请在电脑版微信中重新打开目标文章。"
+    elif upstream_tls == 0:
+        hint = "公众号站点连接已到达，但站点安全握手尚未完成。"
+    elif client_tls == 0:
+        hint = "站点握手已完成，但微信客户端握手未完成，客户端可能未接受本次临时证书。"
+    elif requests == 0:
+        hint = "安全连接已建立，尚未观察到文章请求；请关闭文章后重新打开，避免读取缓存。"
+    else:
+        hint = "已观察到文章请求，但尚未识别到可用阅读信息；请关闭文章后重新打开并保持检测窗口。"
+    return counts + "\n" + hint
+
+
 class _WechatReadingDetectionDialog(QDialog):
     """统一入口内的检测进度；系统改动与临时会话均交给管理层。"""
 
@@ -2157,6 +2194,7 @@ class _WechatReadingDetectionDialog(QDialog):
             "state": "idle", "busy": False, "cleanup_ok": True,
             "cleanup_failed": False, "recovery_required": False,
             "remaining_seconds": 0, "message": "尚未开始检测",
+            "diagnostics": dict.fromkeys(_WECHAT_DIAGNOSTIC_FIELDS, 0),
         }
         self.setWindowTitle("微信公众号自动检测")
         self.setWindowModality(Qt.NonModal)
@@ -2183,6 +2221,12 @@ class _WechatReadingDetectionDialog(QDialog):
         self.feedback.setWordWrap(True)
         self.feedback.setMinimumHeight(self.feedback.fontMetrics().lineSpacing() * 2)
         layout.addWidget(self.feedback)
+        self.diagnostics_label = QLabel()
+        self.diagnostics_label.setTextFormat(Qt.PlainText)
+        self.diagnostics_label.setWordWrap(True)
+        self.diagnostics_label.setProperty("role", "caption")
+        self.diagnostics_label.setVisible(False)
+        layout.addWidget(self.diagnostics_label)
         self.progress = QProgressBar()
         self.progress.setRange(0, 120)
         self.progress.setValue(0)
@@ -2237,6 +2281,13 @@ class _WechatReadingDetectionDialog(QDialog):
                           and not cleanup_failed and not recovery_required)
             remaining = max(0, min(120, int(status.get("remaining_seconds") or 0)))
             message = str(status.get("message") or "")[:400]
+            raw_diagnostics = status.get("diagnostics")
+            diagnostics = dict.fromkeys(_WECHAT_DIAGNOSTIC_FIELDS, 0)
+            if isinstance(raw_diagnostics, dict):
+                for name in _WECHAT_DIAGNOSTIC_FIELDS:
+                    value = raw_diagnostics.get(name)
+                    if type(value) is int and 0 <= value <= 1_000_000:
+                        diagnostics[name] = value
             if self._start_pending:
                 if state == "idle" and not busy:
                     state, busy, message = "starting", True, "正在启动检测…"
@@ -2247,6 +2298,7 @@ class _WechatReadingDetectionDialog(QDialog):
                 "cleanup_failed": cleanup_failed,
                 "recovery_required": recovery_required,
                 "remaining_seconds": remaining, "message": message,
+                "diagnostics": diagnostics,
             }
         except Exception:
             self._start_pending = False
@@ -2254,6 +2306,7 @@ class _WechatReadingDetectionDialog(QDialog):
                 "state": "error", "busy": False, "cleanup_ok": False,
                 "cleanup_failed": True, "recovery_required": False, "remaining_seconds": 0,
                 "message": "暂时无法确认检测状态，请重试还原。",
+                "diagnostics": dict.fromkeys(_WECHAT_DIAGNOSTIC_FIELDS, 0),
             }
         status = self._last_status
         if status["busy"]:
@@ -2286,6 +2339,11 @@ class _WechatReadingDetectionDialog(QDialog):
         elif self._close_requested and busy:
             message += "\n还原完成后会自动关闭。"
         self.feedback.setText(message)
+        show_diagnostics = busy and status["state"] == "detecting"
+        self.diagnostics_label.setVisible(show_diagnostics)
+        if show_diagnostics:
+            self.diagnostics_label.setText(
+                _wechat_detection_diagnostic_text(status["diagnostics"]))
         self.consent.setEnabled(not busy and clean and not recovery_required and not self._close_requested)
         self.manual.setEnabled(not busy and clean and not recovery_required and not self._close_requested)
         if recovery_required:
