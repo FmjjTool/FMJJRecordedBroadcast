@@ -23,6 +23,9 @@ MAX_LINKS = 30
 MAX_EXPORT = 200
 MAX_INDEX = 50000
 FORMATS = ('html', 'docx', 'md', 'pdf')
+# “抓取全部”持续读取到平台返回历史末尾，同时保留异常保护上限，
+# 防止平台返回不断前进的伪分页时任务无限运行。
+MAX_ALL_SYNC_PAGES = 1000
 
 
 class WechatCancelled(ValueError):
@@ -174,7 +177,7 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
     from platforms.wechat_article import fetch_history_page
     from wechat_session import get_session, is_current
     biz = store.validate_biz(biz)
-    if mode not in ('latest', 'continue') or not 1 <= int(max_pages) <= 50:
+    if mode not in ('latest', 'continue', 'all') or not 1 <= int(max_pages) <= 50:
         raise WechatUserError('同步模式或页数范围无效')
     account = store.get_account(biz)
     if not account:
@@ -182,8 +185,8 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
     session = get_session()
     if session is None:
         raise WechatUserError('需要登录，请在登录状态可用后重试')
-    cursor = int(account.get('cursor') or 0) if mode == 'continue' else 0
-    if mode == 'continue' and account.get('history_done'):
+    cursor = int(account.get('cursor') or 0) if mode in ('continue', 'all') else 0
+    if mode in ('continue', 'all') and account.get('history_done'):
         return {'ok': 0, 'failed': 0, 'summary': '历史记录已读取完毕，可同步最新文章'}
     digest = hashlib.sha256(biz.encode()).hexdigest()[:20]
     lock = store._path().parent / ('wechat_sync_' + digest + '.lock')
@@ -191,8 +194,11 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
     cancelled = False
     stopped_at_existing = False
     exhausted = False
+    page_limit = MAX_ALL_SYNC_PAGES if mode == 'all' else int(max_pages)
+    limit_reached = False
+    seen_cursors = set()
     with exclusive_file_lock(lock, timeout=0):
-        for _ in range(int(max_pages)):
+        for _ in range(page_limit):
             try:
                 _check(is_cancelled)
                 if not is_current(session):
@@ -225,7 +231,7 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
                 if more and next_cursor <= cursor:
                     raise WechatUserError('历史分页未前进，已停止同步，请稍后重试')
                 exhausted = not more
-                if mode == 'continue':
+                if mode in ('continue', 'all'):
                     store.set_cursor(biz, next_cursor, done=exhausted)
                 elif not account.get('cursor') and not stopped_at_existing:
                     # 首次最新同步建立继续读取断点；后续最新不覆盖旧的历史断点。
@@ -233,16 +239,27 @@ def sync_account(biz, mode='latest', max_pages=10, on_progress=None, on_log=None
                 else:
                     store.touch_sync(biz)
                 _log(on_log, f'第 {pages} 页已完成，新增 {added} 篇')
-                _progress(on_progress, pages, int(max_pages), f'已读取 {pages} 页，新增 {added} 篇')
+                _progress(on_progress, pages, int(max_pages) if mode != 'all' else 0,
+                          f'已读取 {pages} 页，新增 {added} 篇')
                 cursor = next_cursor
                 if stopped_at_existing or exhausted:
                     break
+                if mode == 'all' and next_cursor in seen_cursors:
+                    limit_reached = True
+                    break
+                seen_cursors.add(cursor)
                 _cooldown(is_cancelled)
             except WechatCancelled:
                 cancelled = True
                 break
-    note = '（遇到已归档文章）' if stopped_at_existing else ('（已到历史末尾）' if exhausted else '（可从断点继续）')
+        else:
+            limit_reached = True
+    note = ('（遇到已归档文章）' if stopped_at_existing else
+            '（已到历史末尾）' if exhausted else
+            '（已读取保护上限，可继续抓取）' if limit_reached else
+            '（可从断点继续）')
     return {'ok': added, 'failed': 0, 'pages': pages, 'cancelled': cancelled,
+            'limit_reached': limit_reached,
             'summary': f'{"已取消" if cancelled else "已完成"}：新增 {added} 篇{note}'}
 
 

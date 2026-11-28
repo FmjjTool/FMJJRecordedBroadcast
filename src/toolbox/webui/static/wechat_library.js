@@ -235,9 +235,13 @@
             .finally(function () { busy = false; updateBusy(); });
         }, true),
         h('button', { class: 'btn', type: 'button', onclick: function () { articleState.biz = item.biz; show('articles'); } }, '查看文章')),
-        sync.node, h('div', { class: 'toolbar' }, mutation('开始同步', function () {
+        sync.node,
+        h('div', { class: 'muted small' }, '链接收录只保存当前文章；“抓取全部”会沿断点读取到历史末尾。'),
+        h('div', { class: 'toolbar' }, mutation('抓取全部', function () {
+          start('/api/wechat/sync', Object.assign({}, sync.values(), { biz: item.biz, mode: 'all' }), '抓取全部', '将持续读取该公众号的历史文章直到末尾，是否继续？');
+        }, true), mutation('开始同步', function () {
           start('/api/wechat/sync', Object.assign({}, sync.values(), { biz: item.biz }), '同步', '将同步该公众号的文章资料，是否继续？');
-        }, true)));
+        })));
       updateBusy();
     }
     function renderArticles() {

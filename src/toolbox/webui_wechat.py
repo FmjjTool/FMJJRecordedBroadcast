@@ -46,7 +46,7 @@ FIELDS = {
     },
     "sync": {
         "biz": {"type": "str", "default": "", "max_length": 256, "required": True, "hidden": True},
-        "mode": {"type": "choice", "label": "同步方式", "default": "latest", "options": [{"value": "latest", "label": "同步最新"}, {"value": "continue", "label": "继续同步"}]},
+        "mode": {"type": "choice", "label": "同步方式", "default": "latest", "options": [{"value": "latest", "label": "同步最新"}, {"value": "continue", "label": "继续同步"}, {"value": "all", "label": "抓取全部"}]},
         "max_pages": {"type": "int", "label": "最多页数", "default": 10, "min": 1, "max": 50},
     },
     "export": {
